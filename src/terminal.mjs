@@ -9,14 +9,19 @@ export function printEvent(event, output = process.stdout) {
   }
 }
 
-export async function promptForApproval(plan, { input = process.stdin, output = process.stdout, signal } = {}) {
-  output.write(`\nProposed plan:\n${plan.summary}\n\nFocused assignment:\n`);
+export async function promptForApproval(plan, { input = process.stdin, output = process.stdout, signal, source = 'Codex' } = {}) {
+  output.write(`\nProposed plan (${source}):\n${plan.summary}\n\nFocused assignment:\n`);
   const step = plan.steps[0];
   output.write(`Objective: ${step.objective}\nContext: ${step.context}\nExpected result: ${step.expectedResult}\n`);
   const terminal = createInterface({ input, output });
   try {
-    const answer = await terminal.question('\nAccept this plan and send the assignment to DeepSeek? [y/N] ', { signal });
-    return answer.trim().toLowerCase() === 'y';
+    try {
+      const answer = await terminal.question('\nAccept this plan and send the assignment to DeepSeek? [y/N] ', { signal });
+      return answer.trim().toLowerCase() === 'y';
+    } catch (error) {
+      if (!signal?.aborted && error.code === 'ERR_USE_AFTER_CLOSE') return false;
+      throw error;
+    }
   } finally {
     terminal.close();
   }

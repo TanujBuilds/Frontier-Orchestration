@@ -24,7 +24,7 @@ The repository already contains a Node.js coordinator, fake frontier/local adapt
 4. Preserve the accepted plan and all model outcomes in the existing event log. If a provider is unavailable, stop clearly without losing prior events.
 5. Add a sample design brief and Mac setup instructions. Demonstrate the real handoff and record observed limits in the repository.
 
-The Mac-to-Spark connection may be unavailable independently of app code. Build against fake adapters while it is down; the live demo requires the head's API to become reachable.
+The Mac-to-Spark connection may be unavailable independently of app code. Build against fake adapters while it is down; the live demo requires the head's API to become reachable. On 2026-10-20, the signed-in Codex adapter completed separate real planning and review calls. A real terminal run recorded plan approval and a clear DeepSeek connection failure. A separate end-to-end run used real Codex planning/review with a temporary local HTTP stub and recorded the answer, review, and `blocked` status. The Mac's local DeepSeek forward still refused connections, so the complete live handoff with the Spark model remains unverified.
 
 ## Completion criteria
 

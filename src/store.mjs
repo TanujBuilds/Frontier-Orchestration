@@ -7,8 +7,8 @@ export class JsonlJobStore {
   }
 
   async append(jobId, event) {
-    await mkdir(this.directory, { recursive: true });
+    await mkdir(this.directory, { recursive: true, mode: 0o700 });
     const file = path.join(this.directory, `${jobId}.jsonl`);
-    await appendFile(file, `${JSON.stringify(event)}\n`, 'utf8');
+    await appendFile(file, `${JSON.stringify(event)}\n`, { encoding: 'utf8', mode: 0o600 });
   }
 }

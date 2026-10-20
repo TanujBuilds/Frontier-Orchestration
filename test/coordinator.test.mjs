@@ -68,12 +68,20 @@ test('second revision stops at needs_review with latest answer', async () => {
   assert.equal(h.localCalls, 2);
 });
 
+test('blocked review stops without another local attempt', async () => {
+  const h = harness({ decisions: ['blocked'] });
+  const outcome = await runJob({ goal: 'Design a system', ...h });
+  assert.equal(outcome.status, 'blocked');
+  assert.equal(h.localCalls, 1);
+  assert.equal(h.events.at(-1).data.status, 'blocked');
+});
+
 test('local failure preserves approval and assignment', async () => {
   const h = harness({ localError: 'Connection refused' });
   const outcome = await runJob({ goal: 'Design a system', ...h });
   assert.equal(outcome.status, 'failed');
   assert.equal(outcome.stage, 'local');
-  assert.deepEqual(h.events.slice(-3).map((event) => event.type), ['plan.accepted', 'assignment.sent', 'job.finished']);
+  assert.deepEqual(h.events.slice(-4).map((event) => event.type), ['plan.accepted', 'assignment.sent', 'provider.failed', 'job.finished']);
 });
 
 test('review failure preserves the full local answer', async () => {
@@ -81,7 +89,7 @@ test('review failure preserves the full local answer', async () => {
   const outcome = await runJob({ goal: 'Design a system', ...h });
   assert.equal(outcome.status, 'failed');
   assert.equal(outcome.result.answer, 'Answer 1');
-  assert.equal(h.events.at(-2).type, 'local.result');
+  assert.equal(h.events.at(-3).type, 'local.result');
 });
 
 test('invalid plan and result fail clearly', async () => {

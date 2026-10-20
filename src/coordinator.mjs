@@ -92,6 +92,10 @@ export async function runJob({ goal, frontier, local, store, approvePlan, onEven
     return { jobId, status: 'needs_review', plan, result, review };
   } catch (error) {
     const reason = signal?.aborted ? 'Interrupted by user' : error.message;
+    if (stage !== 'approval') {
+      const source = stage === 'local' ? local.identity ?? 'local' : frontier.identity ?? 'frontier';
+      await record('provider.failed', { stage, source, reason });
+    }
     await record('job.finished', { status: 'failed', stage, reason });
     return { jobId, status: 'failed', stage, reason, plan, result, review };
   }

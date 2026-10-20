@@ -1,0 +1,87 @@
+function endpoint(baseUrl, route) {
+  const url = new URL(baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`);
+  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('DeepSeek base URL must use HTTP or HTTPS');
+  return new URL(route, url);
+}
+
+export class DeepSeekHttpAdapter {
+  constructor({ baseUrl, model, timeoutMs = 600_000, fetchImpl = fetch } = {}) {
+    if (!baseUrl) throw new Error('DEEPSEEK_BASE_URL is required (include /v1)');
+    this.modelsUrl = endpoint(baseUrl, 'models');
+    this.chatUrl = endpoint(baseUrl, 'chat/completions');
+    this.model = model || null;
+    this.timeoutMs = timeoutMs;
+    this.fetchImpl = fetchImpl;
+    this.identity = model ? `deepseek-http/${model}` : 'deepseek-http/unresolved';
+  }
+
+  async request(url, options, signal) {
+    const timeout = AbortSignal.timeout(this.timeoutMs);
+    const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
+    let response;
+    try {
+      response = await this.fetchImpl(url, { ...options, signal: combined });
+    } catch (error) {
+      if (signal?.aborted) throw new Error('DeepSeek call interrupted');
+      if (timeout.aborted) throw new Error(`DeepSeek call timed out after ${this.timeoutMs} ms`);
+      const detail = error.cause?.code ?? error.message;
+      throw new Error(`DeepSeek connection failed: ${detail}`);
+    }
+    if (!response.ok) throw new Error(`DeepSeek ${url.pathname} returned HTTP ${response.status}`);
+    try {
+      return await response.json();
+    } catch {
+      if (signal?.aborted) throw new Error('DeepSeek call interrupted');
+      if (timeout.aborted) throw new Error(`DeepSeek call timed out after ${this.timeoutMs} ms`);
+      throw new Error(`DeepSeek ${url.pathname} returned invalid JSON`);
+    }
+  }
+
+  async resolveModel(signal) {
+    if (this.resolvedModel) return this.resolvedModel;
+    const body = await this.request(this.modelsUrl, { method: 'GET' }, signal);
+    if (!Array.isArray(body?.data)) throw new Error('DeepSeek /models returned no model list');
+    const ids = body.data.map((item) => item?.id).filter((id) => typeof id === 'string' && id.trim());
+    if (ids.length === 0) throw new Error('DeepSeek /models returned no model IDs');
+    if (this.model && !ids.includes(this.model)) throw new Error(`Configured DeepSeek model ${this.model} is not advertised by /models`);
+    if (!this.model && ids.length !== 1) throw new Error('DeepSeek /models advertised multiple models; set DEEPSEEK_MODEL_ID');
+    this.resolvedModel = this.model ?? ids[0];
+    this.identity = `deepseek-http/${this.resolvedModel}`;
+    return this.resolvedModel;
+  }
+
+  async execute({ step, attempt, feedback, priorResult, signal }) {
+    const model = await this.resolveModel(signal);
+    const assignment = {
+      objective: step.objective,
+      context: step.context,
+      expectedResult: step.expectedResult,
+      attempt,
+      ...(attempt > 1 ? { previousAnswer: priorResult?.answer, revisionFeedback: feedback } : {}),
+    };
+    const body = await this.request(this.chatUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        stream: false,
+        messages: [
+          { role: 'system', content: 'Complete the project-design assignment as text. Do not request or claim tool use, file edits, or shell execution. Address revision feedback directly if provided.' },
+          { role: 'user', content: JSON.stringify(assignment) },
+        ],
+      }),
+    }, signal);
+    const choice = body?.choices?.[0];
+    const answer = choice?.message?.content;
+    if (typeof answer !== 'string' || !answer.trim()) throw new Error('DeepSeek returned an empty or unsupported answer');
+    const result = {
+      status: choice.finish_reason === 'length' ? 'failed' : 'completed',
+      answer,
+      model: body.model ?? model,
+      finishReason: choice.finish_reason ?? null,
+      ...(body.usage ? { usage: body.usage } : {}),
+    };
+    if (result.status === 'failed') result.summary = 'DeepSeek answer was truncated';
+    return result;
+  }
+}

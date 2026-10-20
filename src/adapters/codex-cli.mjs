@@ -28,7 +28,11 @@ function invokeCodex({ command, args, input, cwd, timeoutMs, signal }) {
     let timedOut = false;
     let oversized = false;
     const limit = 4 * 1024 * 1024;
-    const stop = () => child.kill('SIGTERM');
+    let forceTimer;
+    const stop = () => {
+      child.kill('SIGTERM');
+      forceTimer ??= setTimeout(() => child.kill('SIGKILL'), 5_000);
+    };
     const timer = setTimeout(() => { timedOut = true; stop(); }, timeoutMs);
     signal?.addEventListener('abort', stop, { once: true });
     child.stdout.on('data', (chunk) => {
@@ -43,11 +47,13 @@ function invokeCodex({ command, args, input, cwd, timeoutMs, signal }) {
     child.stdin.end(input);
     child.on('error', (error) => {
       clearTimeout(timer);
+      clearTimeout(forceTimer);
       signal?.removeEventListener('abort', stop);
       reject(error);
     });
     child.on('close', (code) => {
       clearTimeout(timer);
+      clearTimeout(forceTimer);
       signal?.removeEventListener('abort', stop);
       if (signal?.aborted) reject(new Error('Codex call interrupted'));
       else if (timedOut) reject(new Error(`Codex call timed out after ${timeoutMs} ms`));
