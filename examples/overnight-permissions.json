@@ -1,0 +1,10 @@
+{
+  "readPaths": ["src/", "checks/", "index.html", "tsconfig.json", "package.json"],
+  "writePaths": ["src/"],
+  "checks": [
+    { "id": "layout", "argv": ["node", "checks/ui.mjs", "layout"], "timeoutMs": 120000, "screenshots": [".overnight-output/layout-desktop.png", ".overnight-output/layout-mobile.png"] },
+    { "id": "interactions", "argv": ["node", "checks/ui.mjs", "interactions"], "timeoutMs": 120000, "screenshots": [".overnight-output/interactions-desktop.png", ".overnight-output/interactions-mobile.png"] },
+    { "id": "persistence", "argv": ["node", "checks/ui.mjs", "persistence"], "timeoutMs": 120000, "screenshots": [".overnight-output/persistence-desktop.png", ".overnight-output/persistence-mobile.png"] },
+    { "id": "final", "argv": ["node", "checks/ui.mjs", "final"], "timeoutMs": 120000, "screenshots": [".overnight-output/final-desktop.png", ".overnight-output/final-mobile.png"] }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "name": "frontier-overnight-pilot",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node checks/build.mjs",
+    "check": "node checks/ui.mjs final",
+    "dev": "vite"
+  },
+  "dependencies": {
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "typescript": "7.0.2",
+    "vite": "8.3.4",
+    "playwright": "1.64.1"
+  }
+}
