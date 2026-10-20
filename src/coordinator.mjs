@@ -50,6 +50,7 @@ export async function runJob({ goal, frontier, local, store, approvePlan, onEven
 
   await record('job.created', { goal: cleanGoal });
   try {
+    await record('frontier.plan.requested', { goal: cleanGoal, source: frontier.identity ?? 'frontier' });
     plan = validatePlan(await frontier.plan({ jobId, goal: cleanGoal, signal }));
     const planVersion = 1;
     await record('plan.proposed', { planVersion, plan, source: frontier.identity ?? 'frontier' });
@@ -66,7 +67,7 @@ export async function runJob({ goal, frontier, local, store, approvePlan, onEven
     for (let attempt = 1; attempt <= maxLocalAttempts; attempt += 1) {
       stage = 'local';
       const assignment = { jobId, planVersion, step: plan.steps[0], attempt, feedback, priorResult };
-      await record('assignment.sent', assignment);
+      await record('assignment.sent', { ...assignment, source: local.identity ?? 'local' });
       result = validateResult(await local.execute({ ...assignment, signal }));
       await record('local.result', { attempt, result, source: local.identity ?? 'local' });
 
@@ -76,6 +77,7 @@ export async function runJob({ goal, frontier, local, store, approvePlan, onEven
       }
 
       stage = 'review';
+      await record('frontier.review.requested', { attempt, planVersion, plan, result, source: frontier.identity ?? 'frontier' });
       review = validateReview(await frontier.review({ jobId, goal: cleanGoal, planVersion, plan, result, attempt, signal }));
       await record('frontier.review', { attempt, review, source: frontier.identity ?? 'frontier' });
 

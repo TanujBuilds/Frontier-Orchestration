@@ -40,6 +40,7 @@ test('accepted first answer is logged before display', async () => {
   assert.equal(h.localCalls, 1);
   assert.deepEqual(displayed, h.events.map((event) => event.type));
   assert.equal(h.events.find((event) => event.type === 'plan.accepted').data.planVersion, 1);
+  assert.equal(h.events.find((event) => event.type === 'frontier.review.requested').data.result.answer, 'Answer 1');
 });
 
 test('rejection pauses without dispatch', async () => {
@@ -89,7 +90,8 @@ test('review failure preserves the full local answer', async () => {
   const outcome = await runJob({ goal: 'Design a system', ...h });
   assert.equal(outcome.status, 'failed');
   assert.equal(outcome.result.answer, 'Answer 1');
-  assert.equal(h.events.at(-3).type, 'local.result');
+  assert.equal(h.events.at(-3).type, 'frontier.review.requested');
+  assert.equal(h.events.at(-4).type, 'local.result');
 });
 
 test('invalid plan and result fail clearly', async () => {
