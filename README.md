@@ -4,9 +4,19 @@ A frontier-led application that lets a frontier model delegate bounded work to a
 
 ## First live milestone
 
-Give the application a substantial project-design brief from the Mac terminal. Codex plans and delegates one focused assignment. DeepSeek, served as one distributed model across two Sparks, answers it. Codex reviews the answer and may request one focused revision. Code editing in a disposable Git repository and a local browser interface are later milestones.
+Give the application a substantial project-design brief from the Mac terminal. Codex plans and delegates one focused assignment. DeepSeek, served as one distributed model across two Sparks, answers it. Codex reviews the answer and may request one focused revision. The new overnight coding workflow extends this loop to sequential implementation stages in an isolated Mac worktree. A local browser interface remains later work.
 
-For the first personal build, the frontier adapter will use a locally signed-in Codex CLI. The local adapter will call an already-running DeepSeek endpoint. The coordinator and task log preserve one accepted plan and bounded attempts. Model output does not directly authorize a file write or shell command.
+For the first personal build, the frontier adapter uses a locally signed-in Codex CLI. The local adapter calls an already-running DeepSeek endpoint. The coordinator and task log preserve one accepted plan and bounded attempts. Model output does not directly authorize a file write or shell command.
+
+## Overnight coding workflow
+
+From Codex CLI in this repository, ask: **“Use overnight-build to build this feature in [project].”** Codex proposes stages for your approval; DeepSeek implements them; the coordinator runs checks; Codex reviews the actual changes. Five local attempts per stage, a bounded Codex rescue, eight-hour deadline, durable resume, and a morning report are included.
+
+See [the Mac setup and command guide](docs/OVERNIGHT.md) and [dated verification results](docs/VERIFICATION.md). To prepare the disposable React/TypeScript pilot:
+
+```sh
+npm run pilot -- /path/to/new-disposable-pilot
+```
 
 ## Run the first live terminal workflow
 
@@ -55,4 +65,4 @@ MIT. See [LICENSE](LICENSE).
 
 ## Status (2026-10-20)
 
-The signed-in Codex CLI completed separate live planning and review probes through the new adapter. The latest Mac check could not reach the DeepSeek API tunnel, so the full handoff still needs a live integration run when the head service is reachable. The original `npm run demo` command uses fake responses only.
+The signed-in Codex CLI completed real design planning/review and staged planning probes. The overnight coordinator, protected edit protocol, verified Mac sandbox, detached runner, skill and UI pilot are implemented. Fake/stub verification is recorded separately from real model results. The DeepSeek integration and real multi-stage release gate remain pending reconnection. See [verification details](docs/VERIFICATION.md).

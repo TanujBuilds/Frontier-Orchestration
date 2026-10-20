@@ -32,7 +32,7 @@ flowchart LR
 
 1. **Existing foundation:** a Node.js coordinator and append-only local event log can show the full handoff with fake model responses. This is a workflow demonstration, not live integration.
 2. **First live proof:** from the Mac terminal, give Codex a substantial project-design request. Codex proposes one focused assignment; after the user accepts the plan, DeepSeek answers; Codex reviews the answer and may request one revision. The command displays the answer, review, and final status. See [MVP.md](MVP.md).
-3. **Next coding proof:** use a disposable Git repository, scoped Mac workspace tools, an agreed check, a diff, and frontier review of actual evidence.
+3. **Overnight coding proof:** approve a staged plan inside Codex CLI, then execute sequential DeepSeek coding attempts in an isolated Mac Git worktree. Run protected checks and review actual diffs/screenshots; checkpoint accepted stages. Five local attempts precede a last-resort Codex rescue. See [OVERNIGHT.md](OVERNIGHT.md).
 4. **Later interface:** add a local browser view for job history, plan, handoffs, artifacts, checks, and controls once the live model loop works.
 
 The current project does not need model installation, Spark runtime management, parallel agents, automatic model selection, team accounts, billing, or long-term memory across unrelated projects.
@@ -46,3 +46,7 @@ The Spark deployment and OpenCode tuning belong to a separate project. This repo
 ## Decision history
 
 The original October 2026 “Local AI Orchestrator” brief established the coordination problem and explored several possible model roles, including local-first planning. Those were proposals, not final requirements. Subsequent discussion chose **frontier-led planning and review**, then selected the terminal-based project-design handoff as the first live milestone. An earlier coding-task demo remains the next milestone. When sources differ, use the most recent explicit decision recorded here and in [MVP.md](MVP.md).
+
+## Overnight workflow decision (2026-10-20)
+
+The owner approved the scoped coding milestone: 1–10 ordered stages, five DeepSeek attempts per stage, at most one Codex rescue per exhausted stage and two per job, eight hours by default, and a thirty-minute provider reconnect window. The Mac owns the worktree and check execution. Approvals bind exact plan versions and permissions. Dependencies are prepared beforehand; expansion pauses for a newly approved plan. A disposable React/TypeScript task board is the first pilot. Fake/stub checks can proceed while the Sparks are unavailable; the release gate still requires real Codex/DeepSeek multi-stage execution.
