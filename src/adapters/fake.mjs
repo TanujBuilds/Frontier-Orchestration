@@ -5,7 +5,8 @@ export class FakeFrontier {
       steps: [{
         id: 'step-1',
         objective: goal,
-        expectedResult: 'A proposed change and evidence that it was checked',
+      context: 'Use only the task description provided in this demo.',
+      expectedResult: 'A proposed approach and a clear explanation',
       }],
     };
   }
@@ -22,6 +23,7 @@ export class FakeLocal {
   async execute({ attempt, feedback }) {
     return {
       status: 'completed',
+      answer: attempt === 1 ? 'Draft approach with a short explanation.' : 'Revised approach with a clearer explanation.',
       summary: attempt === 1 ? 'Draft implementation complete.' : 'Revision complete with clearer explanation.',
       artifacts: [],
       checks: [{ name: 'fake-check', passed: true, evidence: 'Simulated success; no code was run.' }],
