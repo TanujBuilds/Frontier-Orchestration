@@ -73,13 +73,18 @@ export class CodexCliAdapter {
     this.identity = model ? `codex-cli/${model}` : 'codex-cli/default';
   }
 
-  async call(prompt, schema, signal) {
+  async call(prompt, schema, signal, images = []) {
+    if (signal?.aborted) throw new Error('Codex call interrupted');
     const workingDir = await mkdtemp(path.join(os.tmpdir(), 'frontier-codex-'));
     try {
       const schemaPath = path.join(workingDir, 'response.schema.json');
       await writeFile(schemaPath, JSON.stringify(schema), { mode: 0o600 });
       const args = ['exec', '--ephemeral', '--sandbox', 'read-only', '--ignore-user-config', '--skip-git-repo-check', '-C', workingDir, '--output-schema', schemaPath];
+      // These calls only produce structured proposals/reviews. The coordinator owns tools.
+      for (const feature of ['shell_tool', 'unified_exec', 'apps', 'plugins', 'browser_use', 'computer_use', 'multi_agent', 'view_image', 'code_mode_host', 'workspace_dependencies', 'hooks', 'image_generation']) args.push('--disable', feature);
+      args.push('--enable', 'skip_host_skill_discovery', '-c', 'web_search="disabled"', '-c', 'project_doc_max_bytes=0');
       if (this.model) args.push('-m', this.model);
+      for (const image of images) args.push('-i', image);
       args.push('-');
       const output = await this.invoke({ command: this.command, args, input: prompt, cwd: workingDir, timeoutMs: this.timeoutMs, signal });
       try {
