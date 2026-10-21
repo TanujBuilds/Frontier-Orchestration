@@ -4,7 +4,7 @@ A frontier-led application that lets a frontier model delegate bounded work to a
 
 ## First live milestone
 
-Give the application a substantial project-design brief from the Mac terminal. Codex plans and delegates one focused assignment. DeepSeek, served as one distributed model across two Sparks, answers it. Codex reviews the answer and may request one focused revision. The new overnight coding workflow extends this loop to sequential implementation stages in an isolated Mac worktree. A local browser interface remains later work.
+Give the application a substantial project-design brief from the Mac terminal. Codex plans and delegates one focused assignment. DeepSeek, served as one distributed model across two Sparks, answers it. Codex reviews the answer and may request one focused revision. The overnight coding workflow extends this loop to sequential implementation stages in an isolated Mac worktree. A read-only local browser timeline now displays saved jobs; browser controls remain later work.
 
 For the first personal build, the frontier adapter uses a locally signed-in Codex CLI. The local adapter calls an already-running DeepSeek endpoint. The coordinator and task log preserve one accepted plan and bounded attempts. Model output does not directly authorize a file write or shell command.
 
@@ -17,6 +17,16 @@ See [the Mac setup and command guide](docs/OVERNIGHT.md) and [dated verification
 ```sh
 npm run pilot -- /path/to/new-disposable-pilot
 ```
+
+Once an approved project job starts, `npm run --silent project -- watch --job JOB_ID` shows its saved Codex → DeepSeek → Codex handoffs live. Add `--once` to replay and exit, or `--full` to inspect exact private event payloads.
+
+To see the same handoffs in a browser, run this in **Mac Terminal**:
+
+```sh
+npm run dashboard -- --job JOB_ID
+```
+
+Open the loopback URL printed by the command. The page updates from the local JSONL job log every two seconds and shows stage status, model handoffs, checks, recorded screenshots, and expandable private payloads. It is read-only and listens only on 127.0.0.1. Closing the browser does not stop a background job; stop the viewer with Ctrl-C in its Terminal. Use `--port 0` if the default port is already occupied.
 
 ## Run the first live terminal workflow
 
@@ -63,6 +73,6 @@ See [docs/PRODUCT_CONTEXT.md](docs/PRODUCT_CONTEXT.md) for the product backgroun
 
 MIT. See [LICENSE](LICENSE).
 
-## Status (2026-10-20)
+## Status (2026-10-21)
 
-The signed-in Codex CLI completed real design planning/review and staged planning probes. The overnight coordinator, protected edit protocol, verified Mac sandbox, detached runner, skill and UI pilot are implemented. Fake/stub verification is recorded separately from real model results. The DeepSeek integration and real multi-stage release gate remain pending reconnection. See [verification details](docs/VERIFICATION.md).
+The signed-in Codex CLI, overnight coordinator, protected Mac worktree, detached runner, skill, terminal timeline, and read-only browser timeline are implemented. On October 21 the real text handoff completed with two DeepSeek answers and two Codex reviews; its final status was `needs_review` after the one-revision limit. The real two-stage coding pilot then finished `accepted`: DeepSeek built and revised a responsive UI shell, protected layout checks passed, Codex reviewed the recorded diffs and screenshots, and both stages were committed in an isolated worktree. This narrow pilot does not cover interactions, persistence, or the full four-stage Night Shift release gate. See [verification details](docs/VERIFICATION.md).

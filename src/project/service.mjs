@@ -85,11 +85,18 @@ export async function stopProject(journal) {
 export async function projectStatus(journal) {
   const result = summarize(journal);
   if (result.status === 'running') {
+    let lock;
     try {
-      const lock = JSON.parse(await readFile(path.join(journal.dir, 'lock.json'), 'utf8'));
+      lock = JSON.parse(await readFile(path.join(journal.dir, 'lock.json'), 'utf8'));
       process.kill(lock.pid, 0);
       result.pid = lock.pid;
-    } catch { result.status = 'interrupted'; result.reason = 'Runner is no longer active; resume from its recorded operations'; }
+    } catch (error) {
+      if (error.code === 'EPERM' && Number.isInteger(lock?.pid)) result.pid = lock.pid;
+      else {
+        result.status = 'interrupted';
+        result.reason = 'Runner is no longer active; resume from its recorded operations';
+      }
+    }
   }
   return result;
 }

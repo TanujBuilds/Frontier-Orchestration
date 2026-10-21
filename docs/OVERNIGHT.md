@@ -48,6 +48,8 @@ The destination must not exist. Preparation copies the React/TypeScript starter,
 
 The requested app is **Night Shift**, a task board. `examples/overnight-brief.md` specifies three implementation stages (layout, interactions, persistence/accessibility) and final integration verification. `examples/overnight-permissions.json` permits `src/` edits and declares four protected checks. The starter intentionally does not pass the feature checks.
 
+For the first **real** coding smoke test, use the smaller `examples/live-pilot-brief.md` and `examples/live-pilot-permissions.json` against the same clean starter. They request only the responsive shell and its final layout verification. This still requires exact plan approval, an isolated worktree, a real DeepSeek edit, the protected layout check, screenshots, and a separate Codex review. It does not satisfy the full four-stage Night Shift release gate.
+
 The checks build the app, run Chromium, test behavior, and capture desktop/mobile PNGs. Browser requests are fulfilled from local build files through [Playwright routing](https://playwright.dev/docs/api/class-page#page-route); no localhost server or network grant is needed. Chromium uses a single process under the outer Codex Mac sandbox. Baseline accessibility checks cover labels, landmarks, keyboard interaction and a live region; they are not a full accessibility audit.
 
 ## Command contract
@@ -61,6 +63,7 @@ npm run --silent project -- plan --repo /path/to/project \
 # After reviewing and approving the returned manifest:
 npm run --silent project -- approve --job JOB_ID --hash PLAN_HASH --json
 npm run --silent project -- run --job JOB_ID --background --json
+npm run --silent project -- watch --job JOB_ID
 npm run --silent project -- status --job JOB_ID --json
 npm run --silent project -- stop --job JOB_ID --json
 npm run --silent project -- resume --job JOB_ID --background --json
@@ -70,6 +73,10 @@ npm run --silent project -- resume --job JOB_ID --extend-hours 2 --background --
 ```
 
 `plan` accepts `--hours` (default 8, up to 24) and `--fake`. `--data-dir` selects local job storage; use the same location on later commands. `run` without `--background` stays in the foreground. Exit codes: 0 for successful commands/accepted jobs, 2 for paused/blocked/needs_review/interrupted jobs, 1 for failures. A background launch confirms startup, not eventual success; use status/report for the outcome.
+
+`watch` replays the private job log, then follows new events until the current run finishes. It shows assignments, each DeepSeek file request/edit submission, applied edits, checks, Codex reviews, checkpoints, provider waits, and final status. `--once` prints the current history and exits. `--full` or `--json` prints each complete JSONL event, including full model inputs and responses; use it only in a terminal where that private source content is appropriate. A fake job is visibly marked `[FAKE]` in the human timeline. The timeline is a view of events already persisted by the coordinator, so it can reconnect after the viewer closes without changing the runner.
+
+For a read-only browser view of the same saved handoffs, run `npm run dashboard -- --job JOB_ID` in Mac Terminal and open the printed local URL. The page refreshes every two seconds. It shows stages, model handoffs, checks, screenshots and expandable recorded payloads. It listens only on `127.0.0.1`, does not control the runner, and may display private source and model content from the job log. Stop the viewer with Ctrl-C; closing it does not stop a coding job. Use `--port 0` to select a free port.
 
 Replanning a paused job:
 

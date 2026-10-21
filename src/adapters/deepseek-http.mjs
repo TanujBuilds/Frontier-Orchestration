@@ -1,11 +1,44 @@
+import http from 'node:http';
+import https from 'node:https';
+
 function endpoint(baseUrl, route) {
   const url = new URL(baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`);
   if (!['http:', 'https:'].includes(url.protocol)) throw new Error('DeepSeek base URL must use HTTP or HTTPS');
   return new URL(route, url);
 }
 
+function requestWithoutHeaderDeadline(url, options, signal) {
+  return new Promise((resolve, reject) => {
+    const transport = url.protocol === 'https:' ? https : http;
+    const request = transport.request(url, {
+      method: options.method ?? 'GET',
+      headers: options.headers,
+      signal,
+    }, response => {
+      const chunks = [];
+      let size = 0;
+      response.on('data', chunk => {
+        size += chunk.length;
+        if (size > 32 * 1024 * 1024) {
+          request.destroy(new Error('DeepSeek response exceeded 32 MiB'));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.on('end', () => resolve({
+        ok: response.statusCode >= 200 && response.statusCode < 300,
+        status: response.statusCode,
+        json: async () => JSON.parse(Buffer.concat(chunks).toString('utf8')),
+      }));
+      response.on('error', reject);
+    });
+    request.on('error', reject);
+    request.end(options.body);
+  });
+}
+
 export class DeepSeekHttpAdapter {
-  constructor({ baseUrl, model, timeoutMs = 600_000, fetchImpl = fetch } = {}) {
+  constructor({ baseUrl, model, timeoutMs = 600_000, fetchImpl = requestWithoutHeaderDeadline } = {}) {
     if (!baseUrl) throw new Error('DEEPSEEK_BASE_URL is required (include /v1)');
     this.modelsUrl = endpoint(baseUrl, 'models');
     this.chatUrl = endpoint(baseUrl, 'chat/completions');
@@ -20,7 +53,7 @@ export class DeepSeekHttpAdapter {
     const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
     let response;
     try {
-      response = await this.fetchImpl(url, { ...options, signal: combined });
+      response = await this.fetchImpl(url, { ...options, signal: combined }, combined);
     } catch (error) {
       if (signal?.aborted) throw new Error('DeepSeek call interrupted');
       if (timeout.aborted) throw new Error(`DeepSeek call timed out after ${this.timeoutMs} ms`);

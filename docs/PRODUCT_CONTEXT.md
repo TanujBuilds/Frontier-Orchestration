@@ -33,7 +33,7 @@ flowchart LR
 1. **Existing foundation:** a Node.js coordinator and append-only local event log can show the full handoff with fake model responses. This is a workflow demonstration, not live integration.
 2. **First live proof:** from the Mac terminal, give Codex a substantial project-design request. Codex proposes one focused assignment; after the user accepts the plan, DeepSeek answers; Codex reviews the answer and may request one revision. The command displays the answer, review, and final status. See [MVP.md](MVP.md).
 3. **Overnight coding proof:** approve a staged plan inside Codex CLI, then execute sequential DeepSeek coding attempts in an isolated Mac Git worktree. Run protected checks and review actual diffs/screenshots; checkpoint accepted stages. Five local attempts precede a last-resort Codex rescue. See [OVERNIGHT.md](OVERNIGHT.md).
-4. **Later interface:** add a local browser view for job history, plan, handoffs, artifacts, checks, and controls once the live model loop works.
+4. **Browser view:** a read-only local timeline now shows saved job history, handoffs, checks, and screenshots. Browser controls and broader interface work follow the live model loop.
 
 The current project does not need model installation, Spark runtime management, parallel agents, automatic model selection, team accounts, billing, or long-term memory across unrelated projects.
 

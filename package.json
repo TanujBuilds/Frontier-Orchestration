@@ -8,6 +8,7 @@
     "demo": "node src/demo.mjs",
     "live": "node src/live.mjs",
     "project": "node src/project-cli.mjs",
+    "dashboard": "node src/dashboard.mjs",
     "test": "node --test",
     "pilot": "node src/pilot.mjs"
   },

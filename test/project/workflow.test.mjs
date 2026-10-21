@@ -35,7 +35,18 @@ async function setup(t, frontier = new FakeProjectFrontier()) {
 }
 
 test('stages run in order, commit accepted results, and completed jobs do not repeat', async t => {
-  const { run, journal, repo } = await setup(t);
+  const frontier = new FakeProjectFrontier();
+  const originalReview = frontier.reviewCode.bind(frontier);
+  frontier.reviewCode = async input => {
+    if (input.stage.kind === 'verification') {
+      assert.equal(input.evidence.diff, '');
+      assert.equal(input.evidence.acceptedDiffs.length, 1);
+      assert.equal(input.evidence.acceptedDiffs[0].stageId, 'implementation');
+      assert.match(input.evidence.acceptedDiffs[0].diff, /src\/fake-marker\.txt/);
+    }
+    return originalReview(input);
+  };
+  const { run, journal, repo } = await setup(t, frontier);
   const result = await run();
   assert.equal(result.status, 'accepted');
   assert.deepEqual(journal.events.filter(e => e.type === 'stage.accepted').map(e => e.data.stageId), ['implementation', 'verification']);
@@ -74,6 +85,23 @@ test('Codex rescues only exhausted stages; subsequent stages return to local', a
   const result = await run({ local });
   assert.equal(result.status, 'accepted');
   assert.deepEqual(order, [...Array(5).fill('local:implementation'), 'rescue:implementation', 'local:verification']);
+});
+
+test('verification artifact requests consume an attempt without expanding scope', async t => {
+  const { run } = await setup(t);
+  let asked = false;
+  const local = { reply: async input => {
+    if (input.stage.kind === 'verification' && !asked) {
+      asked = true;
+      return { reply: { type: 'needs_approval', paths: ['.overnight-output/layout-mobile.png'],
+        summary: 'Need screenshot to verify', edits: [] } };
+    }
+    return new FakeProjectLocal().reply(input);
+  } };
+  const result = await run({ local });
+  assert.equal(result.status, 'accepted');
+  assert.equal(result.stages[1].localAttempts, 2);
+  assert.equal(result.stages[1].codexRescues, 0);
 });
 
 test('two rescues per job is an independent hard limit', async t => {

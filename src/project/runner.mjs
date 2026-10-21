@@ -43,10 +43,14 @@ export async function writeReport(journal) {
     '| Stage | Status | DeepSeek attempts | Codex rescues | Checkpoint |',
     '| --- | --- | ---: | ---: | --- |',
     ...report.stages.map(stage => `| ${stage.id} | ${stage.status} | ${stage.localAttempts} | ${stage.codexRescues} | ${stage.checkpoint ?? '—'} |`),
+    '', '## Latest review limits',
+    ...(report.stages.findLast(stage => stage.lastFeedback)?.unverified.length
+      ? report.stages.findLast(stage => stage.lastFeedback).unverified.map(item => `- ${item}`)
+      : ['- None recorded by the latest review.']),
     '',
     ...report.stages.flatMap(stage => [`## ${stage.id}`, stage.objective, stage.lastFeedback ?? '',
       ...stage.checks.map(check => `- ${check.id}: ${check.passed ? 'passed' : 'failed'}`),
-      ...stage.unverified.map(item => `- Unverified: ${item}`), '']),
+      ...stage.unverified.map(item => `- At this stage review, unverified: ${item}`), '']),
   ];
   await writeFile(report.report, lines.join('\n'), { mode: 0o600 });
   return report;
@@ -151,9 +155,17 @@ export async function runProject(journal, {
           const context = [];
           for (let exchange = 0; exchange <= manifest.limits.contextRequests; exchange++) {
             const request = { stage, assignment, permissions: manifest.permissions, inventory: await workspace.inventory(), priorAttempts: failures,
-              context, note: 'Only one edit submission per attempt; use read_files to obtain current base hashes.' };
+              context, note: stage.kind === 'verification'
+                ? 'Only one edit submission per attempt. If no source edit is warranted, submit_changes with edits:[]. The coordinator runs approved checks and gives screenshots and accepted checkpoint diffs directly to Codex; do not request those generated artifacts or ask for approval to review them.'
+                : 'Only one edit submission per attempt; use read_files to obtain current base hashes.' };
             const output = await provider(`${operationKey}/response-${exchange}`, s => role === 'local' ? local.reply(request, s) : frontier.rescue(request, s), request);
             if (output?.protocolError) throw new AttemptError(output.protocolError);
+            if (stage.kind === 'verification' && role === 'local' && output?.reply?.type === 'needs_approval' &&
+                Array.isArray(output.reply.paths) && output.reply.paths.length > 0 &&
+                output.reply.paths.every(file => /^\.overnight-output\/[a-zA-Z0-9_.-]+\.png$/.test(file)) &&
+                Array.isArray(output.reply.edits) && output.reply.edits.length === 0) {
+              throw new AttemptError('The coordinator already gives generated screenshots and accepted checkpoint diffs to Codex. Submit changes with an empty edits array when no source edit is needed.');
+            }
             reply = validateReply(role === 'local' ? output?.reply : output);
             if (reply.type === 'submit_changes') break;
             if (exchange === manifest.limits.contextRequests) throw new AttemptError('Context request limit reached; submit a focused edit batch');
@@ -169,7 +181,7 @@ export async function runProject(journal, {
           const evidence = { ...await workspace.evidence(), checks: checkResults.map(check => ({
             ...check, stdout: check.stdout?.slice(-32_768), stderr: check.stderr?.slice(-32_768),
             outputTruncated: (check.stdout?.length ?? 0) > 32_768 || (check.stderr?.length ?? 0) > 32_768,
-          })) };
+          })), ...(stage.kind === 'verification' ? { acceptedDiffs: await workspace.acceptedDiffs() } : {}) };
           const reviewInput = { brief: manifest.brief, approvedPlan: manifest.plan, stage, assignment,
             acceptedStages: summarize(journal).stages.filter(item => item.status === 'accepted'),
             currentSource: await workspace.readFiles((await workspace.inventory()).map(file => file.path)),

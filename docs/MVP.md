@@ -1,6 +1,6 @@
 # First live milestone: Codex → DeepSeek → Codex
 
-This is the first real model handoff for Frontier Orchestrator. It is a terminal-based project-design task. The coding workflow and browser interface follow after this loop works.
+This is the first real model handoff for Frontier Orchestrator. It is a terminal-based project-design task. The coding workflow and a read-only browser timeline have been built around it; the complete live model loop remains the verification gate.
 
 ## Demo story
 
@@ -37,7 +37,7 @@ The Mac-to-Spark connection may be unavailable independently of app code. Build 
 ## Next milestones
 
 - **Overnight coding workflow (approved 2026-10-20):** sequential stages in an isolated Mac Git worktree, structured bounded edits, sandboxed checks and Codex evidence review. Implementation and recovery details are in [OVERNIGHT.md](OVERNIGHT.md); the real multi-stage release gate remains pending Spark reconnection.
-- **Local browser interface:** show plan, handoffs, artifacts, checks, history, and user controls after the real terminal loop is reliable.
+- **Local browser interface:** the read-only timeline already shows saved handoffs, checks, screenshots, and history. User controls follow after the real terminal loop is reliable.
 - **Later:** provider choices, parallel work, and more general tasks. Keep the coordinator's plan and permission rules authoritative as capabilities grow.
 
 ## Codex integration reference

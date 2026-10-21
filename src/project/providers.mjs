@@ -31,7 +31,7 @@ export class ProjectFrontier extends CodexCliAdapter {
   }
   async reviewCode(input, signal) {
     const images = input.evidence.checks.flatMap(check => check.screenshots ?? []);
-    return this.call(`${boundary}\nReview this stage's actual diff, new files, checks, and supplied screenshots against its acceptance criteria and the overall brief. The assignment is not complete merely because tests passed. Accept only when required behavior is demonstrated. A failed check always requires revise or blocked. Give focused correction feedback; blocked means work cannot continue within the approved scope. List any unverified claims.\n${JSON.stringify(input)}`, reviewSchema, signal, images);
+    return this.call(`${boundary}\nReview this stage's actual diff, new files, checks, and supplied screenshots against its acceptance criteria and the overall brief. For a final verification stage, evidence.acceptedDiffs contains earlier checkpoint diffs; review those as well as the current stage diff. The assignment is not complete merely because tests passed. Accept only when required behavior is demonstrated. A failed check always requires revise or blocked. Give focused correction feedback; blocked means work cannot continue within the approved scope. List any unverified claims.\n${JSON.stringify(input)}`, reviewSchema, signal, images);
   }
   async rescue(input, signal) {
     return this.call(`${boundary}\nYou are the last-resort implementer for this stage only. DeepSeek has exhausted its five attempts. Make one bounded repair without expanding scope. Return the structured worker protocol below. Request files if necessary, then submit one edit batch. The next stage belongs to DeepSeek.\nProtocol: ${JSON.stringify(replySchema)}\n${JSON.stringify(input)}`, replySchema, signal);
@@ -46,7 +46,7 @@ export class ProjectLocal extends DeepSeekHttpAdapter {
       body: JSON.stringify({
         model, stream: false,
         messages: [
-          { role: 'system', content: `${boundary}\nImplement only the current stage. Return a JSON object matching this protocol: ${JSON.stringify(replySchema)}. To read permitted files, use read_files with paths and empty edits. To finish an attempt, use submit_changes with complete UTF-8 file contents and the supplied baseHash (null for a new file), empty paths, and a summary. Deletions use content=null. You cannot execute commands; the coordinator runs approved checks. Use needs_approval if scope or dependencies must expand.` },
+          { role: 'system', content: `${boundary}\nImplement only the current stage. Return a JSON object matching this protocol: ${JSON.stringify(replySchema)}. To read permitted source files, use read_files with paths and empty edits. To finish an attempt, use submit_changes with complete UTF-8 file contents and the supplied baseHash (null for a new file), empty paths, and a summary. An empty edit batch is valid when no source change is needed. Deletions use content=null. You cannot execute commands; the coordinator runs approved checks and sends check screenshots and accepted checkpoint diffs directly to Codex for review. Do not request these generated artifacts. Use needs_approval only if source scope or dependencies must expand.` },
           { role: 'user', content: JSON.stringify(input) },
         ],
       }),
