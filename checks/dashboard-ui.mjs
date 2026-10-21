@@ -76,9 +76,18 @@ try {
   });
   const activity = page.getByRole('region', { name: 'Current activity' });
   const overflow = () => page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
-  const load = async name => { activeCase = cases[name]; await page.goto('http://dashboard.invalid'); await activity.waitFor(); };
+  const load = async (name, expected) => {
+    activeCase = cases[name];
+    await page.goto('http://dashboard.invalid');
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      if (expected.test(await activity.innerText())) return;
+      await page.waitForTimeout(50);
+    }
+    assert.match(await activity.innerText(), expected, 'Expected activity did not load');
+  };
 
-  await load('deepseek');
+  await load('deepseek', /DeepSeek/i);
   assert.match(await activity.innerText(), /DeepSeek/i);
   assert.match(await activity.innerText(), /working|waiting/i);
   assert.match(await page.locator('body').innerText(), /Stage 2 of 3/i);
@@ -92,15 +101,15 @@ try {
   assert.equal(await overflow(), false, 'Mobile dashboard must not overflow horizontally');
   await page.screenshot({ path: '.overnight-output/dashboard-mobile.png', fullPage: true });
 
-  await load('waiting');
+  await load('waiting', /connection|reconnect/i);
   assert.match(await activity.innerText(), /connection|reconnect/i, 'Connection wait must be distinct from model work');
-  await load('checks');
+  await load('checks', /Mac/i);
   assert.match(await activity.innerText(), /Mac/i);
   assert.match(await activity.innerText(), /check/i);
-  await load('review');
+  await load('review', /Codex/i);
   assert.match(await activity.innerText(), /Codex/i);
   assert.match(await activity.innerText(), /review/i);
-  await load('done');
+  await load('done', /accepted|complete|finished/i);
   assert.match(await activity.innerText(), /accepted|complete|finished/i);
   assert.deepEqual(errors, [], 'Dashboard must not throw browser errors');
   console.log('dashboard: current worker, connection wait, checks, review, completion, desktop and mobile passed');
