@@ -147,7 +147,7 @@ export class Workspace {
     const untracked = (await git(this.root, 'ls-files', '--others', '--exclude-standard', '-z')).split('\0').filter(Boolean);
     const newFiles = await this.readFiles(untracked.filter(file => !generated(file) && matches(file, this.manifest.permissions.writePaths)));
     if (Buffer.byteLength(diff) > 512 * 1024) throw new Pause('Diff exceeds review context limit', 'context');
-    return { diff, newFiles, snapshot };
+    return { diff, newFiles, snapshot: Object.fromEntries(Object.entries(snapshot).filter(([file]) => !secretPath(file) && matches(file, this.manifest.permissions.readPaths))) };
   }
   async checkpoint(stage) {
     await this.assertSnapshot();

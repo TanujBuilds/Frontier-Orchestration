@@ -3,7 +3,7 @@ import { mkdir, writeFile, readFile, copyFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { accessSync, constants } from 'node:fs';
 import { command } from './process.mjs';
-import { Pause } from './contracts.mjs';
+import { Pause, secretPath, matches } from './contracts.mjs';
 
 export class CheckRunner {
   constructor(workspace, { codex = 'codex' } = {}) {
@@ -23,6 +23,15 @@ export class CheckRunner {
       [root]: 'read', [path.join(root, '.git')]: 'deny',
       [path.join(root, '.overnight-output')]: 'write', [path.join(root, 'dist')]: 'write',
     };
+    // A check executes worker-controlled source. Do not let that source read
+    // undisclosed tracked files or secrets and smuggle them into check output.
+    const permissions = this.workspace.manifest?.permissions;
+    if (permissions) {
+      for (const file of Object.keys(await this.workspace.snapshot())) {
+        if (secretPath(file) || !matches(file, permissions.readPaths)) fs[path.join(root, file)] = 'deny';
+      }
+    }
+    for (const name of ['.env', '.aws', '.ssh', '.codex', '.agents', '.data', '.npmrc', '.netrc', '.pypirc', '.git-credentials']) fs[path.join(root, name)] = 'deny';
     const fields = Object.entries(fs).map(([key, value]) => `${JSON.stringify(key)}=${JSON.stringify(value)}`).join(',');
     const config = `permissions.overnight={filesystem={${fields}},network={enabled=false}}`;
     return command([this.codex, 'sandbox', '-P', 'overnight', '-c', config, '-C', root, '--', ...argv], {
