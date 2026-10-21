@@ -21,12 +21,13 @@ After approval:
 ```sh
 npm run --silent project -- approve --job <id> --hash <exact-plan-hash> --json
 npm run --silent project -- run --job <id> --background --json
+npm run --silent project -- watch --job <id>
 npm run --silent project -- status --job <id> --json
 ```
 
 Report job ID, status, worktree/branch, and report location. The detached runner survives the conversation closing and uses caffeinate. Verify status after launch; a spawned PID alone is not proof that work started.
 
-Use `status` to follow progress, `stop --job <id> --json` for a cooperative stop, and `resume --job <id> --background --json` after resolving the reported blocker. Extending an expired budget requires an explicit user instruction, then `resume --extend-hours <hours>`. Resume reconciles recorded edits and checkpoints.
+Use `watch` for the live handoff timeline and `status` for a compact snapshot. `watch --once` replays current history; `watch --full` shows the exact private JSONL payloads. Use `stop --job <id> --json` for a cooperative stop, and `resume --job <id> --background --json` after resolving the reported blocker. Extending an expired budget requires an explicit user instruction, then `resume --extend-hours <hours>`. Resume reconciles recorded edits and checkpoints.
 
 The coordinator collects actual diff/check/screenshot evidence. DeepSeek gets five attempts before one structured Codex repair, followed by separate checks/review. Do not manually code around this loop or modify approval/log records. Broader scope, dependencies, or commands require `plan --job <id> --brief <file> --permissions <file> --json`, review of the new manifest, and approval of its new hash. This retains accepted stages and consumed attempts; a different stage structure requires a new job. Never silently widen permissions.
 

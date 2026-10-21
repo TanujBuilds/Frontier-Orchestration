@@ -1,0 +1,7 @@
+{
+  "readPaths": ["src/", "checks/", "index.html", "tsconfig.json", "package.json"],
+  "writePaths": ["src/"],
+  "checks": [
+    { "id": "layout", "argv": ["node", "checks/ui.mjs", "layout"], "timeoutMs": 120000, "screenshots": [".overnight-output/layout-desktop.png", ".overnight-output/layout-mobile.png"] }
+  ]
+}

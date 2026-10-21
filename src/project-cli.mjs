@@ -8,6 +8,7 @@ import { FakeProjectFrontier, FakeProjectLocal } from './project/fake.mjs';
 import { createProject, reviseProject, approveProject, prepareResume, projectStatus, stopProject } from './project/service.mjs';
 import { runProject } from './project/runner.mjs';
 import { digest } from './project/contracts.mjs';
+import { formatTimelineEvent, watchJournal } from './project/timeline.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
 
 function parse(args) {
@@ -15,7 +16,7 @@ function parse(args) {
   while (args.length) {
     const key = args.shift();
     if (!/^--[\w-]+$/.test(key)) throw new Error(`Invalid option: ${key}`);
-    if (['--json', '--fake', '--background', '--worker'].includes(key)) options[key.slice(2)] = true;
+    if (['--json', '--fake', '--background', '--worker', '--once', '--full'].includes(key)) options[key.slice(2)] = true;
     else {
       const value = args.shift();
       if (!value || value.startsWith('--')) throw new Error(`Missing value for ${key}`);
@@ -72,6 +73,22 @@ async function main() {
   } else {
     const journal = await new Journal(root, options.job).load();
     if (!journal.last('project.created')) throw new Error('Project job not found');
+    if (action === 'watch') {
+      const controller = new AbortController();
+      const interrupt = () => controller.abort();
+      process.once('SIGINT', interrupt); process.once('SIGTERM', interrupt);
+      try {
+        for await (const event of watchJournal(journal.file, { once: options.once, signal: controller.signal })) {
+          if (options.json || options.full) console.log(JSON.stringify(event));
+          else {
+            const line = formatTimelineEvent(event, { mode: journal.last('project.created').mode });
+            if (line) console.log(line);
+          }
+        }
+      } catch (error) { if (!controller.signal.aborted) throw error; }
+      finally { process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', interrupt); }
+      return;
+    }
     if (action === 'approve') result = await approveProject(journal, options.hash);
     else if (action === 'status') result = await projectStatus(journal);
     else if (action === 'stop') result = await stopProject(journal);
@@ -95,7 +112,7 @@ async function main() {
           });
         } finally { process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', interrupt); }
       }
-    } else throw new Error('Use plan, approve, run, status, stop, or resume');
+    } else throw new Error('Use plan, approve, run, watch, status, stop, or resume');
   }
   display(result, options.json);
   if (['failed', 'paused', 'needs_review', 'blocked', 'interrupted'].includes(result.status)) process.exitCode = result.status === 'failed' ? 1 : 2;
