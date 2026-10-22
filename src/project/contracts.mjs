@@ -91,7 +91,7 @@ export function validatePlan(plan, permissions) {
 }
 // The approved stage already carries objective, deliverable, scope, acceptance and checks.
 // Composing the assignment here keeps Codex out of the per-stage prompt-writing path.
-export function stageAssignment({ stage, plan, acceptedStages = [], priorAttempts = [] }) {
+export function stageAssignment({ stage, plan, acceptedStages = [], priorAttempts = [], guidance }) {
   const lines = [
     `Stage ${stage.id} (${stage.kind}).`,
     `Objective: ${stage.objective}`,
@@ -104,6 +104,7 @@ export function stageAssignment({ stage, plan, acceptedStages = [], priorAttempt
   if (acceptedStages.length) {
     lines.push('Accepted earlier stages:', ...acceptedStages.map(item => `- ${item.id}: ${item.objective}`));
   }
+  if (guidance) lines.push('Optional Codex guidance approved for this stage:', guidance);
   if (priorAttempts.length) {
     lines.push('Earlier attempts on this stage (most recent last):');
     for (const attempt of priorAttempts.slice(-5)) {

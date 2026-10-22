@@ -2,7 +2,7 @@
 
 ## What this adds
 
-A large request becomes one approved, ordered plan. **DeepSeek writes the plan and does the implementation** through the existing single service across both Sparks; the Mac coordinator owns permissions, edits, checks, attempts, deadlines, checkpoint commits and the event history. **Codex is used only to review finished evidence** — one review after checks pass, at most two per stage. Codex never plans, never writes assignments and never edits code.
+A large request becomes one approved, ordered plan. **DeepSeek writes the plan and does the implementation** through the existing single service across both Sparks; the Mac coordinator owns permissions, edits, checks, attempts, deadlines, checkpoint commits and the event history. By default, **Codex reviews finished evidence** after checks pass, at most two calls per stage. The owner may explicitly request one pre-stage guidance call. Codex does not write routine assignments or edit code.
 
 The original `npm run demo` and `npm run live -- --brief <file>` commands remain available.
 
@@ -43,12 +43,13 @@ Codex is the scarce resource; DeepSeek time is not. The runner therefore spends 
 | --- | --- | --- |
 | Break the brief into stages | DeepSeek (`--planner deepseek`, default) or the built-in template (`--template`) | 0 |
 | Write each stage assignment | Coordinator, from the already-approved stage text | 0 |
+| Optional guidance before a stage starts | Codex, only through an explicit `guide` command | 1 maximum per stage |
 | Implement, read files, submit edits | DeepSeek | 0 |
 | Run approved checks and judge pass/fail | Mac sandbox | 0 |
 | Independent review of a passing stage | Codex, once checks pass | 1 per review, max 2 per stage |
 | Repair after 5 failed attempts | DeepSeek, when the owner grants `--extend-attempts` | 0 |
 
-`--planner codex` is an opt-in escape hatch capped at one planning call; it exists in case a DeepSeek plan turns out too coarse, not as the default. `report.md` and `status --json` record every actual Codex call (`codexCalls`) and its duration, so the cost is measurable per job.
+`--planner codex` is an opt-in escape hatch capped at one planning call, including malformed responses; it exists in case a DeepSeek plan turns out too coarse. `guide --job JOB_ID --stage STAGE_ID` is a separate explicit one-call hint for the next unfinished stage, before its first attempt. The hint is added to DeepSeek's coordinator-composed assignment and cannot expand the approved plan or permissions. `report.md` and `status --json` record planning, guidance, and review calls (`codexCalls`) and their duration. Provider failures also consume the relevant call limit.
 
 ## Prepare the disposable UI pilot
 
@@ -80,6 +81,8 @@ npm run --silent project -- plan --repo /path/to/project --template \
 
 # After reviewing and approving the returned manifest:
 npm run --silent project -- approve --job JOB_ID --hash PLAN_HASH --json
+# Optional, before the next stage has started; this spends one Codex call:
+npm run --silent project -- guide --job JOB_ID --stage STAGE_ID --json
 npm run --silent project -- run --job JOB_ID --background --json
 npm run --silent project -- watch --job JOB_ID
 npm run --silent project -- status --job JOB_ID --json
@@ -93,7 +96,7 @@ npm run --silent project -- resume --job JOB_ID --extend-attempts 3 --background
 
 `plan` accepts `--planner deepseek|template|codex` (default `deepseek`), `--hours` (default 8, up to 24) and `--fake`. `--data-dir` selects local job storage; use the same location on later commands. `run` without `--background` stays in the foreground. Exit codes: 0 for successful commands/accepted jobs, 2 for paused/blocked/needs_review/interrupted jobs, 1 for failures. A background launch confirms startup, not eventual success; use status/report for the outcome.
 
-Limits per stage: five DeepSeek attempts and two Codex reviews. A stage is accepted only when every approved check passes **and** Codex accepts the evidence. A blocking review or two revision requests stop the stage at `needs_review` with the worktree preserved; grant more DeepSeek attempts, revise the plan, or accept manually.
+Limits per stage: five DeepSeek attempts, two Codex review calls, and one optional explicit guidance call before the first attempt. A stage is accepted only when every approved check passes **and** Codex accepts the evidence. A blocking review or a spent review budget stops the stage with the worktree preserved; more DeepSeek attempts alone cannot restore a spent review budget.
 
 `watch` replays the private job log, then follows new events until the current run finishes. It shows the composed stage assignment, each DeepSeek file request/edit submission, applied edits, checks, Codex review calls with their duration, checkpoints, provider waits, and final status. `--once` prints the current history and exits. `--full` or `--json` prints each complete JSONL event, including full model inputs and responses; use it only in a terminal where that private source content is appropriate. A fake job is visibly marked `[FAKE]` in the human timeline. The timeline is a view of events already persisted by the coordinator, so it can reconnect after the viewer closes without changing the runner.
 
@@ -112,7 +115,7 @@ This appends a new plan version. Existing stage IDs/order and accepted stages ar
 
 ## Providers and process lifetime
 
-- Authenticate Codex CLI on the Mac. **Only stage reviews** use ephemeral structured `codex exec` calls; tool features are disabled for these calls and model output is interpreted only by the coordinator. The same installed CLI binary is used as the local OS sandbox (`codex sandbox`) for running checks — that is a local process, not a model call and it spends no usage. Authentication stays in the existing CLI login.
+- Authenticate Codex CLI on the Mac. Stage reviews and explicitly requested planning or guidance use ephemeral structured `codex exec` calls; tool features are disabled for these calls and model output is interpreted only by the coordinator. The same installed CLI binary is used as the local OS sandbox (`codex sandbox`) for running checks — that is a local process, not a model call and it spends no usage. Authentication stays in the existing CLI login.
 - Set `DEEPSEEK_BASE_URL` to the existing OpenAI-compatible API including `/v1`. Optionally set `DEEPSEEK_MODEL_ID`; without it exactly one model must be advertised. Planning and all implementation go to this endpoint. Set `FRONTIER_MODEL_ID` only if you want an explicit Codex model for reviews. Keep these settings in the environment, outside tracked files.
 - The detached process inherits those settings, redirects output to its local `runner.log`, holds a job lock and uses `caffeinate`. Closing the conversation does not stop it. Power loss, reboot, suspension and account limits can still interrupt it.
 - A transient provider error waits with bounded backoff, up to 30 minutes. Waiting does not consume extra attempts or extra review rounds. Authentication/configuration/scope errors pause immediately. Per-call timeouts remain finite (Codex 5 minutes, DeepSeek 10 minutes).

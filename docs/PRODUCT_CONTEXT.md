@@ -12,7 +12,7 @@ Success means a useful result with less manual coordination. A large amount of l
 
 - **User:** states the goal and accepts the first plan for the initial workflow.
 - **Local model:** turns the brief into an ordered plan and does substantial, well-scoped implementation work. The first integration calls an already-running DeepSeek service through its OpenAI-compatible API.
-- **Frontier model:** independent reviewer only. It judges finished evidence against the approved plan and may request focused corrections, but it does not plan, write assignments, or edit code. The first personal integration is a signed-in Codex CLI on the user's Mac, which is a scarce usage window.
+- **Frontier model:** independent reviewer by default. It judges finished evidence against the approved plan and may request focused corrections. An explicit, optional one-call pre-stage guidance path is available when needed; Codex does not write routine assignments or edit code. The first personal integration is a signed-in Codex CLI on the user's Mac, which is a scarce usage window.
 - **Coordinator:** owns the task record, accepted plan/version, assignments, results, attempt limits, permissions, and event log. Model text is a proposal or result; it does not authorize a file write or shell command.
 
 The current DeepSeek deployment uses two DGX Spark machines to run **one distributed model service**. The head serves one API and the second machine participates in inference. They are not two independently addressable agents in the initial product. Other hardware and local model services should be connectable later through the adapter boundary.
@@ -29,7 +29,7 @@ flowchart LR
   Frontier -->|review decision| Coordinator
 ```
 
-The split exists because frontier usage is the scarce resource. A local model may be slower, but it can plan and iterate indefinitely; every Codex call is a real cost. Codex is spent only where deterministic checks cannot decide: independent review of work that already passes its checks, at most twice per stage.
+The split exists because frontier usage is the scarce resource. A local model may be slower, but it can plan and iterate indefinitely; every Codex call is a real cost. Automatic Codex usage is independent review of work that already passes its checks, at most twice per stage. The owner may explicitly request one guidance call before an unfinished stage starts.
 
 ## Build sequence
 
@@ -48,7 +48,7 @@ The Spark deployment and OpenCode tuning belong to a separate project. This repo
 
 ## Decision history
 
-The original October 2026 “Local AI Orchestrator” brief established the coordination problem and explored several possible model roles, including local-first planning. Those were proposals, not final requirements. Subsequent discussion chose frontier-led planning and review, then the terminal-based project-design handoff as the first live milestone. On 2026-10-21 the owner reversed the planning role: a real dashboard job consumed nearly the entire Codex usage window while Codex planned, wrote per-stage assignments, reviewed every attempt and rescued exhausted stages. **Frontier usage is now restricted to independent review and verification of finished work**; DeepSeek plans and implements. When sources differ, use the most recent explicit decision recorded here and in [MVP.md](MVP.md).
+The original October 2026 “Local AI Orchestrator” brief established the coordination problem and explored several possible model roles, including local-first planning. Those were proposals, not final requirements. Subsequent discussion chose frontier-led planning and review, then the terminal-based project-design handoff as the first live milestone. On 2026-10-21 the owner reversed the planning role: a real dashboard job consumed nearly the entire Codex usage window while Codex planned, wrote per-stage assignments, reviewed every attempt and rescued exhausted stages. DeepSeek now plans and implements; automatic frontier use is restricted to independent review of passing work. On 2026-10-22 the owner additionally allowed explicit, bounded pre-stage guidance. When sources differ, use the most recent explicit decision recorded here and in [MVP.md](MVP.md).
 
 ## Overnight workflow decision (2026-10-21)
 

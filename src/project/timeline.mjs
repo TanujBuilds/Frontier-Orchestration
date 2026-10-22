@@ -24,7 +24,8 @@ export function formatTimelineEvent(event, { mode } = {}) {
   if (type === 'project.approved') return `${prefix}  APPROVED plan v${data.planVersion}`;
   if (type === 'run.started') return `${prefix}  RUN started`;
   if (type === 'attempt.started') return `${prefix}  ${data.stageId}  ${data.role === 'rescue' ? 'Codex rescue' : 'DeepSeek attempt'} ${data.number}`;
-  if (type === 'frontier.call') return `${prefix}  CODEX CALL ${data.kind} [${data.stageId}] round ${data.round}: ${data.decision ?? 'pending'} in ${data.durationMs} ms`;
+  if (type === 'frontier.call') return `${prefix}  CODEX CALL ${data.kind}${data.stageId ? ` [${data.stageId}]` : ''}${data.round ? ` round ${data.round}` : ''}: ${data.decision ?? 'pending'} in ${data.durationMs} ms`;
+  if (type === 'stage.guidance') return `${prefix}  Codex guidance recorded for ${data.stageId}: ${data.guidance}`;
   if (type === 'attempts.extended') return `${prefix}  LIMITS extended: ${data.attempts} DeepSeek attempts per stage`;
   if (type === 'provider.waiting') return `${prefix}  WAIT ${data.key}: ${short(data.reason)}; retry in ${Math.ceil(data.waitMs / 1000)}s`;
   if (type === 'edits.intent') return `${prefix}  EDIT proposed: ${data.changes?.map(change => `${change.content === null ? 'delete' : 'write'} ${change.path}`).join(', ') || 'none'}`;

@@ -21,16 +21,22 @@ export function templatePlan(permissions) {
 }
 export const templatePlanner = { identity: 'template-plan', planProject: async ({ permissions }) => templatePlan(permissions) };
 
-const planAttempts = 3;
 async function requestPlan({ journal, planner, input, permissions, signal, planVersion }) {
   let lastError;
+  // An explicit Codex plan is a single call, including malformed responses.
+  const planAttempts = planner.usageKind === 'codex' ? 1 : 3;
   for (let attempt = 1; attempt <= planAttempts; attempt++) {
     await journal.append('project.plan.requested', { source: planner.identity ?? 'planner', input: { ...input, attempt }, ...(planVersion ? { planVersion } : {}) });
+    const started = Date.now();
     try {
       const output = await planner.planProject({ ...input, permissions, attempt }, signal);
+      if (planner.usageKind === 'codex') await journal.append('frontier.call', { kind: 'plan', key: `plan/v${planVersion ?? 1}/attempt-${attempt}`, durationMs: Date.now() - started, decision: 'returned' });
       if (output?.protocolError) throw new Error(output.protocolError);
       return validatePlan(output?.plan ?? output, permissions);
     } catch (error) {
+      if (planner.usageKind === 'codex' && !journal.events.some(event => event.type === 'frontier.call' && event.data.key === `plan/v${planVersion ?? 1}/attempt-${attempt}`)) {
+        await journal.append('frontier.call', { kind: 'plan', key: `plan/v${planVersion ?? 1}/attempt-${attempt}`, durationMs: Date.now() - started, decision: 'error' });
+      }
       lastError = error;
       await journal.append('project.plan.failed', { reason: error.message, attempt });
       // Only a locally recoverable planning error is worth another local call.
@@ -66,6 +72,32 @@ export async function approveProject(journal, hash) {
     if (!manifest || hash !== digest(manifest)) throw new Error('Approval hash does not match the current plan and permissions');
     if (journal.last('project.approved')?.hash !== hash) await journal.append('project.approved', { hash, planVersion: manifest.planVersion });
     return summarize(journal);
+  } finally { await release(); }
+}
+export async function guideStage({ journal, stageId, frontier, signal }) {
+  const release = await journal.lock();
+  try {
+    const manifest = journal.last('project.created');
+    if (!manifest || journal.last('project.approved')?.hash !== digest(manifest)) throw new Error('Approve the exact plan before requesting guidance');
+    const index = manifest.plan.stages.findIndex(stage => stage.id === stageId);
+    if (index < 0) throw new Error('Unknown stage ID');
+    const accepted = new Set(journal.events.filter(event => event.type === 'stage.accepted').map(event => event.data.stageId));
+    if (accepted.has(stageId) || manifest.plan.stages.slice(0, index).some(stage => !accepted.has(stage.id))) throw new Error('Guidance is available only for the next unfinished stage');
+    if (journal.events.some(event => event.type === 'attempt.started' && event.data.stageId === stageId)) throw new Error('Pre-stage guidance must be requested before the first attempt');
+    if (journal.events.some(event => event.type === 'frontier.call' && event.data.kind === 'guidance' && event.data.stageId === stageId)) throw new Error('This stage has already used its one guidance call');
+    const input = { brief: manifest.brief, approvedPlan: manifest.plan, stage: manifest.plan.stages[index],
+      acceptedStages: manifest.plan.stages.slice(0, index), permissions: manifest.permissions };
+    const started = Date.now();
+    let output;
+    try { output = await frontier.guideStage(input, signal); }
+    catch (error) {
+      await journal.append('frontier.call', { kind: 'guidance', stageId, durationMs: Date.now() - started, decision: 'error' });
+      throw error;
+    }
+    await journal.append('frontier.call', { kind: 'guidance', stageId, durationMs: Date.now() - started, decision: 'returned' });
+    if (typeof output?.guidance !== 'string' || !output.guidance.trim() || output.guidance.length > 8000) throw new Error('Codex returned invalid stage guidance');
+    await journal.append('stage.guidance', { stageId, guidance: output.guidance });
+    return { ...summarize(journal), guidance: output.guidance };
   } finally { await release(); }
 }
 export async function reviseProject({ journal, brief, permissions, planner, signal }) {
@@ -106,8 +138,8 @@ export async function prepareResume(journal, extendHours, extendAttempts) {
     }
     if (extendAttempts !== undefined) {
       if (!Number.isInteger(extendAttempts) || extendAttempts <= 0 || extendAttempts > 20) throw new Error('Attempt extension must be an integer from 1 to 20');
-      const previous = journal.last('attempts.extended')?.data.attempts ?? journal.last('project.created').limits.attempts;
-      await journal.append('attempts.extended', { attempts: previous + extendAttempts, hours: undefined });
+      const previous = journal.last('attempts.extended')?.attempts ?? journal.last('project.created').limits.attempts;
+      await journal.append('attempts.extended', { attempts: previous + extendAttempts });
     }
     try { await unlink(path.join(journal.dir, 'stop.request')); } catch (e) { if (e.code !== 'ENOENT') throw e; }
     await journal.append('resume.requested');

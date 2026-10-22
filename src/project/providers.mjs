@@ -11,6 +11,7 @@ const stageSchema = object({
 });
 export const projectPlanSchema = object({ summary: string, stages: { type: 'array', minItems: 1, maxItems: 10, items: stageSchema } });
 const reviewSchema = object({ decision: { type: 'string', enum: ['accept', 'revise', 'blocked'] }, feedback: string, unverified: strings });
+const guidanceSchema = object({ guidance: string });
 export const replySchema = object({
   type: { type: 'string', enum: ['read_files', 'submit_changes', 'needs_approval'] },
   paths: strings, summary: string,
@@ -24,12 +25,16 @@ const boundary = 'Use only supplied data. Do not use tools, inspect files, or ru
 // Codex is used only for independent review. Planning and implementation are DeepSeek's job:
 // an extra Codex call per stage is what exhausted the owner's usage window.
 export class ProjectFrontier extends CodexCliAdapter {
+  usageKind = 'codex';
   async planProject(input, signal) {
     return this.call(`${boundary}\nPlan a substantial coding job in 1–10 ordered stages. Every stage must fit the supplied write scopes and reference approved check IDs. Do not invent commands or dependencies. Use kind=verification for the final stage and include every approved check there. Include concrete behavioral acceptance criteria and keep stage deliverables small enough for one local worker. Return JSON.\n${JSON.stringify(input)}`, projectPlanSchema, signal);
   }
   async reviewCode(input, signal) {
     const images = input.evidence.checks.flatMap(check => check.screenshots ?? []);
     return this.call(`${boundary}\nReview this stage's actual diff, new files, checks, and supplied screenshots against its acceptance criteria and the overall brief. For a final verification stage, evidence.acceptedDiffs contains earlier checkpoint diffs; review those as well as the current stage diff. The assignment is not complete merely because tests passed. Accept only when required behavior is demonstrated. A failed check always requires revise or blocked. Give focused correction feedback; blocked means work cannot continue within the approved scope. List any unverified claims.\n${JSON.stringify(input)}`, reviewSchema, signal, images);
+  }
+  async guideStage(input, signal) {
+    return this.call(`${boundary}\nGive one concise, focused implementation hint for this approved stage before DeepSeek starts. Identify likely pitfalls from the brief, plan, and earlier stage feedback. Do not write an assignment, propose a new plan, request tools, or expand permissions. DeepSeek owns the implementation. Return JSON.\n${JSON.stringify(input)}`, guidanceSchema, signal);
   }
 }
 

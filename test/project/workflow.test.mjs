@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, appendFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createProject, approveProject, reviseProject, prepareResume, stopProject } from '../../src/project/service.mjs';
+import { createProject, approveProject, reviseProject, prepareResume, stopProject, guideStage } from '../../src/project/service.mjs';
 import { Journal } from '../../src/project/journal.mjs';
 import { runProject } from '../../src/project/runner.mjs';
 import { Workspace } from '../../src/project/workspace.mjs';
@@ -125,6 +125,73 @@ test('extra DeepSeek attempts can be granted without a new plan or Codex call', 
   assert.equal(second.limits.attempts, 7);
   assert.equal(second.stages[0].localAttempts, 6);
   assert.equal(journal.events.filter(e => e.type === 'project.approved').length, 1);
+});
+
+test('repeated attempt extensions add to the prior limit', async t => {
+  const { journal } = await setup(t);
+  await prepareResume(journal, undefined, 2);
+  await prepareResume(journal, undefined, 3);
+  assert.equal(journal.last('attempts.extended').attempts, 10);
+});
+
+test('opt-in Codex planning makes one call even when the plan is invalid', async t => {
+  const { root, repo } = await setup(t);
+  let calls = 0;
+  let failed;
+  try {
+    await createProject({ root: path.join(root, 'codex-plan'), repo, permissions, brief: 'Plan once',
+      planner: { usageKind: 'codex', identity: 'codex-cli/test', planProject: async () => { calls++; return { summary: 'bad', stages: [] }; } } });
+  } catch (error) { failed = error; }
+  assert.ok(failed?.jobId);
+  const journal = await new Journal(path.join(root, 'codex-plan'), failed.jobId).load();
+  assert.equal(calls, 1);
+  assert.equal(journal.events.filter(event => event.type === 'project.plan.requested').length, 1);
+  assert.equal(journal.events.filter(event => event.type === 'frontier.call' && event.data.kind === 'plan').length, 1);
+});
+
+test('explicit pre-stage guidance is used once without becoming a new assignment', async t => {
+  const frontier = new FakeProjectFrontier();
+  const { journal, run } = await setup(t, frontier);
+  await guideStage({ journal, stageId: 'implementation', frontier });
+  await assert.rejects(guideStage({ journal, stageId: 'implementation', frontier }), /one guidance call/);
+  let sawGuidance = false;
+  const local = { reply: async input => {
+    if (input.stage.id === 'implementation') sawGuidance = input.assignment.instructions.includes('FAKE guidance');
+    return new FakeProjectLocal().reply(input);
+  } };
+  const result = await run({ local });
+  assert.equal(result.status, 'accepted');
+  assert.equal(sawGuidance, true);
+  assert.equal(result.codexCalls, 3);
+  assert.equal(result.stages[0].codexReviews, 1);
+});
+
+test('transient Codex failures consume the two-call review budget', async t => {
+  const frontier = new FakeProjectFrontier();
+  let calls = 0;
+  frontier.reviewCode = async () => { calls++; throw new Error('ECONNRESET'); };
+  const { run } = await setup(t, frontier);
+  let clock = Date.now();
+  const result = await run({ now: () => clock, sleep: async ms => { clock += ms; } });
+  assert.equal(result.status, 'needs_review');
+  assert.equal(calls, 2);
+  assert.equal(result.stages[0].codexReviews, 2);
+  assert.equal(result.stages[0].localAttempts, 1);
+});
+
+test('a failed review call followed by revise stops before another DeepSeek attempt', async t => {
+  const frontier = new FakeProjectFrontier();
+  let calls = 0;
+  frontier.reviewCode = async () => {
+    if (++calls === 1) throw new Error('ECONNRESET');
+    return { decision: 'revise', feedback: 'Repair this stage', unverified: [] };
+  };
+  const { run } = await setup(t, frontier);
+  let clock = Date.now();
+  const result = await run({ now: () => clock, sleep: async ms => { clock += ms; } });
+  assert.equal(result.status, 'needs_review');
+  assert.equal(result.stages[0].localAttempts, 1);
+  assert.equal(result.stages[0].codexReviews, 2);
 });
 
 test('resume reuses saved answer and skips accepted stages after review connection loss', async t => {

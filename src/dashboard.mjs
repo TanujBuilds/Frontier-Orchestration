@@ -30,7 +30,7 @@ export function summarizeJob(id, events) {
         const accepted = events.some(event => event.type === 'stage.accepted' && event.data.stageId === stage.id);
         return { ...stage, status: accepted ? 'accepted' : attempts.length ? 'in_progress' : 'pending',
           localAttempts: attempts.filter(event => event.data.role === 'local').length,
-          codexReviews: events.filter(event => event.type === 'frontier.call' && event.data.stageId === stage.id).length };
+          codexReviews: events.filter(event => event.type === 'frontier.call' && event.data.kind === 'review' && event.data.stageId === stage.id).length };
       }),
     };
   }
@@ -76,6 +76,8 @@ export function describeEvent(event, mode) {
     return null;
   }
   switch (type) {
+    case 'frontier.call': return `Codex ${data.kind} call${data.stageId ? ` for ${data.stageId}` : ''}: ${data.decision ?? 'unknown'} (${data.durationMs ?? 0} ms)`;
+    case 'stage.guidance': return `Codex guidance recorded for ${data.stageId}`;
     case 'job.created': return 'Brief recorded';
     case 'frontier.plan.requested': return 'Mac → Codex: plan requested';
     case 'plan.proposed': return 'Codex → Mac: focused plan proposed';
@@ -96,7 +98,7 @@ export function describeEvent(event, mode) {
 export function eventKind(event) {
   const key = event.data?.key ?? '';
   if (event.type === 'local.result' || (event.type === 'operation.completed' && /\/response-\d+$/.test(key))) return 'deepseek';
-  if (event.type.startsWith('frontier.') || event.type === 'plan.proposed' ||
+  if (event.type.startsWith('frontier.') || event.type === 'stage.guidance' || event.type === 'plan.proposed' ||
       (event.type === 'operation.completed' && /\/(assignment|review)$/.test(key))) return 'codex';
   if ((event.type === 'operation.completed' || event.type === 'operation.started') && key.endsWith('/checks')) return 'check';
   if (event.type === 'sandbox.verified') return 'check';

@@ -9,6 +9,7 @@ export class FakeProjectFrontier {
     ] };
   }
   async reviewCode({ evidence }) { return { decision: evidence.checks.every(check => check.passed) ? 'accept' : 'revise', feedback: 'Fake review; no real model judgment', unverified: ['All semantic assessment is simulated'] }; }
+  async guideStage() { return { guidance: 'FAKE guidance: follow the approved stage and its checks.' }; }
 }
 export class FakeProjectLocal {
   identity = 'FAKE-local';

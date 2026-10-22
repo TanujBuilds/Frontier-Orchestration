@@ -5,7 +5,7 @@ import path from 'node:path';
 import { Journal } from './project/journal.mjs';
 import { ProjectFrontier, ProjectLocal } from './project/providers.mjs';
 import { FakeProjectFrontier, FakeProjectLocal } from './project/fake.mjs';
-import { createProject, reviseProject, approveProject, prepareResume, projectStatus, stopProject, templatePlanner } from './project/service.mjs';
+import { createProject, reviseProject, approveProject, prepareResume, projectStatus, stopProject, guideStage, templatePlanner } from './project/service.mjs';
 import { runProject } from './project/runner.mjs';
 import { digest } from './project/contracts.mjs';
 import { formatTimelineEvent, watchJournal } from './project/timeline.mjs';
@@ -32,7 +32,8 @@ function display(result, json) {
   if (result.manifest) console.log(JSON.stringify(result.manifest, null, 2));
   if (result.planHash) console.log(`Approval hash: ${result.planHash}`);
   if (result.stages) console.table(result.stages.map(({ id, status, localAttempts, codexReviews }) => ({ stage: id, status, localAttempts, codexReviews })));
-  if (result.codexCalls !== undefined) console.log(`Codex review calls: ${result.codexCalls}`);
+  if (result.codexCalls !== undefined) console.log(`Codex calls: ${result.codexCalls}`);
+  if (result.guidance) console.log(`Stage guidance: ${result.guidance}`);
   if (result.worktree) console.log(`Worktree: ${result.worktree}`);
   if (result.report) console.log(`Report: ${result.report}`);
   if (result.pid) console.log(`Runner PID: ${result.pid}`);
@@ -102,6 +103,8 @@ async function main() {
       return;
     }
     if (action === 'approve') result = await approveProject(journal, options.hash);
+    else if (action === 'guide') result = await guideStage({ journal, stageId: options.stage,
+      frontier: journal.last('project.created').mode === 'fake' ? new FakeProjectFrontier() : new ProjectFrontier({ model: process.env.FRONTIER_MODEL_ID }) });
     else if (action === 'status') result = await projectStatus(journal);
     else if (action === 'stop') result = await stopProject(journal);
     else if (action === 'run' || action === 'resume') {
@@ -126,7 +129,7 @@ async function main() {
           });
         } finally { process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', interrupt); }
       }
-    } else throw new Error('Use plan, approve, run, watch, status, stop, or resume');
+    } else throw new Error('Use plan, approve, guide, run, watch, status, stop, or resume');
   }
   display(result, options.json);
   if (['failed', 'paused', 'needs_review', 'blocked', 'interrupted'].includes(result.status)) process.exitCode = result.status === 'failed' ? 1 : 2;

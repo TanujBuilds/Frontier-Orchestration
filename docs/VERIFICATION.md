@@ -1,5 +1,11 @@
 # Verification record
 
+## 2026-10-22 — Review audit and bounded guidance
+
+- The owner clarified that Codex may give optional pre-stage guidance when explicitly requested; automatic coding-job calls remain check-gated reviews. The `guide` command permits one Codex call before the next unfinished stage's first attempt and adds the hint to DeepSeek's coordinator-composed assignment.
+- Review found that repeated `--extend-attempts` used the wrong journal shape and could produce an invalid limit. It now adds to the prior extension. An opt-in Codex plan could retry up to three times; it is now capped at one call. Planning and guidance calls appear in `frontier.call` accounting. Failed review calls also count toward the two-call stage budget, preventing silent retries from consuming extra Codex usage.
+- The full automated suite passed 50 tests, and a disposable fake CLI plan → approve → guide → status sequence recorded one guidance call and zero stage reviews. This is offline verification; no real DeepSeek or Codex model call was made in this audit. A live review-only job and measured usage savings remain unverified.
+
 ## 2026-10-21 — Review-only frontier refactor
 
 - The owner reversed the model split for coding jobs: DeepSeek plans and implements; Codex is called only to review a stage whose approved checks already pass, at most twice per stage. Codex no longer plans, writes per-stage assignments, reviews failing attempts, or rescues exhausted stages. The motivation was cost: a real dashboard job consumed nearly the entire five-hour Codex window while several of those calls were redundant.

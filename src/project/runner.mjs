@@ -30,7 +30,7 @@ export function summarize(journal) {
   const stages = manifest.plan.stages.map(stage => {
     const accepted = journal.events.findLast(event => event.type === 'stage.accepted' && event.data.stageId === stage.id)?.data;
     const attempts = journal.events.filter(event => event.type === 'attempt.started' && event.data.stageId === stage.id);
-    const reviews = journal.events.filter(event => event.type === 'frontier.call' && event.data.stageId === stage.id);
+    const reviews = journal.events.filter(event => event.type === 'frontier.call' && event.data.kind === 'review' && event.data.stageId === stage.id);
     const latest = journal.events.findLast(event => event.type === 'attempt.finished' && event.data.stageId === stage.id)?.data;
     return { id: stage.id, objective: stage.objective, status: accepted ? 'accepted' : attempts.length ? 'unfinished' : 'pending',
       localAttempts: attempts.length, codexReviews: reviews.length,
@@ -58,10 +58,10 @@ export async function writeReport(journal) {
     `Branch: ${report.branch}`, `Worktree: ${report.worktree}`, `Events: ${report.eventFile}`, '',
     `Deadline: ${report.deadline ? new Date(report.deadline).toISOString() : 'not started'}`,
     `Reported local tokens: ${report.reportedLocalTokens} (only when the provider supplies usage; Codex CLI usage is not estimated)`,
-    `Codex review calls: ${report.codexCalls} in ${report.codexCallMs} ms`, '',
+    `Codex calls (planning, guidance, and review): ${report.codexCalls} in ${report.codexCallMs} ms`, '',
     '| Stage | Status | DeepSeek attempts | Codex reviews | Checkpoint |',
     '| --- | --- | ---: | ---: | --- |',
-    ...report.stages.map(stage => `| ${stage.id} | ${stage.status} | ${stage.localAttempts} | ${stage.codexReviews} | ${stage.checkpoint ?? '—'}`),
+    ...report.stages.map(stage => `| ${stage.id} | ${stage.status} | ${stage.localAttempts} | ${stage.codexReviews} | ${stage.checkpoint ?? '—'} |`),
     '', '## Latest review limits',
     ...(report.stages.findLast(stage => stage.lastFeedback)?.unverified.length
       ? report.stages.findLast(stage => stage.lastFeedback).unverified.map(item => `- ${item}`)
@@ -147,8 +147,7 @@ export async function runProject(journal, {
       if (journal.events.some(event => event.type === 'stage.accepted' && event.data.stageId === stage.id)) continue;
       guard();
       await workspace.assertSnapshot();
-      const assignment = stageAssignment({ stage, plan: manifest.plan,
-        acceptedStages: summarize(journal).stages.filter(item => item.status === 'accepted') });
+      const guidance = journal.events.findLast(event => event.type === 'stage.guidance' && event.data.stageId === stage.id)?.data.guidance;
 
       let accepted = false;
       for (let number = 1; number <= attemptsLimit; number++) {
@@ -165,7 +164,7 @@ export async function runProject(journal, {
         const failures = journal.events.filter(event => event.type === 'attempt.finished' && event.data.stageId === stage.id).map(event => event.data);
         let reply, checkResults = [], review = null, reviewRound = 0;
         const assignmentWithHistory = stageAssignment({ stage, plan: manifest.plan,
-          acceptedStages: summarize(journal).stages.filter(item => item.status === 'accepted'), priorAttempts: failures });
+          acceptedStages: summarize(journal).stages.filter(item => item.status === 'accepted'), priorAttempts: failures, guidance });
         try {
           const context = [];
           for (let exchange = 0; exchange <= manifest.limits.contextRequests; exchange++) {
@@ -199,9 +198,13 @@ export async function runProject(journal, {
             // Deterministic verdict first: a failing check never spends a Codex call.
             feedback = `Required checks failed: ${checkResults.filter(check => !check.passed).map(check => check.id).join(', ')}. Read the check output and repair it in the next attempt.`;
           } else {
-            const done = journal.events.filter(event => event.type === 'attempt.finished' && event.data.stageId === stage.id && event.data.review).length;
-            if (done >= reviewRounds) throw new Pause(`Checks pass but Codex review budget of ${reviewRounds} rounds is spent; adjust the plan or extend attempts`, 'needs_review');
-            reviewRound = done + 1;
+            const reviewKey = `${operationKey}/review`;
+            const priorCalls = journal.events.filter(event => event.type === 'frontier.call' && event.data.kind === 'review' && event.data.stageId === stage.id);
+            const legacyRounds = journal.events.filter(event => event.type === 'attempt.finished' && event.data.stageId === stage.id && event.data.review).length;
+            if (!journal.completed(reviewKey) && Math.max(priorCalls.length, legacyRounds) >= reviewRounds) {
+              throw new Pause(`Codex review budget of ${reviewRounds} calls is spent; inspect the stage before continuing`, 'needs_review');
+            }
+            reviewRound = priorCalls.find(event => event.data.key === reviewKey)?.data.round ?? Math.max(priorCalls.length, legacyRounds) + 1;
             const raw = await workspace.evidence();
             const compact = compactFiles(raw.newFiles, REVIEW_CONTEXT_BYTES);
             const diff = raw.diff.length > DIFF_LIMIT ? raw.diff.slice(0, DIFF_LIMIT) + '\n[diff truncated; inspect the worktree directly]' : raw.diff;
@@ -212,12 +215,20 @@ export async function runProject(journal, {
             const reviewInput = { brief: manifest.brief, approvedPlan: manifest.plan, stage, assignment: assignmentWithHistory,
               acceptedStages: summarize(journal).stages.filter(item => item.status === 'accepted'),
               workerSummary: reply.summary, evidence };
-            const reviewKey = `${operationKey}/review`;
-            const reviewStarted = now();
-            review = await provider(reviewKey, s => frontier.reviewCode(reviewInput, s), reviewInput);
-            if (!journal.events.some(event => event.type === 'frontier.call' && event.data.key === reviewKey)) {
-              await journal.append('frontier.call', { kind: 'review', key: reviewKey, stageId: stage.id, round: done + 1, durationMs: now() - reviewStarted, decision: review?.decision ?? null });
-            }
+            review = await provider(reviewKey, async s => {
+              const spent = journal.events.filter(event => event.type === 'frontier.call' && event.data.kind === 'review' && event.data.stageId === stage.id).length;
+              if (Math.max(spent, legacyRounds) >= reviewRounds) throw new Pause('Codex review call budget is spent', 'needs_review');
+              const started = now();
+              try {
+                const value = await frontier.reviewCode(reviewInput, s);
+                await journal.append('frontier.call', { kind: 'review', key: reviewKey, stageId: stage.id, round: Math.max(spent, legacyRounds) + 1, durationMs: now() - started, decision: value?.decision ?? 'returned' });
+                return value;
+              } catch (error) {
+                await journal.append('frontier.call', { kind: 'review', key: reviewKey, stageId: stage.id, round: Math.max(spent, legacyRounds) + 1, durationMs: now() - started, decision: 'error' });
+                throw error;
+              }
+            }, reviewInput);
+            reviewRound = journal.events.findLast(event => event.type === 'frontier.call' && event.data.kind === 'review' && event.data.key === reviewKey)?.data.round ?? reviewRound;
             if (!['accept', 'revise', 'blocked'].includes(review?.decision) || typeof review.feedback !== 'string' || !Array.isArray(review.unverified)) throw new Pause('Invalid frontier review', 'provider');
             if (review.decision === 'blocked') throw new Pause(review.feedback, 'blocked');
             feedback = review.feedback;
