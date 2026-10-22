@@ -17,6 +17,7 @@ test('coding adapter preserves exact HTTP handoff, model, usage and malformed an
   assert.deepEqual(JSON.parse(JSON.parse(calls[1].body).messages[1].content), input);
   assert.equal(JSON.parse(calls[1].body).model, 'stub-model');
   assert.equal(JSON.parse(calls[1].body).max_tokens, 12_000);
+  assert.deepEqual(JSON.parse(calls[1].body).chat_template_kwargs, { enable_thinking: false });
   assert.match(JSON.parse(calls[1].body).messages[0].content, /at most two files/);
 });
 

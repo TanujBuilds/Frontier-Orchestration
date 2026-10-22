@@ -45,6 +45,7 @@ export class ProjectLocal extends DeepSeekHttpAdapter {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         model, stream: false, max_tokens: 12_000,
+        chat_template_kwargs: { enable_thinking: false },
         messages: [
           { role: 'system', content: `${boundary}\nImplement only the current stage. Return a JSON object matching this protocol: ${JSON.stringify(replySchema)}. To read permitted source files, use read_files with paths and empty edits. To finish an attempt, use submit_changes with complete UTF-8 file contents and the supplied baseHash (null for a new file), empty paths, and a summary. Keep each edit submission focused: at most two files and about 24 KiB of total file content. If the stage needs more edits, submit the most useful partial change now; later attempts continue from the edited workspace and can finish the stage. An empty edit batch is valid when no source change is needed. Deletions use content=null. You cannot execute commands; the coordinator runs approved checks and sends check screenshots and accepted checkpoint diffs directly to Codex for review. Do not request these generated artifacts. Use needs_approval only if source scope or dependencies must expand.` },
           { role: 'user', content: JSON.stringify(input) },
