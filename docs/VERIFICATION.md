@@ -1,5 +1,12 @@
 # Verification record
 
+## 2026-10-21 — Minimal dashboard live attempts
+
+- The owner selected a monochrome “Now first” view: show the current recorded actor and action before stage detail and handoff history. Two live dashboard jobs used real signed-in Codex planning/review and the existing DeepSeek service. No Spark runtime setting changed.
+- The initial two-stage job received several structured DeepSeek edits, but its protected browser check still failed on reconnect visibility after five DeepSeek attempts and one Codex rescue. It ended `needs_review`; no stage checkpoint was accepted. An unbounded reply had timed out, and a capped retry spent its entire 12,000-token output budget on reasoning without an edit. A live request using the model's documented per-request `enable_thinking: false` flag returned short JSON with zero reasoning tokens. The Mac adapter now uses that flag and an output cap for structured coding replies.
+- A narrower four-stage retry accepted its event/API stage after two DeepSeek attempts, both required checks, and separate Codex review. The browser behavior stage then passed its protected fixture, but Codex review found text-handoff and historical-event precedence defects. Five DeepSeek attempts and one Codex rescue did not resolve them, so the job stopped at `needs_review`. Its activity-page edits remain available for inspection but were not checkpointed; styling and final verification did not run.
+- A further retry is prepared from the **accepted event/API checkpoint only**, with a protected browser lifecycle check for text handoffs, approval/terminal states, and superseded operations. It awaits its own exact plan approval. The failed worktrees remain separate. None of these dashboard attempts proves the redesigned UI is complete or ready to merge.
+
 ## 2026-10-21 — Live API probe, handoff attempt, and browser timeline
 
 - From the Mac, the head's Tailscale API returned HTTP 200 from `/v1/models` and advertised one model. A direct `/v1/chat/completions` request returned the requested short text, HTTP 200, and a normal completion shape. The local SSH forward was closed and the saved LAN route did not answer at that time.
