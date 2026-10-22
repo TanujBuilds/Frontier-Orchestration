@@ -5,6 +5,7 @@ import { chromium } from 'playwright';
 import { summarizeJob, describeEvent, eventKind } from '../src/dashboard.mjs';
 
 const id = '11111111-1111-4111-8111-111111111111';
+const visual = process.argv[2] !== 'behavior';
 const now = Date.now();
 const at = offset => new Date(now + offset).toISOString();
 const started = at(-142_000);
@@ -95,11 +96,13 @@ try {
   await page.waitForTimeout(1200);
   assert.notEqual(await activity.innerText(), before, 'Elapsed activity time must update without a new log event');
   assert.ok(await page.locator('details').count(), 'Full saved handoffs must remain inspectable');
-  assert.equal(await overflow(), false, 'Desktop dashboard must not overflow horizontally');
-  await page.screenshot({ path: '.overnight-output/dashboard-desktop.png', fullPage: true });
-  await page.setViewportSize({ width: 390, height: 844 });
-  assert.equal(await overflow(), false, 'Mobile dashboard must not overflow horizontally');
-  await page.screenshot({ path: '.overnight-output/dashboard-mobile.png', fullPage: true });
+  if (visual) {
+    assert.equal(await overflow(), false, 'Desktop dashboard must not overflow horizontally');
+    await page.screenshot({ path: '.overnight-output/dashboard-desktop.png', fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.equal(await overflow(), false, 'Mobile dashboard must not overflow horizontally');
+    await page.screenshot({ path: '.overnight-output/dashboard-mobile.png', fullPage: true });
+  }
 
   await load('waiting', /connection|reconnect/i);
   assert.match(await activity.innerText(), /connection|reconnect/i, 'Connection wait must be distinct from model work');
