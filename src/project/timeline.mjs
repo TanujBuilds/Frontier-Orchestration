@@ -24,6 +24,8 @@ export function formatTimelineEvent(event, { mode } = {}) {
   if (type === 'project.approved') return `${prefix}  APPROVED plan v${data.planVersion}`;
   if (type === 'run.started') return `${prefix}  RUN started`;
   if (type === 'attempt.started') return `${prefix}  ${data.stageId}  ${data.role === 'rescue' ? 'Codex rescue' : 'DeepSeek attempt'} ${data.number}`;
+  if (type === 'frontier.call') return `${prefix}  CODEX CALL ${data.kind} [${data.stageId}] round ${data.round}: ${data.decision ?? 'pending'} in ${data.durationMs} ms`;
+  if (type === 'attempts.extended') return `${prefix}  LIMITS extended: ${data.attempts} DeepSeek attempts per stage`;
   if (type === 'provider.waiting') return `${prefix}  WAIT ${data.key}: ${short(data.reason)}; retry in ${Math.ceil(data.waitMs / 1000)}s`;
   if (type === 'edits.intent') return `${prefix}  EDIT proposed: ${data.changes?.map(change => `${change.content === null ? 'delete' : 'write'} ${change.path}`).join(', ') || 'none'}`;
   if (type === 'edits.applied') return `${prefix}  EDIT applied: ${data.key}`;
@@ -34,9 +36,11 @@ export function formatTimelineEvent(event, { mode } = {}) {
     const kind = operation(data.key);
     if (kind === 'response') {
       const input = data.input ?? {};
-      return `${prefix}  Codex → ${data.key.includes('/rescue-') ? 'Codex rescue' : 'DeepSeek'} [${stageOf(data.key)}]: ${short(input.assignment?.instructions)}${input.priorAttempts?.length ? ` | earlier feedback: ${short(input.priorAttempts.at(-1)?.feedback, 120)}` : ''}`;
+      return `${prefix}  Coordinator → ${data.key.includes('/rescue-') ? 'Codex rescue (legacy)' : 'DeepSeek'} [${stageOf(data.key)}]: ${short(input.assignment?.instructions)}${input.priorAttempts?.length ? ` | earlier feedback: ${short(input.priorAttempts.at(-1)?.feedback, 120)}` : ''}`;
     }
-    if (kind === 'review') return `${prefix}  Evidence → Codex review [${stageOf(data.key)}]: ${short(data.input?.workerSummary)} | ${data.input?.evidence?.checks?.length ?? 0} checks`;
+    if (kind === 'review') return `${prefix}  Checks passed → Codex review [${stageOf(data.key)}]: ${short(data.input?.workerSummary)} | ${data.input?.evidence?.checks?.length ?? 0} checks`;
+    if (kind === 'checks') return `${prefix}  Mac running approved checks [${stageOf(data.key)}]`;
+    if (kind === 'checkpoint') return `${prefix}  Mac saving checkpoint [${stageOf(data.key)}]`;
     if (kind === 'assignment') return `${prefix}  Codex preparing assignment [${stageOf(data.key)}]`;
     return null;
   }

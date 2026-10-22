@@ -11,8 +11,8 @@ Success means a useful result with less manual coordination. A large amount of l
 ## Current role split
 
 - **User:** states the goal and accepts the first plan for the initial workflow.
-- **Frontier model:** plans, delegates bounded work, reviews evidence, and requests focused corrections when needed. The first personal integration is a signed-in Codex CLI on the user's Mac.
-- **Local model:** handles substantial, well-scoped work. The first integration calls an already-running DeepSeek service through its OpenAI-compatible API.
+- **Local model:** turns the brief into an ordered plan and does substantial, well-scoped implementation work. The first integration calls an already-running DeepSeek service through its OpenAI-compatible API.
+- **Frontier model:** independent reviewer only. It judges finished evidence against the approved plan and may request focused corrections, but it does not plan, write assignments, or edit code. The first personal integration is a signed-in Codex CLI on the user's Mac, which is a scarce usage window.
 - **Coordinator:** owns the task record, accepted plan/version, assignments, results, attempt limits, permissions, and event log. Model text is a proposal or result; it does not authorize a file write or shell command.
 
 The current DeepSeek deployment uses two DGX Spark machines to run **one distributed model service**. The head serves one API and the second machine participates in inference. They are not two independently addressable agents in the initial product. Other hardware and local model services should be connectable later through the adapter boundary.
@@ -20,19 +20,22 @@ The current DeepSeek deployment uses two DGX Spark machines to run **one distrib
 ```mermaid
 flowchart LR
   User --> Coordinator
-  Coordinator -->|plan and review| Frontier[Frontier adapter]
-  Coordinator -->|bounded assignment| Local[Local model adapter]
+  Coordinator -->|brief and plan request| Local[Local model adapter]
+  Local -->|ordered plan| Coordinator
+  Coordinator -->|bounded stage and failing checks| Local
   Local --> Head[DeepSeek API on head Spark]
   Head <-->|distributed inference| Worker[Worker Spark]
-  Frontier -->|review result| Coordinator
-  Local -->|work result| Coordinator
+  Coordinator -->|diff, checks, screenshots| Frontier[Frontier review adapter]
+  Frontier -->|review decision| Coordinator
 ```
+
+The split exists because frontier usage is the scarce resource. A local model may be slower, but it can plan and iterate indefinitely; every Codex call is a real cost. Codex is spent only where deterministic checks cannot decide: independent review of work that already passes its checks, at most twice per stage.
 
 ## Build sequence
 
 1. **Existing foundation:** a Node.js coordinator and append-only local event log can show the full handoff with fake model responses. This is a workflow demonstration, not live integration.
 2. **First live proof:** from the Mac terminal, give Codex a substantial project-design request. Codex proposes one focused assignment; after the user accepts the plan, DeepSeek answers; Codex reviews the answer and may request one revision. The command displays the answer, review, and final status. See [MVP.md](MVP.md).
-3. **Overnight coding proof:** approve a staged plan inside Codex CLI, then execute sequential DeepSeek coding attempts in an isolated Mac Git worktree. Run protected checks and review actual diffs/screenshots; checkpoint accepted stages. Five local attempts precede a last-resort Codex rescue. See [OVERNIGHT.md](OVERNIGHT.md).
+3. **Overnight coding proof:** approve a DeepSeek-drafted (or template) staged plan, then execute sequential DeepSeek coding attempts in an isolated Mac Git worktree. Run protected checks; Codex reviews only stages whose checks pass, and accepted stages are checkpointed. Five local attempts and two review rounds bound each stage; a stopped stage resumes with more DeepSeek attempts rather than a Codex repair. See [OVERNIGHT.md](OVERNIGHT.md).
 4. **Browser view:** a read-only local timeline now shows saved job history, handoffs, checks, and screenshots. Browser controls and broader interface work follow the live model loop.
 
 The current project does not need model installation, Spark runtime management, parallel agents, automatic model selection, team accounts, billing, or long-term memory across unrelated projects.
@@ -45,8 +48,8 @@ The Spark deployment and OpenCode tuning belong to a separate project. This repo
 
 ## Decision history
 
-The original October 2026 “Local AI Orchestrator” brief established the coordination problem and explored several possible model roles, including local-first planning. Those were proposals, not final requirements. Subsequent discussion chose **frontier-led planning and review**, then selected the terminal-based project-design handoff as the first live milestone. An earlier coding-task demo remains the next milestone. When sources differ, use the most recent explicit decision recorded here and in [MVP.md](MVP.md).
+The original October 2026 “Local AI Orchestrator” brief established the coordination problem and explored several possible model roles, including local-first planning. Those were proposals, not final requirements. Subsequent discussion chose frontier-led planning and review, then the terminal-based project-design handoff as the first live milestone. On 2026-10-21 the owner reversed the planning role: a real dashboard job consumed nearly the entire Codex usage window while Codex planned, wrote per-stage assignments, reviewed every attempt and rescued exhausted stages. **Frontier usage is now restricted to independent review and verification of finished work**; DeepSeek plans and implements. When sources differ, use the most recent explicit decision recorded here and in [MVP.md](MVP.md).
 
-## Overnight workflow decision (2026-10-20)
+## Overnight workflow decision (2026-10-21)
 
-The owner approved the scoped coding milestone: 1–10 ordered stages, five DeepSeek attempts per stage, at most one Codex rescue per exhausted stage and two per job, eight hours by default, and a thirty-minute provider reconnect window. The Mac owns the worktree and check execution. Approvals bind exact plan versions and permissions. Dependencies are prepared beforehand; expansion pauses for a newly approved plan. A disposable React/TypeScript task board is the first pilot. Fake/stub checks can proceed while the Sparks are unavailable; the release gate still requires real Codex/DeepSeek multi-stage execution.
+The owner approved the scoped coding milestone with a review-only frontier: 1–10 ordered stages drafted by DeepSeek (or a deterministic template), five DeepSeek attempts per stage, at most two Codex review rounds per stage, no Codex planning by default, and no Codex code edits at any point. Eight hours by default and a thirty-minute provider reconnect window remain. The Mac owns the worktree and check execution. Approvals bind exact plan versions and permissions. Dependencies are prepared beforehand; expansion pauses for a newly approved plan. A disposable React/TypeScript task board is the first pilot. Fake/stub checks can proceed while the Sparks are unavailable; the release gate still requires real DeepSeek multi-stage execution with real Codex reviews.

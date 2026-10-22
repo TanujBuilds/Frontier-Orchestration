@@ -32,6 +32,6 @@ test('timeline labels fake work and displays persisted handoff and review', () =
   const reviewed = formatTimelineEvent(event(6, 'operation.completed', {
     key: 'v1/implementation/local-1/review', value: { decision: 'revise', feedback: 'Button does not click' },
   }));
-  assert.match(sent, /\[FAKE\].*Codex → DeepSeek.*Add a button/);
+  assert.match(sent, /\[FAKE\].*Coordinator → DeepSeek.*Add a button/);
   assert.match(reviewed, /Codex review.*revise.*Button does not click/);
 });

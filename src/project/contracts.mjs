@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 export const DEFAULT_LIMITS = Object.freeze({
-  hours: 8, attempts: 5, rescues: 2, contextRequests: 10, reconnectMs: 30 * 60_000,
+  hours: 8, attempts: 5, reviewRounds: 2, contextRequests: 10, reconnectMs: 30 * 60_000,
 });
 export class Pause extends Error {
   constructor(message, code = 'needs_attention') { super(message); this.code = code; }
@@ -89,6 +89,37 @@ export function validatePlan(plan, permissions) {
   if (permissions.checks.some(check => !finalChecks.includes(check.id))) throw new Error('Final stage must run every approved check');
   return plan;
 }
+// The approved stage already carries objective, deliverable, scope, acceptance and checks.
+// Composing the assignment here keeps Codex out of the per-stage prompt-writing path.
+export function stageAssignment({ stage, plan, acceptedStages = [], priorAttempts = [] }) {
+  const lines = [
+    `Stage ${stage.id} (${stage.kind}).`,
+    `Objective: ${stage.objective}`,
+    `Deliverable: ${stage.deliverable}`,
+    'Acceptance criteria:',
+    ...stage.acceptance.map(item => `- ${item}`),
+    `Editable paths: ${stage.writePaths.join(', ')}`,
+    `Approved checks: ${stage.checks.join(', ')}`,
+  ];
+  if (acceptedStages.length) {
+    lines.push('Accepted earlier stages:', ...acceptedStages.map(item => `- ${item.id}: ${item.objective}`));
+  }
+  if (priorAttempts.length) {
+    lines.push('Earlier attempts on this stage (most recent last):');
+    for (const attempt of priorAttempts.slice(-5)) {
+      const failed = (attempt.checks ?? []).filter(check => !check.passed).map(check => check.id);
+      lines.push(`- attempt ${attempt.number}: ${attempt.accepted ? 'accepted' : 'not accepted'}`,
+        ...(failed.length ? [`  failing checks: ${failed.join(', ')}`] : []),
+        `  feedback: ${attempt.feedback ?? 'none recorded'}`);
+    }
+  }
+  if (stage.kind === 'verification') {
+    lines.push('Final verification stage: read the accepted work, submit an empty edit batch when it is already correct, and leave only repairs that a failing check justifies.');
+  }
+  lines.push('Plan summary:', plan.summary);
+  return { instructions: lines.join('\n'), needsApproval: false };
+}
+
 export function validateReply(reply) {
   if (reply?.type === 'needs_approval') throw new Pause(reply.summary || 'Worker requests expanded scope', 'scope');
   if (reply?.type === 'read_files' && Array.isArray(reply.paths) && reply.paths.length > 0 && reply.paths.length <= 20 && reply.paths.every(file => typeof file === 'string' && file.trim())) return reply;

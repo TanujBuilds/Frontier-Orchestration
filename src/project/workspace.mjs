@@ -9,7 +9,7 @@ export class Workspace {
   constructor(manifest, journal) {
     this.manifest = manifest; this.journal = journal;
     this.root = path.join(journal.dir, 'worktree');
-    this.branch = `codex/overnight-${journal.id}`;
+    this.branch = `orchestrator/${journal.id}`;
   }
   async initialize() {
     const { repo, baseCommit } = this.manifest;

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ProjectLocal, ProjectFrontier } from '../../src/project/providers.mjs';
+import { templatePlanner } from '../../src/project/service.mjs';
 import { validateReply, AttemptError } from '../../src/project/contracts.mjs';
 
 test('coding adapter preserves exact HTTP handoff, model, usage and malformed answer', async () => {
@@ -35,4 +36,30 @@ test('frontier review gets actual evidence and attaches screenshot artifacts', a
   assert.ok(seen.input.includes(JSON.stringify(input)));
   assert.ok(seen.args.includes('/tmp/desktop.png'));
   assert.ok(seen.args.includes('shell_tool'));
+});
+
+test('DeepSeek plans with the disabled-thinking structured call and no Codex involvement', async () => {
+  const calls = [];
+  const local = new ProjectLocal({ baseUrl: 'http://example.invalid/v1', fetchImpl: async (url, options) => {
+    calls.push({ url: String(url), ...options });
+    const body = String(url).endsWith('/models') ? { data: [{ id: 'stub-model' }] }
+      : { model: 'stub-model', usage: { total_tokens: 25 }, choices: [{ message: { content: JSON.stringify({
+        summary: 'Plan', stages: [{ id: 'a', kind: 'implementation', objective: 'o', deliverable: 'd', writePaths: ['src/'], acceptance: ['x'], checks: ['ui'] }],
+      }) }, finish_reason: 'stop' }] };
+    return { ok: true, json: async () => body };
+  } });
+  const result = await local.planProject({ brief: 'build a page', permissions: { writePaths: ['src/'] } });
+  assert.equal(result.protocolError, null);
+  assert.equal(result.plan.stages[0].id, 'a');
+  assert.equal(result.usage.total_tokens, 25);
+  const request = JSON.parse(calls[1].body);
+  assert.equal(request.max_tokens, 6000);
+  assert.deepEqual(request.chat_template_kwargs, { enable_thinking: false });
+  assert.match(request.messages[0].content, /writePaths/);
+});
+
+test('template planner makes no model call', async () => {
+  const plan = await templatePlanner.planProject({ permissions: { writePaths: ['src/'], checks: [{ id: 'ui', argv: ['node', 'x.mjs'] }] } });
+  assert.deepEqual(plan.stages.map(stage => stage.kind), ['implementation', 'verification']);
+  assert.deepEqual(plan.stages[1].checks, ['ui']);
 });

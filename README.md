@@ -1,6 +1,6 @@
 # Frontier Orchestrator
 
-A frontier-led application that lets a frontier model delegate bounded work to a local model, inspect the result, and request focused revisions. The application keeps one task record and plan so the user does not have to move context between models by hand.
+A frontier-reviewed application that lets a local model plan and do bounded work, while a frontier model independently judges the result. The application keeps one task record and plan so the user does not have to move context between models by hand, and it spends scarce frontier usage only on review.
 
 ## First live milestone
 
@@ -10,7 +10,7 @@ For the first personal build, the frontier adapter uses a locally signed-in Code
 
 ## Overnight coding workflow
 
-From Codex CLI in this repository, ask: **“Use overnight-build to build this feature in [project].”** Codex proposes stages for your approval; DeepSeek implements them; the coordinator runs checks; Codex reviews the actual changes. Five local attempts per stage, a bounded Codex rescue, eight-hour deadline, durable resume, and a morning report are included.
+Ask from a Codex CLI or OpenCode session in this repository: **“Use overnight-build to build this feature in [project].”** DeepSeek drafts the stages for your approval and implements them; the coordinator runs the approved checks; Codex is called only to review a stage whose checks already pass. Five DeepSeek attempts and two Codex reviews per stage, an eight-hour deadline, durable resume, extra-attempt recovery, and a morning report are included.
 
 See [the Mac setup and command guide](docs/OVERNIGHT.md) and [dated verification results](docs/VERIFICATION.md). To prepare the disposable React/TypeScript pilot:
 
@@ -75,4 +75,4 @@ MIT. See [LICENSE](LICENSE).
 
 ## Status (2026-10-21)
 
-The signed-in Codex CLI, overnight coordinator, protected Mac worktree, detached runner, skill, terminal timeline, and read-only browser timeline are implemented. On October 21 the real text handoff completed with two DeepSeek answers and two Codex reviews; its final status was `needs_review` after the one-revision limit. The real two-stage coding pilot then finished `accepted`: DeepSeek built and revised a responsive UI shell, protected layout checks passed, Codex reviewed the recorded diffs and screenshots, and both stages were committed in an isolated worktree. This narrow pilot does not cover interactions, persistence, or the full four-stage Night Shift release gate. See [verification details](docs/VERIFICATION.md).
+The signed-in Codex CLI, overnight coordinator, protected Mac worktree, detached runner, skill, terminal timeline, and read-only browser timeline are implemented. Codex is review-only in the coding workflow: DeepSeek plans and implements, checks gate every review call, and no Codex rescue exists. On October 21 the real text handoff completed with two DeepSeek answers and two Codex reviews; its final status was `needs_review` after the one-revision limit. The real two-stage coding pilot then finished `accepted`: DeepSeek built and revised a responsive UI shell, protected layout checks passed, Codex reviewed the recorded diffs and screenshots, and both stages were committed in an isolated worktree. This narrow pilot does not cover interactions, persistence, or the full four-stage Night Shift release gate. See [verification details](docs/VERIFICATION.md).

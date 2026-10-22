@@ -3,7 +3,16 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { readJob } from '../src/dashboard.mjs';
+import { readJob, summarizeJob, describeEvent } from '../src/dashboard.mjs';
+
+test('coding job is visible while the planner is still working', async () => {
+  const events = [{ jobId: 'x', sequence: 1, at: '2026-10-21T00:00:00.000Z', type: 'project.plan.requested',
+    data: { input: { brief: 'Build a dashboard' }, source: 'deepseek-http/unresolved' } }];
+  const job = summarizeJob('11111111-1111-4111-8111-111111111111', events);
+  assert.equal(job.status, 'planning');
+  assert.equal(job.type, 'coding');
+  assert.match(describeEvent(events[0], 'live'), /DeepSeek.*plan requested/);
+});
 
 test('browser timeline reads only complete persisted events', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'frontier-dashboard-'));

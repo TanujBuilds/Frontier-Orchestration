@@ -26,7 +26,7 @@ async function setup(t, frontier = new FakeProjectFrontier()) {
   await git(repo, 'config', 'user.name', 'Workflow Test');
   await git(repo, 'config', 'user.email', 'test@example.invalid');
   await git(repo, 'add', '.'); await git(repo, 'commit', '-qm', 'baseline');
-  const created = await createProject({ root: path.join(root, 'data'), repo, permissions, brief: 'Exercise staged coding', frontier, mode: 'fake' });
+  const created = await createProject({ root: path.join(root, 'data'), repo, permissions, brief: 'Exercise staged coding', planner: frontier, mode: 'fake' });
   const journal = await new Journal(path.join(root, 'data'), created.jobId).load();
   await approveProject(journal, created.planHash);
   const workspace = new Workspace(created.manifest, journal);
@@ -58,33 +58,40 @@ test('stages run in order, commit accepted results, and completed jobs do not re
   assert.equal(journal.events.filter(e => e.type === 'attempt.started').length, count);
 });
 
-test('failed required checks prevent accept and enforce five local attempts plus one rescue', async t => {
+test('failed required checks prevent accept, spend no Codex call, and stop at five local attempts', async t => {
   const frontier = new FakeProjectFrontier();
-  frontier.reviewCode = async () => ({ decision: 'accept', feedback: 'Looks fine', unverified: [] });
+  let reviews = 0;
+  frontier.reviewCode = async () => { reviews++; return { decision: 'accept', feedback: 'Looks fine', unverified: [] }; };
   const { run, journal } = await setup(t, frontier);
   const checks = { ...passing, run: async () => [{ id: 'test', passed: false, code: 1, stdout: '', stderr: 'broken' }] };
   const result = await run({ checks });
   assert.equal(result.status, 'needs_review');
   assert.equal(result.stages[0].localAttempts, 5);
-  assert.equal(result.stages[0].codexRescues, 1);
+  assert.equal(result.stages[0].codexReviews, 0);
+  assert.equal(reviews, 0);
   assert.equal(result.stages[1].localAttempts, 0);
   assert.equal(journal.events.filter(e => e.type === 'stage.accepted').length, 0);
 });
 
-test('Codex rescues only exhausted stages; subsequent stages return to local', async t => {
+test('Codex reviews only after checks pass and stops at two rounds per stage', async t => {
   const frontier = new FakeProjectFrontier();
-  const order = [];
-  const originalRescue = frontier.rescue.bind(frontier);
-  frontier.rescue = async input => { order.push(`rescue:${input.stage.id}`); return originalRescue(input); };
+  frontier.reviewCode = async () => ({ decision: 'revise', feedback: 'Not accepted', unverified: [] });
+  const { run, journal } = await setup(t, frontier);
+  const result = await run();
+  assert.equal(result.status, 'needs_review');
+  assert.equal(result.stages[0].localAttempts, 2);
+  assert.equal(result.stages[0].codexReviews, 2);
+  assert.equal(journal.events.filter(e => e.type === 'frontier.call').length, 2);
+});
+
+test('a blocking review stops the stage without spending a second round', async t => {
+  const frontier = new FakeProjectFrontier();
+  frontier.reviewCode = async () => ({ decision: 'blocked', feedback: 'Cannot continue within scope', unverified: [] });
   const { run } = await setup(t, frontier);
-  const local = { reply: async input => {
-    order.push(`local:${input.stage.id}`);
-    if (input.stage.id === 'implementation') throw new AttemptError('malformed reply');
-    return new FakeProjectLocal().reply(input);
-  } };
-  const result = await run({ local });
-  assert.equal(result.status, 'accepted');
-  assert.deepEqual(order, [...Array(5).fill('local:implementation'), 'rescue:implementation', 'local:verification']);
+  const result = await run();
+  assert.equal(result.status, 'blocked');
+  assert.equal(result.stages[0].localAttempts, 1);
+  assert.equal(result.stages[0].codexReviews, 1);
 });
 
 test('verification artifact requests consume an attempt without expanding scope', async t => {
@@ -101,22 +108,23 @@ test('verification artifact requests consume an attempt without expanding scope'
   const result = await run({ local });
   assert.equal(result.status, 'accepted');
   assert.equal(result.stages[1].localAttempts, 2);
-  assert.equal(result.stages[1].codexRescues, 0);
+  assert.equal(result.stages[1].codexReviews, 1);
 });
 
-test('two rescues per job is an independent hard limit', async t => {
+test('extra DeepSeek attempts can be granted without a new plan or Codex call', async t => {
   const frontier = new FakeProjectFrontier();
-  const original = frontier.planProject.bind(frontier);
-  frontier.planProject = async input => {
-    const plan = await original(input);
-    plan.stages.splice(1, 0, { ...plan.stages[0], id: 'second' });
-    return plan;
-  };
-  const { run } = await setup(t, frontier);
-  const result = await run({ local: { reply: async () => { throw new AttemptError('invalid'); } } });
-  assert.equal(result.status, 'needs_review');
-  assert.deepEqual(result.stages.map(s => s.codexRescues), [1, 1, 0]);
-  assert.deepEqual(result.stages.map(s => s.localAttempts), [5, 5, 5]);
+  const { run, journal } = await setup(t, frontier);
+  const checks = { ...passing, run: async () => [{ id: 'test', passed: false, code: 1, stdout: '', stderr: 'broken' }] };
+  const first = await run({ checks });
+  assert.equal(first.status, 'needs_review');
+  assert.equal(first.stages[0].localAttempts, 5);
+  assert.equal(first.limits.attempts, 5);
+  await prepareResume(journal, undefined, 2);
+  const second = await run();
+  assert.equal(second.status, 'accepted');
+  assert.equal(second.limits.attempts, 7);
+  assert.equal(second.stages[0].localAttempts, 6);
+  assert.equal(journal.events.filter(e => e.type === 'project.approved').length, 1);
 });
 
 test('resume reuses saved answer and skips accepted stages after review connection loss', async t => {
@@ -141,7 +149,7 @@ test('resume reuses saved answer and skips accepted stages after review connecti
   assert.equal(journal.events.filter(e => e.type === 'stage.accepted').length, 2);
 });
 
-test('transient connection failures retry without consuming an additional attempt or rescue', async t => {
+test('transient connection failures retry without consuming an additional attempt or review', async t => {
   const { run } = await setup(t);
   let calls = 0, clock = Date.now();
   const result = await run({ now: () => clock, sleep: async ms => { clock += ms; }, local: {
@@ -149,7 +157,7 @@ test('transient connection failures retry without consuming an additional attemp
   } });
   assert.equal(result.status, 'accepted');
   assert.equal(result.stages[0].localAttempts, 1);
-  assert.equal(result.stages[0].codexRescues, 0);
+  assert.equal(result.stages[0].codexReviews, 1);
 });
 
 test('connection window expires and budget includes waiting across restarts', async t => {
@@ -239,7 +247,7 @@ test('revised plan requires a new approval, preserves accepted stages, and retai
   await run();
   const prior = journal.last('project.created');
   frontier.planProject = async () => ({ ...prior.plan, summary: 'Revised scope description' });
-  const revised = await reviseProject({ journal, brief: prior.brief, permissions, frontier });
+  const revised = await reviseProject({ journal, brief: prior.brief, permissions, planner: frontier });
   assert.equal(revised.manifest.planVersion, 2);
   assert.equal(revised.status, 'awaiting_approval');
   await run();
@@ -267,17 +275,17 @@ test('ten context requests is a hard per-attempt limit', async t => {
   const { run } = await setup(t);
   let calls = 0;
   const result = await run({ local: { reply: async () => { calls++; return { reply: { type: 'read_files', paths: ['src/start.txt'] } }; } } });
-  assert.equal(result.status, 'accepted'); // Each stage is eventually rescued by the fake frontier.
-  assert.equal(calls, 2 * 5 * 11);
+  assert.equal(result.status, 'needs_review'); // Read requests never become an edit, so no stage can pass.
+  assert.equal(calls, 5 * 11);
   assert.equal(result.stages[0].localAttempts, 5);
-  assert.equal(result.stages[0].codexRescues, 1);
+  assert.equal(result.stages[0].codexReviews, 0);
 });
 
 test('planning provider failure preserves the requested handoff and returns its job ID', async t => {
   const { root, repo } = await setup(t);
   let failed;
   try {
-    await createProject({ root: path.join(root, 'data'), repo, brief: 'Fail this probe', permissions, frontier: { planProject: async () => { throw new Error('invalid structured output'); } } });
+    await createProject({ root: path.join(root, 'data'), repo, brief: 'Fail this probe', permissions, planner: { planProject: async () => { throw new Error('invalid structured output'); } } });
   } catch (error) { failed = error; }
   assert.ok(failed.jobId);
   const journal = await new Journal(path.join(root, 'data'), failed.jobId).load();

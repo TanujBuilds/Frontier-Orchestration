@@ -5,7 +5,7 @@ import path from 'node:path';
 import { Journal } from './project/journal.mjs';
 import { ProjectFrontier, ProjectLocal } from './project/providers.mjs';
 import { FakeProjectFrontier, FakeProjectLocal } from './project/fake.mjs';
-import { createProject, reviseProject, approveProject, prepareResume, projectStatus, stopProject } from './project/service.mjs';
+import { createProject, reviseProject, approveProject, prepareResume, projectStatus, stopProject, templatePlanner } from './project/service.mjs';
 import { runProject } from './project/runner.mjs';
 import { digest } from './project/contracts.mjs';
 import { formatTimelineEvent, watchJournal } from './project/timeline.mjs';
@@ -16,7 +16,7 @@ function parse(args) {
   while (args.length) {
     const key = args.shift();
     if (!/^--[\w-]+$/.test(key)) throw new Error(`Invalid option: ${key}`);
-    if (['--json', '--fake', '--background', '--worker', '--once', '--full'].includes(key)) options[key.slice(2)] = true;
+    if (['--json', '--fake', '--background', '--worker', '--once', '--full', '--template'].includes(key)) options[key.slice(2)] = true;
     else {
       const value = args.shift();
       if (!value || value.startsWith('--')) throw new Error(`Missing value for ${key}`);
@@ -31,10 +31,18 @@ function display(result, json) {
   if (result.reason) console.log(result.reason);
   if (result.manifest) console.log(JSON.stringify(result.manifest, null, 2));
   if (result.planHash) console.log(`Approval hash: ${result.planHash}`);
-  if (result.stages) console.table(result.stages.map(({ id, status, localAttempts, codexRescues }) => ({ stage: id, status, localAttempts, codexRescues })));
+  if (result.stages) console.table(result.stages.map(({ id, status, localAttempts, codexReviews }) => ({ stage: id, status, localAttempts, codexReviews })));
+  if (result.codexCalls !== undefined) console.log(`Codex review calls: ${result.codexCalls}`);
   if (result.worktree) console.log(`Worktree: ${result.worktree}`);
   if (result.report) console.log(`Report: ${result.report}`);
   if (result.pid) console.log(`Runner PID: ${result.pid}`);
+}
+function plannerFor({ fake, planner }) {
+  if (fake) return new FakeProjectFrontier();
+  if (planner === 'template') return templatePlanner;
+  if (planner === 'codex') return new ProjectFrontier({ model: process.env.FRONTIER_MODEL_ID });
+  if (planner !== undefined && planner !== 'deepseek') throw new Error('Planner must be deepseek, codex, or template');
+  return new ProjectLocal({ baseUrl: process.env.DEEPSEEK_BASE_URL, model: process.env.DEEPSEEK_MODEL_ID });
 }
 async function background(journal, options) {
   const release = await journal.lock();
@@ -63,11 +71,15 @@ async function main() {
   let result;
   if (action === 'plan') {
     const journal = options.job ? await new Journal(root, options.job).load() : null;
-    const frontier = (journal ? journal.last('project.created')?.mode === 'fake' : options.fake) ? new FakeProjectFrontier() : new ProjectFrontier({ model: process.env.FRONTIER_MODEL_ID });
+    const existing = journal?.last('project.created');
+    const planner = existing?.mode === 'fake'
+      ? new FakeProjectFrontier()
+      : plannerFor({ fake: options.fake, planner: options.template ? 'template' : options.planner });
     result = await (journal ? reviseProject : createProject)({
       journal,
       root, repo: options.repo, brief: await readFile(options.brief, 'utf8'),
-      permissions: JSON.parse(await readFile(options.permissions, 'utf8')), frontier,
+      permissions: JSON.parse(await readFile(options.permissions, 'utf8')),
+      planner,
       hours: Number(options.hours ?? 8), mode: options.fake ? 'fake' : 'live',
     });
   } else {
@@ -93,7 +105,9 @@ async function main() {
     else if (action === 'status') result = await projectStatus(journal);
     else if (action === 'stop') result = await stopProject(journal);
     else if (action === 'run' || action === 'resume') {
-      if (action === 'resume') await prepareResume(journal, options['extend-hours'] === undefined ? undefined : Number(options['extend-hours']));
+      if (action === 'resume') await prepareResume(journal,
+        options['extend-hours'] === undefined ? undefined : Number(options['extend-hours']),
+        options['extend-attempts'] === undefined ? undefined : Number(options['extend-attempts']));
       if (options.background) result = await background(journal, options);
       else {
         const fake = journal.last('project.created').mode === 'fake';

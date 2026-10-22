@@ -2,34 +2,52 @@ import { access, writeFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { digest, validateReply, Pause, AttemptError } from './contracts.mjs';
+import { digest, validateReply, stageAssignment, Pause, AttemptError } from './contracts.mjs';
 import { Workspace } from './workspace.mjs';
 import { CheckRunner } from './sandbox.mjs';
 import { transient, providerFailure } from './providers.mjs';
+
+const REVIEW_CONTEXT_BYTES = 64 * 1024;
+const CHECK_TAIL = 8 * 1024;
+const DIFF_LIMIT = 256 * 1024;
+
+function compactFiles(files, limit) {
+  let bytes = 0, truncated = false;
+  const out = [];
+  for (const file of files) {
+    const size = Buffer.byteLength(file.content ?? '');
+    if (bytes + size > limit) { truncated = true; out.push({ path: file.path, hash: file.hash, content: null }); continue; }
+    bytes += size; out.push(file);
+  }
+  return { files: out, truncated };
+}
 
 export function summarize(journal) {
   const manifest = journal.last('project.created');
   if (!manifest) throw new Error('Not a project job');
   const last = journal.events.findLast(event => ['run.started', 'run.finished'].includes(event.type));
+  const limits = { ...manifest.limits, reviewRounds: manifest.limits.reviewRounds ?? 2, attempts: journal.last('attempts.extended')?.attempts ?? manifest.limits.attempts };
   const stages = manifest.plan.stages.map(stage => {
     const accepted = journal.events.findLast(event => event.type === 'stage.accepted' && event.data.stageId === stage.id)?.data;
     const attempts = journal.events.filter(event => event.type === 'attempt.started' && event.data.stageId === stage.id);
+    const reviews = journal.events.filter(event => event.type === 'frontier.call' && event.data.stageId === stage.id);
     const latest = journal.events.findLast(event => event.type === 'attempt.finished' && event.data.stageId === stage.id)?.data;
     return { id: stage.id, objective: stage.objective, status: accepted ? 'accepted' : attempts.length ? 'unfinished' : 'pending',
-      localAttempts: attempts.filter(event => event.data.role === 'local').length,
-      codexRescues: attempts.filter(event => event.data.role === 'rescue').length,
+      localAttempts: attempts.length, codexReviews: reviews.length,
       checkpoint: accepted?.commit ?? null, lastFeedback: latest?.feedback ?? null,
       checks: latest?.checks ?? [], unverified: latest?.unverified ?? [] };
   });
   return {
     jobId: journal.id, mode: manifest.mode, status: journal.last('project.approved')?.hash !== digest(manifest) ? 'awaiting_approval' : last?.type === 'run.started' ? 'running' : last?.data.status ?? 'approved',
     reason: last?.data.reason ?? null, planHash: digest(manifest), planVersion: manifest.planVersion,
-    branch: `codex/overnight-${journal.id}`, worktree: path.join(journal.dir, 'worktree'),
+    branch: `orchestrator/${journal.id}`, worktree: path.join(journal.dir, 'worktree'),
     deadline: journal.last('budget.extended')?.deadline ?? journal.last('budget.started')?.deadline ?? null,
     budgetStartedAt: journal.events.find(event => event.type === 'budget.started')?.at ?? null,
     reportedLocalTokens: journal.events.filter(event => event.type === 'operation.completed')
       .reduce((total, event) => total + (Number(event.data.value?.usage?.total_tokens) || 0), 0),
-    stages, eventFile: journal.file, report: path.join(journal.dir, 'report.md'),
+    codexCalls: journal.events.filter(event => event.type === 'frontier.call').length,
+    codexCallMs: journal.events.filter(event => event.type === 'frontier.call').reduce((total, event) => total + (Number(event.data.durationMs) || 0), 0),
+    limits, stages, eventFile: journal.file, report: path.join(journal.dir, 'report.md'),
   };
 }
 export async function writeReport(journal) {
@@ -39,10 +57,11 @@ export async function writeReport(journal) {
     report.reason ? `Reason: ${report.reason}` : '',
     `Branch: ${report.branch}`, `Worktree: ${report.worktree}`, `Events: ${report.eventFile}`, '',
     `Deadline: ${report.deadline ? new Date(report.deadline).toISOString() : 'not started'}`,
-    `Reported local tokens: ${report.reportedLocalTokens} (only when the provider supplies usage; Codex CLI usage is not estimated)`, '',
-    '| Stage | Status | DeepSeek attempts | Codex rescues | Checkpoint |',
+    `Reported local tokens: ${report.reportedLocalTokens} (only when the provider supplies usage; Codex CLI usage is not estimated)`,
+    `Codex review calls: ${report.codexCalls} in ${report.codexCallMs} ms`, '',
+    '| Stage | Status | DeepSeek attempts | Codex reviews | Checkpoint |',
     '| --- | --- | ---: | ---: | --- |',
-    ...report.stages.map(stage => `| ${stage.id} | ${stage.status} | ${stage.localAttempts} | ${stage.codexRescues} | ${stage.checkpoint ?? '—'} |`),
+    ...report.stages.map(stage => `| ${stage.id} | ${stage.status} | ${stage.localAttempts} | ${stage.codexReviews} | ${stage.checkpoint ?? '—'}`),
     '', '## Latest review limits',
     ...(report.stages.findLast(stage => stage.lastFeedback)?.unverified.length
       ? report.stages.findLast(stage => stage.lastFeedback).unverified.map(item => `- ${item}`)
@@ -122,21 +141,18 @@ export async function runProject(journal, {
       }
     }, input);
 
+    const attemptsLimit = journal.last('attempts.extended')?.attempts ?? manifest.limits.attempts;
+    const reviewRounds = manifest.limits.reviewRounds ?? 2; // jobs created before review-only mode lack this field
     for (const stage of manifest.plan.stages) {
       if (journal.events.some(event => event.type === 'stage.accepted' && event.data.stageId === stage.id)) continue;
       guard();
       await workspace.assertSnapshot();
-      const inventory = await workspace.inventory();
-      const source = await workspace.readFiles(inventory.map(file => file.path));
-      const input = { brief: manifest.brief, plan: manifest.plan, stage, source, acceptedStages: summarize(journal).stages.filter(item => item.status === 'accepted') };
-      const assignment = await provider(`v${manifest.planVersion}/${stage.id}/assignment`, s => frontier.assign(input, s), input);
-      if (assignment.needsApproval) throw new Pause(assignment.instructions, 'scope');
-      if (typeof assignment.instructions !== 'string' || !assignment.instructions.trim()) throw new Pause('Invalid frontier stage assignment', 'provider');
+      const assignment = stageAssignment({ stage, plan: manifest.plan,
+        acceptedStages: summarize(journal).stages.filter(item => item.status === 'accepted') });
 
       let accepted = false;
-      for (let number = 1; number <= manifest.limits.attempts + 1; number++) {
-        const role = number > manifest.limits.attempts ? 'rescue' : 'local';
-        const key = `${stage.id}/${role}-${number}`;
+      for (let number = 1; number <= attemptsLimit; number++) {
+        const key = `${stage.id}/local-${number}`;
         const operationKey = `v${manifest.planVersion}/${key}`;
         const prior = journal.events.find(event => event.type === 'attempt.finished' && event.data.key === key);
         if (prior) {
@@ -145,28 +161,27 @@ export async function runProject(journal, {
         }
         guard();
         const started = journal.events.some(event => event.type === 'attempt.started' && event.data.key === key);
-        if (!started) {
-          if (role === 'rescue' && journal.events.filter(event => event.type === 'attempt.started' && event.data.role === 'rescue').length >= manifest.limits.rescues) throw new Pause('Job Codex rescue limit reached', 'needs_review');
-          await journal.append('attempt.started', { key, stageId: stage.id, number, role });
-        }
+        if (!started) await journal.append('attempt.started', { key, stageId: stage.id, number, role: 'local' });
         const failures = journal.events.filter(event => event.type === 'attempt.finished' && event.data.stageId === stage.id).map(event => event.data);
-        let reply, checkResults = [], review;
+        let reply, checkResults = [], review = null, reviewRound = 0;
+        const assignmentWithHistory = stageAssignment({ stage, plan: manifest.plan,
+          acceptedStages: summarize(journal).stages.filter(item => item.status === 'accepted'), priorAttempts: failures });
         try {
           const context = [];
           for (let exchange = 0; exchange <= manifest.limits.contextRequests; exchange++) {
-            const request = { stage, assignment, permissions: manifest.permissions, inventory: await workspace.inventory(), priorAttempts: failures,
+            const request = { stage, assignment: assignmentWithHistory, permissions: manifest.permissions, inventory: await workspace.inventory(), priorAttempts: failures,
               context, note: stage.kind === 'verification'
-                ? 'Only one edit submission per attempt. If no source edit is warranted, submit_changes with edits:[]. The coordinator runs approved checks and gives screenshots and accepted checkpoint diffs directly to Codex; do not request those generated artifacts or ask for approval to review them.'
+                ? 'Only one edit submission per attempt. If no source edit is warranted, submit_changes with edits:[]. The coordinator runs approved checks after each attempt; checks must pass before review. Do not ask for generated artifacts or approval to review them.'
                 : 'Only one edit submission per attempt; use read_files to obtain current base hashes.' };
-            const output = await provider(`${operationKey}/response-${exchange}`, s => role === 'local' ? local.reply(request, s) : frontier.rescue(request, s), request);
+            const output = await provider(`${operationKey}/response-${exchange}`, s => local.reply(request, s), request);
             if (output?.protocolError) throw new AttemptError(output.protocolError);
-            if (stage.kind === 'verification' && role === 'local' && output?.reply?.type === 'needs_approval' &&
+            if (stage.kind === 'verification' && output?.reply?.type === 'needs_approval' &&
                 Array.isArray(output.reply.paths) && output.reply.paths.length > 0 &&
                 output.reply.paths.every(file => /^\.overnight-output\/[a-zA-Z0-9_.-]+\.png$/.test(file)) &&
                 Array.isArray(output.reply.edits) && output.reply.edits.length === 0) {
               throw new AttemptError('The coordinator already gives generated screenshots and accepted checkpoint diffs to Codex. Submit changes with an empty edits array when no source edit is needed.');
             }
-            reply = validateReply(role === 'local' ? output?.reply : output);
+            reply = validateReply(output?.reply);
             if (reply.type === 'submit_changes') break;
             if (exchange === manifest.limits.contextRequests) throw new AttemptError('Context request limit reached; submit a focused edit batch');
             const files = await journal.memo(`${operationKey}/files-${exchange}`, () => workspace.readFiles(reply.paths), { paths: reply.paths });
@@ -178,37 +193,56 @@ export async function runProject(journal, {
           checkResults = await journal.memo(`${operationKey}/checks`, () => checks.run(manifest.permissions.checks.filter(check => stage.checks.includes(check.id)), operationKey, controller.signal));
           if (checkResults.length !== stage.checks.length || stage.checks.some(id => !checkResults.some(check => check.id === id))) throw new Pause('Required check evidence is missing', 'evidence');
           guard();
-          const evidence = { ...await workspace.evidence(), checks: checkResults.map(check => ({
-            ...check, stdout: check.stdout?.slice(-32_768), stderr: check.stderr?.slice(-32_768),
-            outputTruncated: (check.stdout?.length ?? 0) > 32_768 || (check.stderr?.length ?? 0) > 32_768,
-          })), ...(stage.kind === 'verification' ? { acceptedDiffs: await workspace.acceptedDiffs() } : {}) };
-          const reviewInput = { brief: manifest.brief, approvedPlan: manifest.plan, stage, assignment,
-            acceptedStages: summarize(journal).stages.filter(item => item.status === 'accepted'),
-            currentSource: await workspace.readFiles((await workspace.inventory()).map(file => file.path)),
-            workerSummary: reply.summary, evidence };
-          review = await provider(`${operationKey}/review`, s => frontier.reviewCode(reviewInput, s), reviewInput);
-          if (!['accept', 'revise', 'blocked'].includes(review.decision) || typeof review.feedback !== 'string' || !Array.isArray(review.unverified)) throw new Pause('Invalid frontier review', 'provider');
-          if (review.decision === 'blocked') throw new Pause(review.feedback, 'blocked');
-          accepted = review.decision === 'accept' && checkResults.every(check => check.passed === true);
-          const feedback = checkResults.some(check => !check.passed)
-            ? `Required checks failed: ${checkResults.filter(check => !check.passed).map(check => check.id).join(', ')}. ${review.feedback}`
-            : review.feedback;
-          await journal.append('attempt.finished', { key, stageId: stage.id, role, accepted, feedback,
-            checks: checkResults.map(({ id, passed, code, stdout, stderr }) => ({ id, passed, code, stdout: stdout?.slice(-16_384), stderr: stderr?.slice(-16_384) })),
-            unverified: review.unverified });
+          const allPassed = checkResults.every(check => check.passed === true);
+          let feedback;
+          if (!allPassed) {
+            // Deterministic verdict first: a failing check never spends a Codex call.
+            feedback = `Required checks failed: ${checkResults.filter(check => !check.passed).map(check => check.id).join(', ')}. Read the check output and repair it in the next attempt.`;
+          } else {
+            const done = journal.events.filter(event => event.type === 'attempt.finished' && event.data.stageId === stage.id && event.data.review).length;
+            if (done >= reviewRounds) throw new Pause(`Checks pass but Codex review budget of ${reviewRounds} rounds is spent; adjust the plan or extend attempts`, 'needs_review');
+            reviewRound = done + 1;
+            const raw = await workspace.evidence();
+            const compact = compactFiles(raw.newFiles, REVIEW_CONTEXT_BYTES);
+            const diff = raw.diff.length > DIFF_LIMIT ? raw.diff.slice(0, DIFF_LIMIT) + '\n[diff truncated; inspect the worktree directly]' : raw.diff;
+            const evidence = { diff, diffTruncated: raw.diff.length > DIFF_LIMIT, newFiles: compact.files, newFilesTruncated: compact.truncated,
+              checks: checkResults.map(check => ({ ...check, stdout: check.stdout?.slice(-CHECK_TAIL), stderr: check.stderr?.slice(-CHECK_TAIL),
+                outputTruncated: (check.stdout?.length ?? 0) > CHECK_TAIL || (check.stderr?.length ?? 0) > CHECK_TAIL })),
+              ...(stage.kind === 'verification' ? { acceptedDiffs: await workspace.acceptedDiffs() } : {}) };
+            const reviewInput = { brief: manifest.brief, approvedPlan: manifest.plan, stage, assignment: assignmentWithHistory,
+              acceptedStages: summarize(journal).stages.filter(item => item.status === 'accepted'),
+              workerSummary: reply.summary, evidence };
+            const reviewKey = `${operationKey}/review`;
+            const reviewStarted = now();
+            review = await provider(reviewKey, s => frontier.reviewCode(reviewInput, s), reviewInput);
+            if (!journal.events.some(event => event.type === 'frontier.call' && event.data.key === reviewKey)) {
+              await journal.append('frontier.call', { kind: 'review', key: reviewKey, stageId: stage.id, round: done + 1, durationMs: now() - reviewStarted, decision: review?.decision ?? null });
+            }
+            if (!['accept', 'revise', 'blocked'].includes(review?.decision) || typeof review.feedback !== 'string' || !Array.isArray(review.unverified)) throw new Pause('Invalid frontier review', 'provider');
+            if (review.decision === 'blocked') throw new Pause(review.feedback, 'blocked');
+            feedback = review.feedback;
+          }
+          accepted = allPassed && review?.decision === 'accept';
+          await journal.append('attempt.finished', { key, stageId: stage.id, role: 'local', number, accepted, feedback,
+            review: review?.decision ?? null, unverified: review?.unverified ?? [],
+            checks: checkResults.map(({ id, passed, code, stdout, stderr }) => ({ id, passed, code, stdout: stdout?.slice(-CHECK_TAIL), stderr: stderr?.slice(-CHECK_TAIL) })) });
+          // Stop before spending another DeepSeek attempt that cannot be accepted.
+          if (!accepted && review?.decision === 'revise' && reviewRound >= reviewRounds) {
+            throw new Pause(`Checks pass but Codex asked for revisions twice; revise the plan, widen checks, or accept the work manually`, 'needs_review');
+          }
         } catch (error) {
           if (!(error instanceof AttemptError)) throw error;
-          await journal.append('attempt.finished', { key, stageId: stage.id, role, accepted: false, feedback: error.message, checks: [] });
+          await journal.append('attempt.finished', { key, stageId: stage.id, role: 'local', number, accepted: false, feedback: error.message, checks: [] });
         }
         if (accepted) break;
       }
-      if (!accepted) throw new Pause(`Stage ${stage.id} exhausted DeepSeek attempts and its Codex rescue`, 'needs_review');
+      if (!accepted) throw new Pause(`Stage ${stage.id} did not pass after ${attemptsLimit} DeepSeek attempts and ${reviewRounds} review rounds; resume with --extend-attempts or revise the plan`, 'needs_review');
       guard();
       const checkpoint = await journal.memo(`${stage.id}/checkpoint`, () => workspace.checkpoint(stage));
       await journal.append('stage.accepted', { stageId: stage.id, ...checkpoint });
       await writeReport(journal);
     }
-    await journal.append('run.finished', { status: 'accepted', reason: 'Every approved stage passed its checks and frontier review' });
+    await journal.append('run.finished', { status: 'accepted', reason: 'Every approved stage passed its checks and Codex review' });
   } catch (error) {
     const budgetExpired = stopReason === 'Job time budget exhausted';
     const status = error instanceof Pause

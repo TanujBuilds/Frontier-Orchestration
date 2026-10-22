@@ -1,5 +1,14 @@
 # Verification record
 
+## 2026-10-21 — Review-only frontier refactor
+
+- The owner reversed the model split for coding jobs: DeepSeek plans and implements; Codex is called only to review a stage whose approved checks already pass, at most twice per stage. Codex no longer plans, writes per-stage assignments, reviews failing attempts, or rescues exhausted stages. The motivation was cost: a real dashboard job consumed nearly the entire five-hour Codex window while several of those calls were redundant.
+- Implementation: `createProject`/`reviseProject` now take a `planner`; `--planner deepseek` is the default, `--template` produces a deterministic two-stage plan with zero model calls, and `--planner codex` remains an opt-in single-call escape hatch. Stage assignments are composed by the coordinator from the already-approved stage text (`stageAssignment`). A failed check records a deterministic verdict without a Codex call. Codex review payloads now contain the diff, changed files capped at 64 KiB, check output and screenshots, not the whole source tree. A `frontier.call` event records every actual Codex call, and `report.md`/`status --json` expose `codexCalls`. Exhausted stages pause at `needs_review`; `resume --extend-attempts N` grants more DeepSeek attempts without a new plan or Codex call.
+- Automated suite: 45 tests pass, including new tests for review-only-when-checks-pass, the two-round review limit, zero-review check failures, blocking reviews, extra-attempt resumes, DeepSeek planning shape, template planning, and planning visibility in the dashboard. A fake CLI job (`plan --fake`, approve, run) recorded `accepted` with two Codex reviews (one per stage) and both stage checkpoints. A `--template` plan produced a valid manifest with no planner call.
+- Not verified: a live DeepSeek plan, a live review-only multi-stage job, or any change in measured Codex usage. The protected browser check could not run here because Playwright's Chromium binary is not installed in this checkout; its pre-browser assertions now pass. No Spark runtime setting changed.
+- Quality tradeoff, stated honestly: DeepSeek's stage decomposition may be coarser than Codex's. The plan is the cheapest artifact to be wrong about — it is validated structurally and approved by exact hash, and a replan costs local time rather than Codex usage. `--planner codex` remains available if that tradeoff proves wrong in practice.
+
+
 ## 2026-10-21 — Minimal dashboard live attempts
 
 - The owner selected a monochrome “Now first” view: show the current recorded actor and action before stage detail and handoff history. Two live dashboard jobs used real signed-in Codex planning/review and the existing DeepSeek service. No Spark runtime setting changed.

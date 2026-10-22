@@ -72,15 +72,15 @@ function renderDetails(job) {
   if (job.type === 'coding') {
     panel.append(detailRow('Plan', job.description));
     panel.append(detailRow('Starting commit', job.baseCommit?.slice(0, 12), true));
-    panel.append(detailRow('Codex may read', job.permissions?.readPaths ?? [], true));
+    panel.append(detailRow('Source shared with Codex', job.permissions?.readPaths ?? [], true));
     panel.append(detailRow('Worker may edit', job.permissions?.writePaths ?? [], true));
     panel.append(detailRow('Approved checks', job.permissions?.checks?.map(check => check.argv.join(' ')) ?? [], true));
     panel.append(detailRow('Limits', [
       String(job.limits?.attempts) + ' DeepSeek attempts per stage',
-      String(job.limits?.rescues) + ' Codex rescues per job',
+      String(job.limits?.reviewRounds ?? 2) + ' Codex reviews per stage',
       String(job.limits?.hours) + ' hours',
     ]));
-    panel.append(detailRow('Local branch', 'codex/overnight-' + job.id, true));
+    panel.append(detailRow('Local branch', 'orchestrator/' + job.id, true));
   } else panel.append(detailRow('Plan version', job.planVersion ?? '—'));
 }
 
@@ -89,7 +89,7 @@ function renderStages(job) {
   list.replaceChildren();
   byId('stageCount').textContent = String(job.stages.length) + (job.stages.length === 1 ? ' assignment' : ' ordered stages');
   if (!job.stages.length) {
-    list.append(node('div', 'empty', 'Waiting for Codex to propose the plan.'));
+    list.append(node('div', 'empty', 'Waiting for DeepSeek to propose the plan.'));
     return;
   }
   job.stages.forEach((stage, index) => {
@@ -106,7 +106,7 @@ function renderStages(job) {
       details.append(list);
       body.append(details);
     }
-    if (stage.localAttempts !== undefined) body.append(node('p', '', stage.localAttempts + ' DeepSeek attempts · ' + stage.rescues + ' Codex rescues'));
+    if (stage.localAttempts !== undefined) body.append(node('p', '', stage.localAttempts + ' DeepSeek attempts · ' + (stage.codexReviews ?? 0) + ' Codex reviews'));
     card.append(body);
     card.append(node('span', 'stage-state', stage.status.replaceAll('_', ' ')));
     list.append(card);

@@ -30,12 +30,25 @@ export function summarizeJob(id, events) {
         const accepted = events.some(event => event.type === 'stage.accepted' && event.data.stageId === stage.id);
         return { ...stage, status: accepted ? 'accepted' : attempts.length ? 'in_progress' : 'pending',
           localAttempts: attempts.filter(event => event.data.role === 'local').length,
-          rescues: attempts.filter(event => event.data.role === 'rescue').length };
+          codexReviews: events.filter(event => event.type === 'frontier.call' && event.data.stageId === stage.id).length };
       }),
     };
   }
   const goal = latest(events, 'job.created')?.goal;
-  if (!goal) return null;
+  if (!goal) {
+    // A coding job is visible while the planner is still working, before any manifest exists.
+    const requested = latest(events, 'project.plan.requested');
+    if (requested) {
+      const fake = /fake/i.test(String(requested.source ?? ''));
+      return { id, type: 'coding', mode: fake ? 'fake' : 'live',
+        title: String(requested.input?.brief ?? 'Planning a coding job').slice(0, 130),
+        description: 'A plan is being drafted; nothing is approved yet.',
+        status: latest(events, 'project.plan.failed') ? 'planning_failed' : 'planning',
+        reason: latest(events, 'project.plan.failed')?.reason ?? null,
+        updatedAt: events.at(-1)?.at ?? null, planVersion: null, stages: [] };
+    }
+    return null;
+  }
   const outcome = latest(events, 'job.finished');
   const plan = latest(events, 'plan.proposed')?.plan;
   const fake = events.some(event => /fake/i.test(event.data?.source ?? ''));
@@ -55,7 +68,11 @@ export function describeEvent(event, mode) {
       type === 'provider.waiting') {
     const line = formatTimelineEvent(event, { mode });
     if (line) return line.replace(/^.*?#\d+(?:  \[FAKE\])?  /, '');
-    if (type === 'project.plan.requested') return 'Mac → Codex: plan requested';
+    if (type === 'project.plan.requested') {
+      const source = String(data.source ?? 'planner');
+      const label = /codex/i.test(source) ? 'Codex' : /template/i.test(source) ? 'template plan' : /fake/i.test(source) ? 'fake planner' : 'DeepSeek';
+      return `Mac → ${label}: plan requested`;
+    }
     return null;
   }
   switch (type) {
@@ -81,7 +98,9 @@ export function eventKind(event) {
   if (event.type === 'local.result' || (event.type === 'operation.completed' && /\/response-\d+$/.test(key))) return 'deepseek';
   if (event.type.startsWith('frontier.') || event.type === 'plan.proposed' ||
       (event.type === 'operation.completed' && /\/(assignment|review)$/.test(key))) return 'codex';
-  if ((event.type === 'operation.completed' && key.endsWith('/checks')) || event.type === 'sandbox.verified') return 'check';
+  if ((event.type === 'operation.completed' || event.type === 'operation.started') && key.endsWith('/checks')) return 'check';
+  if (event.type === 'sandbox.verified') return 'check';
+  if (event.type === 'operation.started' && key.endsWith('/review')) return 'codex';
   if (event.type.startsWith('edits.') || event.type === 'stage.accepted') return 'workspace';
   if (event.type === 'provider.waiting' || event.type === 'provider.failed') return 'warning';
   return 'system';

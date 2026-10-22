@@ -14,23 +14,23 @@ const event = (sequence, type, label, data = {}, kind = 'system', time = started
 
 // The browser view must expose the start of a Mac check, and a job must be
 // visible while Codex is still preparing its first plan.
-const planning = summarizeJob(id, [event(1, 'project.plan.requested', 'Mac → Codex: plan requested',
-  { input: { brief: 'Build the Night Shift dashboard' }, source: 'Codex CLI' }, 'codex')]);
-assert.equal(planning?.status, 'planning', 'Codex planning must appear as an active job');
+const planning = summarizeJob(id, [event(1, 'project.plan.requested', 'Mac → DeepSeek: plan requested',
+  { input: { brief: 'Build the Night Shift dashboard' }, source: 'deepseek-http/unresolved' }, 'deepseek')]);
+assert.equal(planning?.status, 'planning', 'Planning must appear as an active job');
 const checkStart = event(2, 'operation.started', '', { key: 'v1/interactions/local-1/checks' });
 assert.match(describeEvent(checkStart, 'live') ?? '', /check/i, 'Mac check start must be visible');
 assert.equal(eventKind(checkStart), 'check', 'Mac check start must be classified as a check');
 
 const stages = [
-  { id: 'layout', objective: 'Build the layout', status: 'accepted', localAttempts: 2, rescues: 0 },
-  { id: 'interactions', objective: 'Add task interactions', status: 'in_progress', localAttempts: 1, rescues: 0 },
-  { id: 'verify', objective: 'Final verification', status: 'pending', localAttempts: 0, rescues: 0 },
+  { id: 'layout', objective: 'Build the layout', status: 'accepted', localAttempts: 2, codexReviews: 1 },
+  { id: 'interactions', objective: 'Add task interactions', status: 'in_progress', localAttempts: 1, codexReviews: 0 },
+  { id: 'verify', objective: 'Final verification', status: 'pending', localAttempts: 0, codexReviews: 0 },
 ];
 const baseEvents = [
   event(1, 'stage.accepted', 'Mac saved stage 1', { stageId: 'layout' }, 'workspace', at(-300_000)),
   event(2, 'operation.completed', 'Codex prepared the assignment',
     { key: 'v1/interactions/assignment', value: { instructions: 'Add task interactions' } }, 'codex', at(-150_000)),
-  event(3, 'operation.started', 'Codex → DeepSeek: add task interactions',
+  event(3, 'operation.started', 'Coordinator → DeepSeek: add task interactions',
     { key: 'v1/interactions/local-1/response-0', input: { assignment: { instructions: 'Add and filter tasks' } } }, 'deepseek'),
 ];
 const cases = {
@@ -43,7 +43,7 @@ const cases = {
   review: { events: [...baseEvents,
     event(4, 'operation.completed', 'DeepSeek submitted changes', { key: 'v1/interactions/local-1/response-0', value: { reply: { type: 'submit_changes', edits: [] } } }, 'deepseek', at(-30_000)),
     event(5, 'operation.completed', 'Mac checks passed', { key: 'v1/interactions/local-1/checks', value: [{ id: 'dashboard', passed: true }] }, 'check', at(-10_000)),
-    event(6, 'operation.started', 'Evidence → Codex review', { key: 'v1/interactions/local-1/review' }, 'codex', at(-8_000))], status: 'running' },
+    event(6, 'operation.started', 'Checks passed → Codex review', { key: 'v1/interactions/local-1/review' }, 'codex', at(-8_000))], status: 'running' },
   done: { events: [...baseEvents,
     event(4, 'run.finished', 'Final status: accepted', { status: 'accepted', reason: 'All stages passed' }, 'system', at(-2_000))], status: 'accepted' },
 };
@@ -54,7 +54,7 @@ const job = () => ({ id, type: 'coding', mode: 'live', title: 'Night Shift dashb
   reason: activeCase.status === 'accepted' ? 'All stages passed' : null,
   updatedAt: activeCase.events.at(-1).at, planVersion: 1, stages: activeCase.status === 'accepted'
     ? stages.map(stage => ({ ...stage, status: 'accepted' })) : stages,
-  limits: { attempts: 5, rescues: 2, hours: 8 }, permissions: { readPaths: ['src/dashboard/'], writePaths: ['src/dashboard/'], checks: [] },
+  limits: { attempts: 5, reviewRounds: 2, hours: 8 }, permissions: { readPaths: ['src/dashboard/'], writePaths: ['src/dashboard/'], checks: [] },
 });
 
 await mkdir('.overnight-output', { recursive: true });

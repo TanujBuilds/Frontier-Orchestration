@@ -36,7 +36,7 @@ The Mac-to-Spark connection may be unavailable independently of app code. Build 
 
 ## Next milestones
 
-- **Overnight coding workflow (approved 2026-10-20):** sequential stages in an isolated Mac Git worktree, structured bounded edits, sandboxed checks and Codex evidence review. Implementation and recovery details are in [OVERNIGHT.md](OVERNIGHT.md); the real multi-stage release gate remains pending Spark reconnection.
+- **Overnight coding workflow (review-only frontier, 2026-10-21):** sequential stages in an isolated Mac Git worktree, structured bounded edits, sandboxed checks, and Codex review only after checks pass. DeepSeek drafts the plan and does all implementation; no Codex planning or rescue. Implementation and recovery details are in [OVERNIGHT.md](OVERNIGHT.md); the real multi-stage release gate remains pending Spark reconnection.
 - **Local browser interface:** the read-only timeline already shows saved handoffs, checks, screenshots, and history. User controls follow after the real terminal loop is reliable.
 - **Later:** provider choices, parallel work, and more general tasks. Keep the coordinator's plan and permission rules authoritative as capabilities grow.
 
