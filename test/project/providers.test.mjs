@@ -16,6 +16,8 @@ test('coding adapter preserves exact HTTP handoff, model, usage and malformed an
   assert.equal(result.usage.total_tokens, 10);
   assert.deepEqual(JSON.parse(JSON.parse(calls[1].body).messages[1].content), input);
   assert.equal(JSON.parse(calls[1].body).model, 'stub-model');
+  assert.equal(JSON.parse(calls[1].body).max_tokens, 12_000);
+  assert.match(JSON.parse(calls[1].body).messages[0].content, /at most two files/);
 });
 
 test('structured worker replies reject missing hashes and malformed edit objects', () => {
