@@ -51,8 +51,12 @@ export class Workspace {
   async readFiles(paths) {
     const files = [];
     for (const file of paths) {
+      if (typeof file === 'string' && file.endsWith('/')) throw new AttemptError(`Request exact file paths, not a directory: ${file}`);
       relativePath(file);
       if (secretPath(file) || generated(file) || !matches(file, this.manifest.permissions.readPaths)) throw new Pause(`Read outside approved scope: ${file}`, 'scope');
+      try {
+        if ((await lstat(await this.file(file))).isDirectory()) throw new AttemptError(`Request exact file paths, not a directory: ${file}`);
+      } catch (error) { if (error.code !== 'ENOENT') throw error; }
       files.push(await this.content(file));
     }
     if (Buffer.byteLength(JSON.stringify(files)) > 512 * 1024) throw new Pause('Requested context exceeds 512 KiB; narrow the stage', 'context');

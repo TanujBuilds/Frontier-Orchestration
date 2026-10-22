@@ -111,6 +111,23 @@ test('verification artifact requests consume an attempt without expanding scope'
   assert.equal(result.stages[1].codexReviews, 1);
 });
 
+test('a directory read request gives DeepSeek feedback and consumes one attempt', async t => {
+  const { run, journal } = await setup(t);
+  let first = true;
+  const local = { reply: async input => {
+    if (first) {
+      first = false;
+      return { reply: { type: 'read_files', paths: ['src/'], summary: 'Read the source directory', edits: [] } };
+    }
+    return new FakeProjectLocal().reply(input);
+  } };
+  const result = await run({ local });
+  assert.equal(result.status, 'accepted');
+  assert.equal(result.stages[0].localAttempts, 2);
+  assert.equal(result.stages[0].codexReviews, 1);
+  assert.match(journal.events.find(event => event.type === 'attempt.finished')?.data.feedback ?? '', /exact file paths/);
+});
+
 test('extra DeepSeek attempts can be granted without a new plan or Codex call', async t => {
   const frontier = new FakeProjectFrontier();
   const { run, journal } = await setup(t, frontier);

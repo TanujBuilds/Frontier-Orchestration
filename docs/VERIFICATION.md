@@ -1,5 +1,13 @@
 # Verification record
 
+## 2026-10-22 — Live review-only coding demo
+
+- Owner approved exact plan v1 for live job `b9ecd876-7785-4969-a2eb-b190808b5614`, hash `56f8b1e9e9f07ef5bfc2ed93520740f370164861ff2a5566abe9068380a3c304`, against the clean prepared UI pilot. DeepSeek drafted two stages without a Codex planning call. The job finished `accepted`; both stage checkpoints were committed in its isolated worktree, and the source checkout remained clean. Nothing was merged or pushed from the generated worktree.
+- The protected `layout` check passed in both stages and captured desktop/mobile screenshots. DeepSeek used two attempts in each stage. Codex reviewed only passing check evidence, once per stage: `codexCalls: 2`, `codexCallMs: 16447`. The provider reported 14,911 local tokens; Codex CLI token usage was not available, so this run does not quantify token savings.
+- The first DeepSeek reply requested a directory as well as exact source files. The coordinator initially paused before any Codex call; a narrow fix now converts directory read requests into recoverable attempt feedback, with a regression test. A direct LAN route later timed out; the same approved job resumed through a reachable saved route with its history intact. The verification stage's first reply was malformed JSON and consumed one DeepSeek attempt without a Codex call.
+- Visual inspection confirms the required controls, readable dark styling, and no horizontal overflow in the saved screenshots. The mobile form has a large empty vertical gap between the textbox and Add button. Codex explicitly noted that flaw but accepted it under the approved criteria. This two-stage shell demo does not verify working interactions, persistence, broader accessibility, the optional guidance path with a real Codex call, or the full four-stage Night Shift release gate.
+- After the coordinator fix, `npm test` passed 51 tests and `git diff --check` passed. The live result verifies the review-only handoff and bounded calls for this pilot, not sustained provider reliability or general Codex usage savings.
+
 ## 2026-10-22 — Review audit and bounded guidance
 
 - The owner clarified that Codex may give optional pre-stage guidance when explicitly requested; automatic coding-job calls remain check-gated reviews. The `guide` command permits one Codex call before the next unfinished stage's first attempt and adds the hint to DeepSeek's coordinator-composed assignment.
