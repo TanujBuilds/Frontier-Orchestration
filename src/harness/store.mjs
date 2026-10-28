@@ -8,6 +8,7 @@ export class Store {
  constructor(root){
   this.root=path.resolve(root);mkdirSync(this.root,{recursive:true,mode:0o700});
   this.db=new DatabaseSync(path.join(this.root,'harness.sqlite3'));
+  const version=this.db.prepare('PRAGMA user_version').get().user_version;if(![0,1].includes(version)){this.db.close();this.db=null;throw Error(`Unsupported harness database schema version ${version}`);}
   chmodSync(path.join(this.root,'harness.sqlite3'),0o600);this.depth=0;
   this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
    CREATE TABLE IF NOT EXISTS records(kind TEXT NOT NULL,id TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(kind,id));

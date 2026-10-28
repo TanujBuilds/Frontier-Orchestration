@@ -36,7 +36,6 @@ export class Integration {
   for(const file of files){
    if(protectedPath(file)||!matches(file,writePaths))throw Error('Candidate change outside approved scope');
    const listed=await git(workspace.root,'ls-tree','--name-only',base,'--',file);
-   const before=listed?await git(workspace.root,'show',`${base}:${file}`):null;
    // git() trims non-NUL output; read the exact blob through Workspace content's
    // hashing convention by retrieving bytes in a NUL-preserving command.
    const beforeExact=listed?await git(workspace.root,'show',`${base}:${file}`,'--format=','-z'):null;
@@ -81,7 +80,7 @@ export class Integration {
  async startNative(input,key){return this.effect(key,{op:'native.start',...input},()=>this.beginNative(input.taskId));}
  async beginNative(taskId,extra={}){
   const t=this.c.getTask(taskId),g=this.c.store.get('goal',t.goalId);this.c.liveGoal(g);
-  this.c.liveTask(t);
+  this.c.liveTask(t,{allowStopped:!!extra.takeoverReason});
   if(!g.manifest.mode.actors.includes('codex')||t.spec.kind!=='coding')throw Error('Mode prohibits native Codex execution');
   if(t.status==='codex_active')return t;
   if(!['codex_ready','blocked','stopped','awaiting_review','ready_to_integrate'].includes(t.status)||t.owner)throw Error('Worker must be quiescent before native execution');
@@ -89,7 +88,7 @@ export class Integration {
   if(g.integrationOwner&&g.integrationOwner!==t.id)throw Error('Another native task owns integration workspace');
   const target=await this.goalWorkspace(g.id),unlock=await target.journal.lock();try{
    const snapshot=await target.workspace.snapshot();
-   this.c.store.tx(()=>{const current=this.c.liveTask(t);current.status='codex_active';current.executionActor='codex';current.startedAt??=this.c.now();current.deadline??=Math.min(g.deadline,current.startedAt+t.spec.limits.seconds*1000);current.native={worktree:target.workspace.root,startSnapshot:snapshot,...extra};const goal=this.c.store.get('goal',g.id);if(goal.integrationOwner&&goal.integrationOwner!==t.id)throw Error('Another native task owns integration workspace');goal.integrationOwner=t.id;this.c.store.put('goal',goal);this.c.store.put('task',current);this.c.learning.pin(t.id);this.c.emit('task.native_started',g.id,t.id,{worktree:target.workspace.root});});
+   this.c.store.tx(()=>{const current=this.c.liveTask(t,{allowStopped:!!extra.takeoverReason});current.status='codex_active';current.executionActor='codex';current.stopRequested=false;current.startedAt??=this.c.now();current.deadline??=Math.min(g.deadline,current.startedAt+t.spec.limits.seconds*1000);current.native={worktree:target.workspace.root,startSnapshot:snapshot,...extra};const goal=this.c.store.get('goal',g.id);if(goal.integrationOwner&&goal.integrationOwner!==t.id)throw Error('Another native task owns integration workspace');goal.integrationOwner=t.id;this.c.store.put('goal',goal);this.c.store.put('task',current);this.c.learning.pin(t.id);this.c.emit('task.native_started',g.id,t.id,{worktree:target.workspace.root});});
   }finally{await unlock();}return this.c.getTask(t.id);
  }
  async takeover(input,key){return this.effect(key,{op:'native.takeover',...input},async()=>{
@@ -107,6 +106,7 @@ export class Integration {
   const t=this.c.getTask(input.taskId),g=this.c.store.get('goal',t.goalId);this.c.liveGoal(g);text(input.summary,'summary');if(t.status!=='codex_active'||g.integrationOwner!==t.id)throw Error('Native task ownership mismatch');
   this.c.liveTask(t);
   const target=await this.goalWorkspace(g.id,{native:true}),release=await target.journal.lock();try{
+   if(t.native.workerSnapshot){const source=await this.candidate(t),unlock=await source.journal.lock();try{if(digest(await source.workspace.snapshot())!==digest(t.native.workerSnapshot))throw Error('Frozen worker checkout changed after takeover');}finally{await unlock();}}
    const snapshot=await target.workspace.snapshot(),before=t.native.startSnapshot;
    for(const f of new Set([...Object.keys(snapshot),...Object.keys(before)]))if(snapshot[f]!==before[f]&&(protectedPath(f)||!matches(f,t.spec.permissions.writePaths)))throw Error('Native change outside approved scope or protected checks');
    await target.journal.append('native.adopted',{taskId:t.id,snapshot});

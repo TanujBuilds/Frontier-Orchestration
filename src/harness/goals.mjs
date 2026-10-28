@@ -1,7 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {normalizeGoal,normalizeTask,digest,text} from './contracts.mjs';
 
-function quiescent(c,goalId){return !c.store.all('task').some(t=>t.goalId===goalId&&(t.owner||['codex_active','legacy_reviewing'].includes(t.status)))&&!['running','uncertain'].includes(c.store.maybe('planning',goalId)?.status);}
+function quiescent(c,goalId){return !c.store.get('goal',goalId).integrationOwner&&!c.store.all('task').some(t=>t.goalId===goalId&&(t.owner||t.executionActor==='codex'&&['paused','stopped'].includes(t.status)||['codex_active','legacy_reviewing'].includes(t.status)))&&!['running','uncertain'].includes(c.store.maybe('planning',goalId)?.status);}
 export class Goals {
  constructor(c){this.c=c;}
  prepareRevision(input,key){return this.c.store.command(key,{op:'goal.revise.prepare',...input},()=>{
@@ -30,7 +30,14 @@ export class Goals {
   for(const [name,limit] of Object.entries(spec.limits))if(limit>t.spec.limits[name])throw Error('Rebind cannot refresh assignment limits');
   const tasks=this.c.store.all('task').filter(x=>x.goalId===g.id),graph=new Map(tasks.map(x=>[x.id,x.id===t.id?spec.dependsOn:x.spec.dependsOn]));
   const visited=new Set(),visiting=new Set(),visit=id=>{if(visiting.has(id))throw Error('Dependency cycle');if(visited.has(id))return;if(!graph.has(id))throw Error('Dependency outside goal');visiting.add(id);graph.get(id).forEach(visit);visiting.delete(id);visited.add(id);};visit(t.id);
-  t.history??=[];t.history.push({goalVersion:t.goalVersion,spec:t.spec,hash:t.hash,at:this.c.now()});t.spec=spec;t.hash=digest(spec);t.goalVersion=g.version;t.deadline=t.deadline?Math.min(t.deadline,g.deadline):null;t.status=spec.actor==='codex'?'codex_ready':'queued';t.stopRequested=t.pauseRequested=false;
+  if(t.startedAt&&digest(spec)!==t.hash){
+   if(t.goalVersion===g.version)throw Error('Started scope changes require an explicitly approved new goal version');
+   const unchanged=({permissions,...rest})=>rest;
+   if(spec.kind!=='coding')throw Error('Started non-coding scope changes require a separately versioned backend handoff');
+   if(digest(unchanged(spec))!==digest(unchanged(t.spec)))throw Error('Started rebind keeps the exact assignment objective and limits; use bounded review feedback for corrections');
+  }
+  t.history??=[];t.history.push({goalVersion:t.goalVersion,spec:t.spec,hash:t.hash,at:this.c.now()});t.spec=spec;t.hash=digest(spec);t.goalVersion=g.version;t.deadline=t.deadline?Math.min(t.deadline,g.deadline):null;
+  if(!['awaiting_review','ready_to_integrate','awaiting_supervisor','awaiting_user','awaiting_legacy_review'].includes(t.status))t.status=spec.actor==='codex'?'codex_ready':'queued';t.stopRequested=t.pauseRequested=false;
   this.c.store.put('task',t);this.c.emit('task.rebound',g.id,t.id,{goalVersion:t.goalVersion,hash:t.hash});return this.c.getTask(t.id);
  });}
  finalize(input,key){return this.c.store.command(key,{op:'goal.finalize',...input},()=>{

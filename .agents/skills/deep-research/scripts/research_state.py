@@ -447,16 +447,24 @@ class Store:
             self._event(db,job_id,'question',{'id':str(uuid.uuid4()),'question':question})
             return self._get(db,job_id)
 
-    def answer(self, job_id, answer, responder):
+    def answer(self, job_id, answer, responder, question_id=None):
         if not isinstance(answer,str) or not 1 <= len(answer.strip()) <= 8000:raise StateError('invalid answer')
         with self._db(transaction=True) as db:
             job=self._get(db,job_id)
+            if question_id is not None:
+                events=[(row['type'],json.loads(row['data_json'])) for row in db.execute("SELECT type,data_json FROM events WHERE job_id=? AND type IN ('question','answered') ORDER BY id",(job_id,))]
+                for kind,data in events:
+                    if kind=='answered' and data.get('question_id')==question_id:
+                        if data['answer']!=answer or data['responder']!=responder:raise StateError('answer idempotency conflict')
+                        return job
+                questions=[data for kind,data in events if kind=='question']
+                if not questions or questions[-1]['id']!=question_id:raise StateError('answer question identity mismatch')
             if job['status'] not in ('awaiting_user','awaiting_supervisor'):raise StateError('job is not waiting for an answer')
             if responder not in ('user','codex') or (job['status']=='awaiting_user' and responder!='user'):raise StateError('this mode requires a user answer')
             if job['deadline'] is not None and time.time()>=job['deadline']:raise BudgetExceeded('original deadline reached')
             state=job['checkpoint'];state.setdefault('history',[]).append({'role':'user','content':{'supervisor_answer':answer}})
             db.execute("UPDATE jobs SET status='queued',checkpoint_json=?,updated_at=? WHERE id=?",(_json(state),time.time(),job_id))
-            self._event(db,job_id,'answered',{'answer':answer,'responder':responder})
+            self._event(db,job_id,'answered',{'answer':answer,'responder':responder,**({'question_id':question_id} if question_id is not None else {})})
             return self._get(db,job_id)
 
     def events(self, job_id):

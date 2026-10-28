@@ -36,7 +36,7 @@ export class ResearchAdapter {
   if(cp.nextPollAt&&c.now()<cp.nextPollAt)return {waiting:true,taskId:task.id};
   try{
    if(task.answers.length>(cp.answeredCount??0)){
-    const answer=task.answers.at(-1);await this.rpc({command:'answer',job:cp.remoteJobId,answer:answer.text,responder:answer.responder});cp.answeredCount=task.answers.length;
+    const answer=task.answers.at(-1);await this.rpc({command:'answer',job:cp.remoteJobId,answer:answer.text,responder:answer.responder,question_id:cp.remoteQuestionId});cp.answeredCount=task.answers.length;
    }
    if(task.stopRequested||task.pauseRequested||task.yieldRequested){
     await this.rpc({command:task.stopRequested?'stop':'yield',job:cp.remoteJobId});

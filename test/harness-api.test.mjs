@@ -31,8 +31,16 @@ test('Host, Origin, authentication and browser CSRF guards precede mutations',as
 });
 test('tools expose bounded event waits and long operations return promptly',async t=>{
  const f=await fixture(t),tools=await (await f.call('tools_list')).json();assert.ok(tools.some(t=>t.name==='task_takeover'));assert.ok(tools.some(t=>t.name==='memory_retrieve'));
+ const prepare=tools.find(t=>t.name==='goal_prepare');assert.ok(prepare.inputSchema.properties.manifest.properties.acceptance);assert.ok(prepare.inputSchema.properties.manifest.properties.project);
  assert.equal((await f.call('events_wait',{after:0,timeoutMs:30001})).status,400);
  const result=await f.dispatcher.launch('fixture_operation',{taskId:'test'},'operation',async()=>{await new Promise(r=>setTimeout(r,20));return {verified:true};});assert.equal(result.status,'pending');
  await new Promise(r=>setTimeout(r,40));const done=await f.dispatcher.invoke('operation_get',{operationId:result.id});assert.equal(done.status,'completed');assert.deepEqual(done.result,{verified:true});
  assert.equal((await f.dispatcher.launch('fixture_operation',{taskId:'test'},'operation',async()=>{throw Error('Duplicate');})).id,result.id);
+});
+test('a fifth registered research-only preset survives restart and cannot dispatch coding',async t=>{
+ const f=await fixture(t),preset={id:'research-brief',version:1,planner:'deepseek',actors:['deepseek'],review:'checks',capabilities:['research']};
+ const registered=await f.call('mode_register',{idempotencyKey:'mode',definition:preset});assert.equal(registered.status,200);
+ const reopened=new Coordinator({root:f.c.store.root});try{assert.equal(reopened.registry.mode('research-brief').id,'research-brief');}finally{reopened.close();}
+ const g=await (await f.call('goal_prepare',{idempotencyKey:'p',manifest:{submissionId:'narrow',objective:'Research only',acceptance:['Cited answer'],mode:'research-brief',environment:'fixture'}})).json();await f.call('goal_activate',{idempotencyKey:'a',goalId:g.id,hash:g.hash});
+ assert.equal((await f.call('task_submit',{idempotencyKey:'bad',goalId:g.id,task:{submissionId:'code',kind:'coding',objective:'Write code',acceptance:['Pass']}})).status,400);
 });

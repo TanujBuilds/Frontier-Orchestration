@@ -10,7 +10,8 @@ const rank={background:0,normal:1,blocking:2};
 export class Coordinator {
  constructor({root,now=Date.now,registry=new Registry()}={}){
   this.store=new Store(root);this.now=now;this.registry=registry;
-  for(const m of this.store.all('mode'))if(!this.registry.modes.has(`${m.id}@${m.version}`))this.registry.registerMode(m);
+  for(const record of this.store.all('mode')){const m=record.definition??record;if(!this.registry.modes.has(`${m.id}@${m.version}`))this.registry.registerMode(m);}
+  for(const record of this.store.all('workflow')){const w=record.definition??record;if(!this.registry.workflows.has(`${w.id}@${w.version}`))this.registry.registerWorkflow(w);}
   this.learning=new Learning({c:this});
  }
  close(){this.store.close();}
@@ -20,10 +21,27 @@ export class Coordinator {
    if(existing.host!==os.hostname())throw Error('Worker host ownership is uncertain');
    try{process.kill(existing.pid,0);throw Error('Another worker owns this coordinator');}catch(e){if(e.code!=='ESRCH')throw e;}
    for(const t of this.store.all('task').filter(t=>t.owner&&SLOT.has(t.status))){t.status='uncertain';t.reason='Previous coordinator died; reconcile backend before reuse';this.store.put('task',t);this.emit('task.uncertain',t.goalId,t.id,{reason:t.reason});}
+   for(const p of this.store.all('planning').filter(p=>p.status==='running')){p.status='uncertain';p.reason='Previous planner owner died; reconcile its saved request';this.store.put('planning',p);}
   }
   const lease={id:'coordinator',token,pid:process.pid,host:os.hostname(),at:this.now()};this.store.put('lease',lease);return lease;
  });}
  releaseWorker(token){return this.store.tx(()=>{const l=this.store.maybe('lease','coordinator');if(l&&l.token!==token)throw Error('Worker ownership conflict');this.store.db.prepare('DELETE FROM records WHERE kind=? AND id=?').run('lease','coordinator');return {released:true};});}
+ recoverSaved(taskId,owner){return this.store.tx(()=>{
+  const lease=this.store.get('lease','coordinator');if(lease.token!==owner||lease.pid!==process.pid)throw Error('Current worker lease required for recovery');
+  const t=this.store.get('task',taskId);if(t.status!=='uncertain')throw Error('Task does not need ownership recovery');
+  const requests=this.store.db.prepare('SELECT status FROM requests WHERE task_id=?').all(taskId);
+  if(!requests.length||requests.some(r=>r.status!=='completed'))throw Error('Pending or ambiguous request prevents safe recovery');
+  if(!['consult','learning'].includes(t.spec.kind)&&!(t.spec.kind==='coding'&&['model','apply'].includes(t.checkpoint.phase)))throw Error('Backend/check quiescence requires separate verification');
+  const g=this.store.get('goal',t.goalId);t.owner=null;t.status=this.now()>=Math.min(g.deadline,t.deadline)?'partial':t.stopRequested?'stopped':t.pauseRequested?'paused':'queued';t.reason='Recovered from fully saved operations; no bounded check was active';this.store.put('task',t);this.emit('task.recovered',t.goalId,t.id,{status:t.status,spending:this.store.spent(t.id)});return this.getTask(t.id);
+ });}
+ recoverPlanning(goalId,owner){return this.store.tx(()=>{
+  const lease=this.store.get('lease','coordinator');if(lease.token!==owner||lease.pid!==process.pid)throw Error('Current worker lease required for recovery');
+  const p=this.store.get('planning',goalId),g=this.store.get('goal',goalId);if(p.status!=='uncertain')throw Error('Planner does not need ownership recovery');
+  const requests=this.store.db.prepare('SELECT status FROM requests WHERE task_id=?').all(goalId),saved=this.store.request(goalId,`plan-${p.attempt}`);
+  if(!requests.length||requests.some(r=>r.status!=='completed')||saved?.status!=='completed')throw Error('Pending or ambiguous planning request prevents safe recovery');
+  if(this.now()>=g.deadline){p.status='partial';p.owner=null;}else{p.status='running';p.owner=owner;}
+  this.store.put('planning',p);this.emit('planning.recovered',goalId,null,{attempt:p.attempt,status:p.status,spent:this.store.spent(goalId)});return p;
+ });}
  emit(type,goalId,taskId,data={}){return this.store.tx(()=>{const seq=this.store.event(type,{goalId,taskId,data,at:this.now()});if(taskId&&this.learning?.captures(type))this.learning.capture(taskId,seq);return seq;});}
  prepareGoal(raw,key){const manifest=normalizeGoal(raw,this.registry);return this.store.command(key,{op:'goal.prepare',manifest},()=>{
   const g=this.store.submission('goal','',manifest.submissionId,digest(manifest),id=>({id,manifest,hash:digest(manifest),version:1,status:'draft',createdAt:this.now(),activatedAt:null,deadline:null}));
@@ -38,7 +56,19 @@ export class Coordinator {
  getTask(id){const t=this.store.get('task',id),local=this.store.spent(id),spent={model:0,search:0,download:0,codexReview:0};for(const k of Object.keys(spent))spent[k]=Math.max(local[k]??0,t.remoteSpent?.[k]??0);return {...t,spent};}
  snapshot(){return {goals:this.store.all('goal').map(g=>this.getGoal(g.id)),events:this.store.events(0,1000),registry:this.registry.snapshot()};}
  liveGoal(g){if(g.status!=='active')throw Error('Goal is not active');if(this.now()>=g.deadline)throw Error('Goal deadline exceeded');}
- liveTask(t){const current=this.store.get('task',t.id),g=this.store.get('goal',current.goalId);this.liveGoal(g);if(current.goalVersion!==g.version)throw Error('Task needs explicit rebind to the approved goal version');if(current.deadline&&this.now()>=current.deadline)throw Error('Original task deadline exceeded');if(current.pauseRequested||current.stopRequested)throw Error('Task is paused or stopped');return current;}
+ liveTask(t,{allowStopped=false}={}){const current=this.store.get('task',t.id),g=this.store.get('goal',current.goalId);this.liveGoal(g);if(current.goalVersion!==g.version)throw Error('Task needs explicit rebind to the approved goal version');if(current.deadline&&this.now()>=current.deadline)throw Error('Original task deadline exceeded');if(current.pauseRequested||(current.stopRequested&&!(allowStopped&&current.status==='stopped'&&!current.owner)))throw Error('Task is paused or stopped');return current;}
+ startNativeText(input,key){return this.store.command(key,{op:'native.text.start',...input},()=>{
+  const t=this.getTask(input.taskId),g=this.store.get('goal',t.goalId);this.liveTask(t);
+  if(!g.manifest.mode.actors.includes('codex')||!['consult','learning'].includes(t.spec.kind))throw Error('Mode/capability prohibits native text execution');
+  if(t.spec.actor!=='codex')text(input.reason,'takeover reason');
+  if(t.owner||!['codex_ready','blocked','stopped','awaiting_review'].includes(t.status))throw Error('Verify quiescence before native execution');
+  if(!t.spec.dependsOn.every(id=>this.getTask(id).status==='accepted'))throw Error('Dependencies are incomplete');
+  t.status='codex_active';t.executionActor='codex';t.startedAt??=this.now();t.deadline??=Math.min(g.deadline,t.startedAt+t.spec.limits.seconds*1000);this.store.put('task',t);this.learning.pin(t.id);this.emit('task.native_started',g.id,t.id,{kind:t.spec.kind,reason:input.reason??null});return this.getTask(t.id);
+ });}
+ finishNativeText(input,key){return this.store.command(key,{op:'native.text.finish',...input},()=>{
+  const t=this.getTask(input.taskId);this.liveTask(t);if(t.status!=='codex_active'||t.executionActor!=='codex'||t.spec.kind!=='consult')throw Error('Native consult ownership required');
+  text(input.content,'native result',20000);t.result={content:input.content,actor:'codex',accounting:'native host; token totals unavailable'};t.status='accepted';this.store.put('task',t);this.emit('task.native_finished',t.goalId,t.id,{status:t.status,actor:'codex'});return this.getTask(t.id);
+ });}
  submitTask(input,key){const {goalId,...raw}=input;return this.store.command(key,{op:'task.submit',...input},()=>{
   const g=this.store.get('goal',goalId);this.liveGoal(g);const spec=normalizeTask(raw,g.manifest,this.registry),hash=digest(spec);
   const duplicate=this.store.db.prepare('SELECT * FROM submissions WHERE kind=? AND scope=? AND key=?').get('task',goalId,spec.submissionId);
@@ -49,6 +79,17 @@ export class Coordinator {
   for(const id of spec.dependsOn){const dep=this.store.get('task',id);if(dep.goalId!==goalId)throw Error('Dependency outside goal');}
   const t=this.store.submission('task',goalId,spec.submissionId,hash,id=>({id,goalId,goalVersion:g.version,spec,hash,status:spec.actor==='codex'?'codex_ready':'queued',sequence:this.store.all('task').length+1,createdAt:this.now(),startedAt:null,deadline:null,owner:null,checkpoint:{},attempts:0,reviews:0,questions:[],answers:[],feedback:[],yieldRequested:false,pauseRequested:false,stopRequested:false,reviewed:false,result:null}));
   this.emit('task.submitted',goalId,t.id,{actor:spec.actor,kind:spec.kind,hash});this.requestUrgentYield();return this.getTask(t.id);
+ });}
+ submitWorkflow(input,key){return this.store.command(key,{op:'workflow.submit',...input},()=>{
+  identifier(input.submissionId,'submissionId');const g=this.store.get('goal',input.goalId);this.liveGoal(g);
+  const definition=this.registry.workflows.get(`${input.workflowId}@${input.version}`);if(!definition)throw Error('Unknown workflow version');if(definition.mode!==g.manifest.mode.id)throw Error('Workflow mode differs from approved policy');
+  const definitionHash=digest(definition),hash=digest({goalId:g.id,definitionHash,submissionId:input.submissionId});
+  const existing=this.store.db.prepare('SELECT * FROM submissions WHERE kind=? AND scope=? AND key=?').get('workflow_run',g.id,input.submissionId);if(existing){if(existing.hash!==hash)throw Error('Workflow submission conflict');return this.store.get('workflow_run',existing.id);}
+  const byKey=new Map(definition.tasks.map(t=>[t.key,t])),ids=new Map();
+  const submit=stage=>{if(ids.has(stage.key))return ids.get(stage.key);const dependsOn=(stage.dependsOn??[]).map(k=>submit(byKey.get(k))),{key:stageKey,...spec}=stage;
+   const task=this.submitTask({goalId:g.id,...spec,dependsOn,submissionId:`${input.submissionId}-${stageKey}`},`wf-${digest({goal:g.id,run:input.submissionId,stageKey})}`);ids.set(stage.key,task.id);return task.id;};
+  for(const stage of definition.tasks)submit(stage);
+  const run=this.store.submission('workflow_run',g.id,input.submissionId,hash,id=>({id,goalId:g.id,workflowId:input.workflowId,version:input.version,definitionHash,goalVersion:g.version,tasks:[...ids.values()],at:this.now()}));this.emit('workflow.submitted',g.id,null,{id:run.id,definitionHash,tasks:run.tasks});return run;
  });}
  effectivePriorities(){const tasks=this.store.all('task'),p=new Map(tasks.map(t=>[t.id,rank[t.priority??t.spec.priority]]));let changed=true;
   while(changed){changed=false;for(const t of tasks)if(!TERMINAL.has(t.status))for(const id of t.spec.dependsOn)if(p.get(id)<p.get(t.id)){p.set(id,p.get(t.id));changed=true;}}
@@ -101,7 +142,10 @@ export class Coordinator {
   t.status=this.now()>=Math.min(g.deadline,t.deadline)?'partial':t.spec.kind==='coding'?(g.manifest.mode.review==='checks'?'ready_to_integrate':g.manifest.mode.review==='legacy'?'awaiting_legacy_review':'awaiting_review'):reviewRequired&&g.manifest.mode.review==='operator'?'awaiting_review':'accepted';
   this.store.put('task',t);this.emit('task.result',t.goalId,t.id,{status:t.status,result});return this.getTask(t.id);
  });}
- review(input,key){return this.store.command(key,{op:'task.review',...input},()=>{const t=this.store.get('task',input.taskId),g=this.store.get('goal',t.goalId);this.liveGoal(g);if(g.manifest.mode.review!=='operator')throw Error('Mode prohibits Codex operator review');if(t.status!=='awaiting_review')throw Error('Task is not awaiting review');if(t.reviews>=t.spec.limits.reviews)throw Error('Review limit reached');if(!['accept','revise'].includes(input.decision))throw Error('Invalid review decision');text(input.feedback,'feedback',12000);t.reviews++;t.feedback.push({decision:input.decision,text:input.feedback,at:this.now()});t.reviewed=true;t.status=input.decision==='accept'?(t.spec.kind==='coding'?'ready_to_integrate':'accepted'):t.reviews>=t.spec.limits.reviews?'blocked':'queued';if(input.decision==='revise')t.checkpoint={...t.checkpoint,phase:'attempt'};this.store.put('task',t);this.emit('task.reviewed',t.goalId,t.id,{decision:input.decision});this.requestUrgentYield();return this.getTask(t.id);});}
+ review(input,key){return this.store.command(key,{op:'task.review',...input},()=>{const t=this.store.get('task',input.taskId),g=this.store.get('goal',t.goalId);this.liveTask(t);if(g.manifest.mode.review!=='operator')throw Error('Mode prohibits Codex operator review');if(t.status!=='awaiting_review')throw Error('Task is not awaiting review');if(t.reviews>=t.spec.limits.reviews)throw Error('Review limit reached');if(!['accept','revise'].includes(input.decision))throw Error('Invalid review decision');text(input.feedback,'feedback',12000);t.reviews++;t.feedback.push({decision:input.decision,text:input.feedback,at:this.now()});t.reviewed=true;
+  const exhausted=t.reviews>=t.spec.limits.reviews||t.attempts>=t.spec.limits.attempts||(this.store.spent(t.id).model??0)>=t.spec.limits.modelCalls;
+  t.status=input.decision==='accept'?(t.spec.kind==='coding'?'ready_to_integrate':'accepted'):exhausted?'blocked':'queued';if(input.decision==='revise'){t.checkpoint={...t.checkpoint,phase:'attempt'};if(exhausted)t.reason='Revision cannot proceed: original review, attempt or request budget exhausted';}
+  this.store.put('task',t);this.emit('task.reviewed',t.goalId,t.id,{decision:input.decision});this.requestUrgentYield();return this.getTask(t.id);});}
  setPriority(input,key){return this.store.command(key,{op:'task.priority',...input},()=>{const t=this.store.get('task',input.taskId);if(!(input.priority in rank))throw Error('Invalid priority');if(t.spec.kind==='learning'&&input.priority!=='background')throw Error('Learning priority must remain background');text(input.reason,'priority reason',2000);t.priority=input.priority;this.store.put('task',t);this.emit('task.priority',t.goalId,t.id,{priority:input.priority,reason:input.reason});this.requestUrgentYield();return this.getTask(t.id);});}
  control(input,key){return this.store.command(key,{op:'control',...input},()=>{
   if(!['pause','stop','resume'].includes(input.action))throw Error('Invalid control');
@@ -113,9 +157,9 @@ export class Coordinator {
    if(TERMINAL.has(t.status))continue;if(t.status==='uncertain')throw Error('Uncertain ownership must be reconciled');
    if(input.action==='resume'){
     if(t.deadline&&this.now()>=t.deadline)continue;t.stopRequested=t.pauseRequested=false;
-    if(['paused','stopped'].includes(t.status))t.status=t.spec.actor==='codex'?'codex_ready':'queued';
+    if(['paused','stopped'].includes(t.status)){t.status=t.controlReturnStatus??(t.executionActor==='codex'?'codex_active':t.spec.actor==='codex'?'codex_ready':'queued');delete t.controlReturnStatus;}
    }else if(t.status==='running'){t.pauseRequested=input.action==='pause';t.stopRequested=input.action==='stop';}
-   else if(['queued','suspended','codex_ready'].includes(t.status)){t.status=input.action==='stop'?'stopped':'paused';}
+   else if(!t.owner&&!['paused','stopped','legacy_reviewing'].includes(t.status)){t.controlReturnStatus=t.status;t.status=input.action==='stop'?'stopped':'paused';t.pauseRequested=input.action==='pause';t.stopRequested=input.action==='stop';}
    this.store.put('task',t);
   }
   this.emit('work.control',g.id,input.taskId??null,{action:input.action});return input.goalId?this.getGoal(g.id):this.getTask(input.taskId);

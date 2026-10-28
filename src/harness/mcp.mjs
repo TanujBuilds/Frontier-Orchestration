@@ -2,7 +2,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { readFile } from 'node:fs/promises';
-import { pathToFileURL } from 'node:url';
+import { isEntry } from './entry.mjs';
 import { Registry } from './contracts.mjs';
 
 export const registryTool={name:'registry_list',description:'List the registered versioned modes, capabilities and workflows. Does not dispatch work.',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true}};
@@ -31,4 +31,4 @@ async function main(){
  };
  const tools=await invoke('tools_list',{});await startMcp({invoke,tools});
 }
-if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href)main().catch(e=>{console.error(e.message);process.exitCode=1;});
+if(isEntry(import.meta.url))main().catch(e=>{console.error(e.message);process.exitCode=1;});

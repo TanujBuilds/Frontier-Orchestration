@@ -63,3 +63,14 @@ class HarnessResearchTests(unittest.TestCase):
         self.assertFalse(self.store.execution_status(job['id'])['quiescent'])
         self.store.execution_end(job['id'],'test-token')
         self.assertTrue(self.store.execution_status(job['id'])['quiescent'])
+    def test_answer_retry_is_bound_to_question_and_not_applied_to_a_later_question(self):
+        job=self.submit();self.store.claim_next();self.store.ask(job['id'],'Reliability or latency?')
+        question=[e['data'] for e in self.store.events(job['id']) if e['type']=='question'][-1]
+        first=self.store.answer(job['id'],'Reliability','codex',question_id=question['id'])
+        replay=self.store.answer(job['id'],'Reliability','codex',question_id=question['id'])
+        self.assertEqual(first['checkpoint'],replay['checkpoint'])
+        self.assertEqual(len([e for e in self.store.events(job['id']) if e['type']=='answered']),1)
+        with self.assertRaises(StateError):self.store.answer(job['id'],'Latency','codex',question_id=question['id'])
+        self.store.claim_next();self.store.ask(job['id'],'What deployment target?')
+        self.store.answer(job['id'],'Reliability','codex',question_id=question['id'])
+        self.assertEqual(self.store.get(job['id'])['status'],'awaiting_supervisor')

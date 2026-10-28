@@ -7,6 +7,7 @@ import {git,command} from '../src/project/process.mjs';
 import {Coordinator} from '../src/harness/coordinator.mjs';
 import {Worker} from '../src/harness/worker.mjs';
 import {Integration} from '../src/harness/integration.mjs';
+import {Goals} from '../src/harness/goals.mjs';
 
 async function fixture(t,mode='collaborative'){
  const root=await mkdtemp(path.join(os.tmpdir(),'harness-integrate-')),repo=path.join(root,'repo');await mkdir(path.join(repo,'src'),{recursive:true});await mkdir(path.join(repo,'checks'));
@@ -50,6 +51,38 @@ test('Codex-only finalization rejects protected check edits',async t=>{
  await writeFile(path.join(native.native.worktree,'checks/verify.mjs'),'process.exit(0)');
  await assert.rejects(f.integration.finishNative({taskId:a.id,summary:'Done'},'finish'),/scope|protected|outside/);
  assert.equal(f.c.getTask(a.id).status,'codex_active');
+});
+test('safe stop permits explicit takeover and native pause resumes the same ownership',async t=>{
+ const f=await fixture(t),a=f.c.submitTask({goalId:f.g.id,...task},'s'),worker=new Worker({...f,provider:provider()});
+ await worker.tick();
+ f.c.control({taskId:a.id,action:'stop'},'stop');await worker.tick();
+ const stopped=f.c.getTask(a.id);assert.equal(stopped.status,'stopped');assert.equal(stopped.stopRequested,true);
+ const native=await f.integration.takeover({taskId:a.id,reason:'Finish after the verified safe stop'},'takeover');
+ assert.equal(native.status,'codex_active');assert.equal(native.stopRequested,false);
+ f.c.control({taskId:a.id,action:'pause'},'pause');assert.equal(f.c.getTask(a.id).status,'paused');
+ await assert.rejects(f.integration.finishNative({taskId:a.id,summary:'Paused'},'paused-finish'),/ownership|paused/);
+ f.c.control({taskId:a.id,action:'resume'},'resume');assert.equal(f.c.getTask(a.id).status,'codex_active');
+ assert.equal(f.c.claimNext('other-worker'),null);assert.equal(f.c.getTask(a.id).deadline,stopped.deadline);
+ await writeFile(path.join(native.native.worktree,'src/answer.mjs'),'export const answer=42;\n');
+ const done=await f.integration.finishNative({taskId:a.id,summary:'Completed under native ownership'},'finish');assert.equal(done.status,'accepted');assert.equal(done.spent.model,0);
+});
+test('takeover finalization rejects a modified frozen worker checkout',async t=>{
+ const f=await fixture(t),a=f.c.submitTask({goalId:f.g.id,...task,limits:{attempts:1}},'s');await new Worker({...f,provider:provider(7)}).drain();
+ const native=await f.integration.takeover({taskId:a.id,reason:'Repair remaining constant'},'takeover');
+ await writeFile(path.join(native.native.workerWorktree,'src/answer.mjs'),'export const answer=99;\n');
+ await writeFile(path.join(native.native.worktree,'src/answer.mjs'),'export const answer=42;\n');
+ await assert.rejects(f.integration.finishNative({taskId:a.id,summary:'Done'},'finish'),/frozen|worker.*changed/i);
+ assert.equal(f.c.getTask(a.id).status,'codex_active');
+});
+test('expanded assignment reads require an approved goal version and keep execution history',async t=>{
+ const f=await fixture(t),a=f.c.submitTask({goalId:f.g.id,...task,permissions:{readPaths:['src/answer.mjs','checks/'],writePaths:['src/answer.mjs'],checks:['verify']}},'s'),worker=new Worker({...f,provider:provider()});
+ await worker.tick();const before=f.c.getTask(a.id);f.c.control({taskId:a.id,action:'stop'},'stop');await worker.tick();
+ const spec={...before.spec,permissions:{...before.spec.permissions,readPaths:['src/','checks/']}},goals=new Goals(f.c);
+ assert.throws(()=>goals.rebind({taskId:a.id,spec},'unapproved'),/version|approval|exact/);
+ const revision=goals.prepareRevision({goalId:f.g.id,expectedHash:f.g.hash,manifest:{submissionId:'g',objective:'Implement42 with approved combined-check source reads',acceptance:['All checks pass'],mode:'collaborative',environment:'fixture',project:f.g.manifest.project}},'prepare-revision');goals.activateRevision({revisionId:revision.id,hash:revision.hash},'approve-revision');
+ const rebound=goals.rebind({taskId:a.id,spec},'rebind');assert.equal(rebound.attempts,before.attempts);assert.deepEqual(rebound.checkpoint,before.checkpoint);assert.equal(rebound.deadline,before.deadline);assert.equal(rebound.goalVersion,2);
+ await worker.drain();assert.equal(f.c.getTask(a.id).status,'awaiting_review');assert.equal(f.c.getTask(a.id).attempts,1);
+ const opened=await worker.adapters.coding.open(f.c.getTask(a.id));assert.deepEqual(opened.manifest.permissions.readPaths,['src/','checks/']);
 });
 test('overnight review spends bounded check-gated calls then integrates a revised candidate',async t=>{
  const f=await fixture(t,'overnight_review'),a=f.c.submitTask({goalId:f.g.id,...task},'s');let reviews=0;

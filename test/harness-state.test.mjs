@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync,rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {DatabaseSync} from 'node:sqlite';
 import { Coordinator } from '../src/harness/coordinator.mjs';
 
 function fixture(t,extra={}){
@@ -12,6 +13,28 @@ function fixture(t,extra={}){
  c.activateGoal({goalId:g.id,hash:g.hash},'activate');return {c,root,g,advance:n=>clock+=n};
 }
 const task=(id,extra={})=>({submissionId:id,kind:'research',objective:'Research '+id,acceptance:['Saved report'],...extra});
+test('an unknown database version is rejected without rewriting its schema marker',t=>{
+ const root=mkdtempSync(path.join(os.tmpdir(),'harness-version-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
+ const file=path.join(root,'harness.sqlite3'),db=new DatabaseSync(file);db.exec('PRAGMA user_version=99');db.close();
+ assert.throws(()=>new Coordinator({root}),/version|schema/i);const check=new DatabaseSync(file);assert.equal(check.prepare('PRAGMA user_version').get().user_version,99);check.close();
+});
+test('a consult revision cannot replay a spent answer as a new candidate',t=>{
+ const {c,g}=fixture(t),a=c.submitTask({goalId:g.id,...task('consult',{kind:'consult'})},'consult');c.claimNext('o');c.beginAttempt(a.id,'o');
+ const r=c.reserve(a.id,{key:'consult-1',kind:'model'},'o');c.saveRequest(r.id,{content:'Incomplete'});c.completeTask(a.id,{content:'Incomplete'},'o',{reviewRequired:true});
+ const revised=c.review({taskId:a.id,decision:'revise',feedback:'Missing material evidence'},'revise');assert.equal(revised.status,'blocked');assert.match(revised.reason,/budget|attempt|request/i);assert.equal(revised.spent.model,1);
+});
+test('workflow submission pins a validated template and atomically maps dependencies',t=>{
+ const {c,g}=fixture(t);c.registry.registerWorkflow({id:'pair',version:1,mode:'collaborative',tasks:[{key:'b',kind:'consult',objective:'Compare saved evidence',acceptance:['Comparison'],dependsOn:['a']},{key:'a',kind:'research',objective:'Gather public evidence',acceptance:['Saved sources']}]});
+ const input={goalId:g.id,workflowId:'pair',version:1,submissionId:'run-one'},run=c.submitWorkflow(input,'workflow');assert.equal(run.tasks.length,2);const tasks=run.tasks.map(id=>c.getTask(id));assert.equal(tasks[1].spec.dependsOn[0],tasks[0].id);
+ assert.deepEqual(c.submitWorkflow(input,'retry'),run);assert.equal(c.getGoal(g.id).tasks.length,2);assert.ok(run.definitionHash);
+});
+test('manual pause and stop preserve a question or review inbox instead of reexecuting it',t=>{
+ const {c,g}=fixture(t),a=c.submitTask({goalId:g.id,...task('a')},'a');c.claimNext('o');c.ask(a.id,'Reliability or latency?',{},'o');
+ c.control({taskId:a.id,action:'pause'},'pause');assert.equal(c.getTask(a.id).status,'paused');assert.throws(()=>c.answer({taskId:a.id,answer:'Reliability',responder:'codex'},'answer-paused'),/waiting|paused/);
+ c.control({taskId:a.id,action:'resume'},'resume');assert.equal(c.getTask(a.id).status,'awaiting_supervisor');c.answer({taskId:a.id,answer:'Reliability',responder:'codex'},'answer');c.claimNext('o');c.completeTask(a.id,{content:'Saved'},'o',{reviewRequired:true});
+ c.control({taskId:a.id,action:'stop'},'stop');assert.equal(c.getTask(a.id).status,'stopped');assert.throws(()=>c.review({taskId:a.id,decision:'accept',feedback:'Saved answer checked'},'review-stopped'),/stopped|review/);
+ c.control({taskId:a.id,action:'resume'},'resume-review');assert.equal(c.getTask(a.id).status,'awaiting_review');assert.equal(c.claimNext('other'),null);
+});
 test('submission and commands are idempotent but changed content conflicts',t=>{
  const {c,g}=fixture(t);const a=c.submitTask({goalId:g.id,...task('a')},'add-a');
  assert.equal(c.submitTask({goalId:g.id,...task('a')},'add-a').id,a.id);
@@ -100,4 +123,9 @@ test('worker lease rejects a live competitor and stale task owners cannot reserv
  const a=c.submitTask({goalId:g.id,...task('a')},'a');c.claimNext('one');
  assert.throws(()=>other.reserve(a.id,{key:'evil',kind:'model'},'two'),/ownership/);
  c.releaseWorker('worker-one');assert.ok(other.acquireWorker('worker-two'));
+});
+test('native Codex text execution is recorded without a DeepSeek reservation',t=>{
+ const {c,g}=fixture(t,{mode:'codex_only'}),a=c.submitTask({goalId:g.id,...task('explain',{kind:'consult'})},'a');
+ c.startNativeText({taskId:a.id},'start');const done=c.finishNativeText({taskId:a.id,content:'Native explanation recorded by the supervisor.'},'finish');
+ assert.equal(done.status,'accepted');assert.equal(done.spent.model,0);assert.equal(done.executionActor,'codex');
 });

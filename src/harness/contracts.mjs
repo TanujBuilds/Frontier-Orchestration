@@ -20,6 +20,15 @@ export function identifier(value,label='id') {text(value,label,120);if(!/^[a-zA-
 export function integer(value,label,min,max) {if(!Number.isInteger(value)||value<min||value>max)throw Error(`Invalid ${label}: expected ${min}..${max}`);return value;}
 function strings(v,label,{empty=false,max=100}={}) {if(!Array.isArray(v)||(!empty&&!v.length)||v.length>max)throw Error(`Invalid ${label}`);v.forEach(x=>text(x,label));if(new Set(v).size!==v.length)throw Error(`Duplicate ${label}`);return [...v];}
 const clone=x=>structuredClone(x);
+const stringSchema={type:'string'},stringsSchema={type:'array',items:stringSchema};
+const objectSchema=(properties,required=[])=>({type:'object',properties,required,additionalProperties:false});
+export const scopeInputSchema=objectSchema({seedUrls:stringsSchema,includeDomains:stringsSchema,excludeDomains:stringsSchema});
+export const goalInputSchema=objectSchema({
+ submissionId:stringSchema,objective:stringSchema,acceptance:stringsSchema,mode:{...stringSchema,description:'Registered mode id; collaborative is the default.'},modeVersion:{type:'integer',minimum:1},environment:{type:'string',enum:['live','fixture']},scope:scopeInputSchema,
+ limits:objectSchema({hours:{type:'integer',minimum:1,maximum:24},maxTasks:{type:'integer',minimum:1,maximum:100},reviewAgentRuns:{type:'integer',minimum:0,maximum:10}}),
+ project:{anyOf:[{type:'null'},objectSchema({repo:{...stringSchema,description:'Absolute clean committed repository root.'},baseCommit:{...stringSchema,description:'Exact40-character Git base revision.'},readPaths:stringsSchema,writePaths:stringsSchema,checks:{type:'array',items:objectSchema({id:stringSchema,argv:stringsSchema,timeoutMs:{type:'integer',minimum:100,maximum:600000},screenshots:stringsSchema,env:{type:'object'}},['id','argv'])}},['repo','baseCommit','readPaths','writePaths','checks'])]},
+},['submissionId','objective','acceptance']);
+export const taskInputSchema=objectSchema({submissionId:stringSchema,kind:{type:'string',enum:['coding','research','consult','learning']},actor:{type:'string',enum:['codex','deepseek']},objective:stringSchema,context:stringSchema,acceptance:stringsSchema,dependsOn:stringsSchema,priority:{type:'string',enum:['blocking','normal','background']},permissions:objectSchema({readPaths:stringsSchema,writePaths:stringsSchema,checks:stringsSchema},['readPaths','writePaths','checks']),scope:scopeInputSchema,limits:{type:'object'}},['submissionId','kind','objective','acceptance']);
 const baseModes=[
  {id:'collaborative',version:1,planner:'codex',actors:['codex','deepseek'],review:'operator',capabilities:['coding','research','consult','learning']},
  {id:'deepseek_only',version:1,planner:'deepseek',actors:['deepseek'],review:'checks',capabilities:['coding','research','consult','learning']},
@@ -76,7 +85,7 @@ export function normalizeGoal(raw,registry=new Registry()){
  if(raw.project){keys(raw.project,['repo','baseCommit','readPaths','writePaths','checks'],'project');project=clone(raw.project);text(project.repo,'repository');if(!path.isAbsolute(project.repo))throw Error('Repository must be absolute');if(!/^[a-f0-9]{40}$/.test(project.baseCommit??''))throw Error('Invalid base commit');validatePermissions(project);}
  return {schema:1,environment,submissionId:identifier(raw.submissionId,'submissionId'),objective:text(raw.objective,'objective'),acceptance:strings(raw.acceptance,'acceptance'),project,mode,capabilities:registry.snapshot().capabilities.filter(c=>mode.capabilities.includes(c.id)),scope:sourceScope(raw.scope),limits};
 }
-const TASK_LIMITS={coding:{seconds:28800,attempts:5,modelCalls:50,reviews:2,questions:3},research:{seconds:7200,attempts:20,modelCalls:20,reviews:2,questions:3,searches:30,downloads:50},consult:{seconds:600,attempts:1,modelCalls:1,reviews:0,questions:0},learning:{seconds:600,attempts:2,modelCalls:6,reviews:0,questions:0}};
+const TASK_LIMITS={coding:{seconds:28800,attempts:5,modelCalls:50,reviews:2,questions:3},research:{seconds:7200,attempts:20,modelCalls:20,reviews:2,questions:3,searches:30,downloads:50},consult:{seconds:600,attempts:1,modelCalls:1,reviews:2,questions:0},learning:{seconds:600,attempts:2,modelCalls:6,reviews:0,questions:0}};
 export function normalizeTask(raw,goal,registry=new Registry()) {
  keys(raw,['submissionId','kind','actor','objective','context','acceptance','dependsOn','priority','permissions','scope','limits'],'task');
  if(!goal.mode.capabilities.includes(raw.kind)||!TASK_LIMITS[raw.kind])throw Error('Mode prohibits capability');

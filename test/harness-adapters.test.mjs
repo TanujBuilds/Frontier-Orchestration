@@ -83,3 +83,8 @@ test('a real protocol failure feeds bounded learning and a later assignment retr
  const done=f.c.getTask(fresh.id);assert.equal(done.status,'awaiting_review');assert.equal(done.memory.length,1);
  assert.ok(f.c.store.all('evaluation')[0].passed);assert.equal(f.c.store.all('lesson')[0].status,'active');
 });
+test('collaborative consult results wait for the main supervisor review',async t=>{
+ const f=await setup(t),task=f.c.submitTask({goalId:f.g.id,submissionId:'consult',kind:'consult',objective:'Explain the design',acceptance:['Useful answer']},'consult');
+ await new Worker({...f,provider:{complete:async()=>({content:'Candidate explanation'})}}).drain();assert.equal(f.c.getTask(task.id).status,'awaiting_review');
+ const done=f.c.review({taskId:task.id,decision:'accept',feedback:'Explanation checked against the question'},'review');assert.equal(done.status,'accepted');assert.equal(done.spent.model,1);assert.equal(done.attempts,1);
+});
