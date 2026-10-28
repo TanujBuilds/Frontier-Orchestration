@@ -53,6 +53,7 @@ export class Integration {
  async accept(input,key){return this.effect(key,{op:'integration.accept',...input},async()=>{
   let t=this.c.getTask(input.taskId),g=this.c.store.get('goal',t.goalId);this.c.liveGoal(g);
   if(t.status==='accepted'&&t.integration)return t;
+  this.c.liveTask(t);
   if(!['awaiting_review','ready_to_integrate'].includes(t.status))throw Error('Candidate is not ready for integration');
   if(g.manifest.mode.review==='legacy'&&t.legacyDecision?.decision!=='accept')throw Error('Passing legacy review required');
   if(g.integrationOwner&&g.integrationOwner!==t.id)throw Error('Native Codex task owns integration workspace');
@@ -65,10 +66,11 @@ export class Integration {
    if(!candidate.journal.last('stage.accepted'))await candidate.journal.append('stage.accepted',{stageId:'candidate',...checkpoint});
    const target=await this.goalWorkspace(g.id),release=await target.journal.lock();
    try{
-    await target.workspace.recover();const changes=await this.changes(candidate.workspace,candidate.manifest.baseCommit,t.spec.permissions.writePaths);
+    this.c.liveTask(t);await target.workspace.recover();const changes=await this.changes(candidate.workspace,candidate.manifest.baseCommit,t.spec.permissions.writePaths);
     await this.applyChanges(target.workspace,changes,`import-${t.id}`,t.spec.permissions.writePaths);
     const runner=this.checks(target.workspace);await runner.verify();const results=await runner.run(g.manifest.project.checks,`integrate-${t.id}`);
     if(!results.every(x=>x.passed))throw Error('Integrated checks failed');
+    this.c.liveTask(t);
     const stage=`task-${t.id}`,imported=await target.journal.memo(`${stage}/checkpoint`,()=>target.workspace.checkpoint({id:stage,writePaths:t.spec.permissions.writePaths}));
     if(!target.journal.events.some(e=>e.type==='stage.accepted'&&e.data.stageId===stage))await target.journal.append('stage.accepted',{stageId:stage,...imported});
     this.c.store.tx(()=>{const current=this.c.store.get('task',t.id);current.status='accepted';current.integration={commit:imported.commit,candidateCommit:checkpoint.commit,worktree:target.workspace.root,checks:results,review:g.manifest.mode.review==='checks'?'none':g.manifest.mode.review==='legacy'?'codex_legacy':'codex_operator'};this.c.store.put('task',current);this.c.emit('task.integrated',g.id,t.id,current.integration);});
@@ -79,14 +81,16 @@ export class Integration {
  async startNative(input,key){return this.effect(key,{op:'native.start',...input},()=>this.beginNative(input.taskId));}
  async beginNative(taskId,extra={}){
   const t=this.c.getTask(taskId),g=this.c.store.get('goal',t.goalId);this.c.liveGoal(g);
+  this.c.liveTask(t);
   if(!g.manifest.mode.actors.includes('codex')||t.spec.kind!=='coding')throw Error('Mode prohibits native Codex execution');
   if(t.status==='codex_active')return t;
   if(!['codex_ready','blocked','stopped','awaiting_review','ready_to_integrate'].includes(t.status)||t.owner)throw Error('Worker must be quiescent before native execution');
   if(!t.spec.dependsOn.every(id=>this.c.getTask(id).status==='accepted'))throw Error('Dependencies are incomplete');
   if(g.integrationOwner&&g.integrationOwner!==t.id)throw Error('Another native task owns integration workspace');
-  const target=await this.goalWorkspace(g.id);
-  this.c.store.tx(()=>{const current=this.c.store.get('task',t.id);current.status='codex_active';current.executionActor='codex';current.startedAt??=this.c.now();current.deadline??=Math.min(g.deadline,current.startedAt+t.spec.limits.seconds*1000);current.native={worktree:target.workspace.root,startSnapshot:null,...extra};const goal=this.c.store.get('goal',g.id);goal.integrationOwner=t.id;this.c.store.put('goal',goal);this.c.store.put('task',current);});
-  const snapshot=await target.workspace.snapshot();this.c.store.tx(()=>{const current=this.c.store.get('task',t.id);current.native.startSnapshot=snapshot;this.c.store.put('task',current);this.c.emit('task.native_started',g.id,t.id,{worktree:target.workspace.root});});return this.c.getTask(t.id);
+  const target=await this.goalWorkspace(g.id),unlock=await target.journal.lock();try{
+   const snapshot=await target.workspace.snapshot();
+   this.c.store.tx(()=>{const current=this.c.liveTask(t);current.status='codex_active';current.executionActor='codex';current.startedAt??=this.c.now();current.deadline??=Math.min(g.deadline,current.startedAt+t.spec.limits.seconds*1000);current.native={worktree:target.workspace.root,startSnapshot:snapshot,...extra};const goal=this.c.store.get('goal',g.id);if(goal.integrationOwner&&goal.integrationOwner!==t.id)throw Error('Another native task owns integration workspace');goal.integrationOwner=t.id;this.c.store.put('goal',goal);this.c.store.put('task',current);this.c.learning.pin(t.id);this.c.emit('task.native_started',g.id,t.id,{worktree:target.workspace.root});});
+  }finally{await unlock();}return this.c.getTask(t.id);
  }
  async takeover(input,key){return this.effect(key,{op:'native.takeover',...input},async()=>{
   const t=this.c.getTask(input.taskId);text(input.reason,'takeover reason');
@@ -101,6 +105,7 @@ export class Integration {
  });}
  async finishNative(input,key){return this.effect(key,{op:'native.finish',...input},async()=>{
   const t=this.c.getTask(input.taskId),g=this.c.store.get('goal',t.goalId);this.c.liveGoal(g);text(input.summary,'summary');if(t.status!=='codex_active'||g.integrationOwner!==t.id)throw Error('Native task ownership mismatch');
+  this.c.liveTask(t);
   const target=await this.goalWorkspace(g.id,{native:true}),release=await target.journal.lock();try{
    const snapshot=await target.workspace.snapshot(),before=t.native.startSnapshot;
    for(const f of new Set([...Object.keys(snapshot),...Object.keys(before)]))if(snapshot[f]!==before[f]&&(protectedPath(f)||!matches(f,t.spec.permissions.writePaths)))throw Error('Native change outside approved scope or protected checks');

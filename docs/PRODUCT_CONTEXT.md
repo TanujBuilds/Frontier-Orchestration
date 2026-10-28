@@ -10,6 +10,12 @@ Success means a useful result with less manual coordination. A large amount of l
 
 ## Current role split
 
+The optional Frontier Harness approved on2026-10-28 adds versioned collaboration
+modes and bounded learning; see [HARNESS.md](HARNESS.md). Its collaborative mode
+allows direct Codex execution and takeover. The role split below remains the
+contract for existing text and overnight workflows, rather than restricting
+explicitly selected harness modes. The harness remains under validation.
+
 - **User:** states the goal and accepts the first plan for the initial workflow.
 - **Local model:** turns the brief into an ordered plan and does substantial, well-scoped implementation work. The first integration calls an already-running DeepSeek service through its OpenAI-compatible API.
 - **Frontier model:** independent reviewer by default. It judges finished evidence against the approved plan and may request focused corrections. An explicit, optional one-call pre-stage guidance path is available when needed; Codex does not write routine assignments or edit code. The first personal integration is a signed-in Codex CLI on the user's Mac, which is a scarce usage window.
