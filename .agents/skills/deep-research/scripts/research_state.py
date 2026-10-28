@@ -47,7 +47,7 @@ def _keys(value, allowed, label):
 
 def normalize_manifest(raw):
     """Validate a manifest and materialize defaults before approval hashing."""
-    _keys(raw, ('schema', 'mode', 'submission_id', 'question', 'scope', 'limits', 'not_after', 'collaboration'), 'manifest')
+    _keys(raw, ('schema', 'mode', 'submission_id', 'question', 'scope', 'limits', 'not_after', 'collaboration', 'executor'), 'manifest')
     mode = raw.get('mode', 'live')
     if mode not in ('live', 'fixture'):
         raise StateError('mode must be live or fixture')
@@ -55,7 +55,7 @@ def normalize_manifest(raw):
     if type(schema) is not int or schema not in (1, 2):
         raise StateError('manifest schema must be 1 or 2')
     extension = {}
-    if schema == 1 and ('not_after' in raw or 'collaboration' in raw):
+    if schema == 1 and ('not_after' in raw or 'collaboration' in raw or 'executor' in raw):
         raise StateError('harness fields require manifest schema 2')
     if schema == 2:
         deadline = raw.get('not_after')
@@ -66,6 +66,9 @@ def normalize_manifest(raw):
         if policy.get('supervisor') not in ('codex', 'user', 'none') or type(policy.get('max_questions')) is not int or not 0 <= policy['max_questions'] <= 3:
             raise StateError('invalid collaboration policy')
         extension = {'not_after': deadline, 'collaboration': policy}
+        if 'executor' in raw:
+            if raw['executor'] not in ('deepseek','operator'):raise StateError('invalid research executor')
+            extension['executor']=raw['executor']
     submission = raw.get('submission_id')
     if not isinstance(submission, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,80}', submission):
         raise StateError('submission_id must contain 1 to 80 letters, numbers, underscores, or hyphens')
@@ -263,6 +266,7 @@ class Store:
         now = time.time() if now is None else now
         with self._db(transaction=True) as db:
             row = db.execute('''SELECT * FROM jobs WHERE status IN ('running','queued')
+                                AND COALESCE(json_extract(manifest_json,'$.executor'),'deepseek')='deepseek'
                                 ORDER BY CASE status WHEN 'running' THEN 0 ELSE 1 END,created_at,rowid LIMIT 1''').fetchone()
             if row is None:
                 return None
@@ -287,6 +291,8 @@ class Store:
         now = time.time() if now is None else now
         with self._db(transaction=True) as db:
             job = self._get(db, job_id)
+            if kind=='model' and job['manifest'].get('executor')=='operator':
+                raise StateError('operator research prohibits model requests')
             row = db.execute('SELECT * FROM operations WHERE id=?', (op_id,)).fetchone()
             if row is not None:
                 if row['job_id'] != job_id or row['kind'] != kind or row['payload_json'] != encoded:

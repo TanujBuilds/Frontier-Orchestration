@@ -34,8 +34,8 @@ export class Coordinator {
   if(g.status==='draft'){g.status='active';g.activatedAt??=this.now();g.deadline??=g.activatedAt+g.manifest.limits.hours*3600000;this.store.put('goal',g);this.emit('goal.activated',g.id,null,{hash:g.hash,version:g.version});}
   return g;
  });}
- getGoal(id){const g=this.store.get('goal',id);return {...g,tasks:this.store.all('task').filter(t=>t.goalId===id).map(t=>this.getTask(t.id)),reviewerRuns:this.store.all('reviewer').filter(r=>r.goalId===id)};}
- getTask(id){const t=this.store.get('task',id),local=this.store.spent(id),spent={model:0,search:0,download:0};for(const k of Object.keys(spent))spent[k]=Math.max(local[k]??0,t.remoteSpent?.[k]??0);return {...t,spent};}
+ getGoal(id){const g=this.store.get('goal',id),planning=this.store.maybe('planning',id);return {...g,planning:planning?{...planning,spent:this.store.spent(id).model??0}:null,tasks:this.store.all('task').filter(t=>t.goalId===id).map(t=>this.getTask(t.id)),reviewerRuns:this.store.all('reviewer').filter(r=>r.goalId===id)};}
+ getTask(id){const t=this.store.get('task',id),local=this.store.spent(id),spent={model:0,search:0,download:0,codexReview:0};for(const k of Object.keys(spent))spent[k]=Math.max(local[k]??0,t.remoteSpent?.[k]??0);return {...t,spent};}
  snapshot(){return {goals:this.store.all('goal').map(g=>this.getGoal(g.id)),events:this.store.events(0,1000),registry:this.registry.snapshot()};}
  liveGoal(g){if(g.status!=='active')throw Error('Goal is not active');if(this.now()>=g.deadline)throw Error('Goal deadline exceeded');}
  submitTask(input,key){const {goalId,...raw}=input;return this.store.command(key,{op:'task.submit',...input},()=>{
@@ -56,6 +56,7 @@ export class Coordinator {
  eligible(t){const g=this.store.get('goal',t.goalId);return g.status==='active'&&g.deadline>this.now()&&(!t.deadline||t.deadline>this.now())&&t.goalVersion===g.version&&t.spec.dependsOn.every(id=>this.store.get('task',id).status==='accepted');}
  requestUrgentYield(){const tasks=this.store.all('task'),p=this.effectivePriorities();for(const active of tasks.filter(t=>t.status==='running'&&t.spec.actor==='deepseek'))if(tasks.some(t=>['queued','suspended'].includes(t.status)&&this.eligible(t)&&p.get(t.id)>p.get(active.id))){active.yieldRequested=true;this.store.put('task',active);this.emit('task.yield_requested',active.goalId,active.id);}}
  claimNext(owner){identifier(owner,'owner');return this.store.tx(()=>{
+  if(this.store.all('planning').some(p=>['running','uncertain'].includes(p.status)))return null;
   const tasks=this.store.all('task');if(tasks.some(t=>SLOT.has(t.status)&&t.spec.actor==='deepseek'))return null;
   const priorities=this.effectivePriorities();const candidates=tasks.filter(t=>['queued','suspended'].includes(t.status)&&t.spec.actor==='deepseek'&&this.eligible(t)).sort((a,b)=>priorities.get(b.id)-priorities.get(a.id)||a.sequence-b.sequence);
   if(!candidates.length)return null;const t=candidates[0],g=this.store.get('goal',t.goalId);
@@ -77,7 +78,8 @@ export class Coordinator {
   data.result=result;data.savedAt=this.now();this.store.db.prepare('UPDATE requests SET status=?,data=? WHERE id=?').run('completed',JSON.stringify(data),id);const t=this.store.get('task',row.task_id);this.emit('request.saved',t.goalId,t.id,{id});return result;
  });}
  beginAttempt(taskId,owner){return this.store.tx(()=>{const t=this.owned(taskId,owner);if(t.attempts>=t.spec.limits.attempts)throw Error('Attempt limit reached');t.attempts++;this.store.put('task',t);this.emit('attempt.started',t.goalId,t.id,{attempt:t.attempts});return t.attempts;});}
- boundary(taskId,checkpoint,owner){return this.store.tx(()=>{const t=this.owned(taskId,owner),g=this.store.get('goal',t.goalId);t.checkpoint=checkpoint;
+ boundary(taskId,checkpoint,owner,{quiescent=true}={}){return this.store.tx(()=>{const t=this.owned(taskId,owner),g=this.store.get('goal',t.goalId);t.checkpoint=checkpoint;
+  if(!quiescent){this.store.put('task',t);this.emit('task.checkpoint',t.goalId,t.id,{status:t.status,quiescent:false});return this.getTask(t.id);}
   if(this.now()>=Math.min(g.deadline,t.deadline)){t.status='partial';t.reason='Deadline reached';}
   else if(t.stopRequested||g.status==='stopped')t.status='stopped';
   else if(t.pauseRequested||g.status==='paused')t.status='paused';

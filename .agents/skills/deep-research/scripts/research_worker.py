@@ -226,5 +226,6 @@ class Worker:
             'status':status,'reason':reason,'counters':current['counters'],'deadline':job['deadline'],
             'automated_codex_calls':0,'independent_review':'not_requested','provenance_errors':c['errors'],
             'artifacts':hashes,'finished_at':time.time()}
+        if job['manifest'].get('executor')=='operator':receipt['model_self_check']='not_run_operator_mode'
         atomic(directory/'receipt.json',json.dumps(receipt,indent=2))
         self.store.finish(job['id'],status,reason)

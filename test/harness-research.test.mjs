@@ -8,6 +8,7 @@ import {Worker} from '../src/harness/worker.mjs';
 import {ResearchAdapter,ResearchClient} from '../src/harness/research.mjs';
 import {command} from '../src/project/process.mjs';
 import {fileURLToPath} from 'node:url';
+import {NativeResearch} from '../src/harness/native-research.mjs';
 
 test('research adapter submits exact manifest and collects real fixture artifacts',async t=>{
  const root=await mkdtemp(path.join(os.tmpdir(),'harness-research-'));const c=new Coordinator({root:path.join(root,'parent')});t.after(async()=>{c.close();await rm(root,{recursive:true,force:true});});
@@ -31,4 +32,28 @@ test('research uncertainty keeps global slot instead of dispatching another task
  const worker=new Worker({c,provider:{},config:{research:{}},adapters:{}});
  worker.adapters.research=new ResearchAdapter(worker,{rpc:async req=>{if(req.command==='prepare_manifest')return {manifest:req.manifest,hash:'a'.repeat(64)};throw Error('SSH transport disconnected after send');}});
  await worker.drain();assert.equal(c.getTask(task.id).status,'uncertain');assert.equal(c.claimNext('other'),null);
+});
+test('Codex-only uses actual deterministic research tools and collects a report with zero DeepSeek calls',async t=>{
+ const root=await mkdtemp(path.join(os.tmpdir(),'harness-native-research-')),c=new Coordinator({root:path.join(root,'parent')});t.after(async()=>{c.close();await rm(root,{recursive:true,force:true});});
+ const fixture=path.join(root,'fixture.json'),providerConfig=path.join(root,'providers.json'),url='https://www.sqlite.org/wal.html',text='All processes must be on the same host computer.';
+ await writeFile(fixture,JSON.stringify({source_url:url,text}));await writeFile(providerConfig,JSON.stringify({mode:'fixture',fixture_file:fixture}));
+ const config={environment:'fixture',research:{python:process.env.FRONTIER_TEST_PYTHON??'python3',dataDir:path.join(root,'research'),providerConfig}};
+ const g=c.prepareGoal({submissionId:'native',mode:'codex_only',environment:'fixture',objective:'Read SQLite primary evidence',acceptance:['Saved cited report'],scope:{seedUrls:[url]}},'p');c.activateGoal({goalId:g.id,hash:g.hash},'a');
+ const task=c.submitTask({goalId:g.id,submissionId:'r',kind:'research',objective:'Read SQLite WAL constraints',acceptance:['Cited claim']},'r'),native=new NativeResearch({c,config});
+ await native.start({taskId:task.id},'start');const source=await native.action({taskId:task.id,action:{action:'read',url}},'read');assert.equal(source.source_id,'S001');
+ const report={title:'WAL constraints',complete:true,claims:[{id:'C1',kind:'fact',text:'Processes use the same host.',evidence:[{source_id:'S001',quote:text}]}],summary:['C1'],comparisons:[],recommendations:[],contradictions:[],unanswered:[]};
+ const done=await native.action({taskId:task.id,action:{action:'finish',report}},'finish');assert.equal(done.status,'accepted');assert.equal(done.spent.model,0);assert.equal(done.spent.download,1);assert.ok(done.result.checksumsVerified);
+ assert.deepEqual(await native.action({taskId:task.id,action:{action:'finish',report}},'finish'),done);
+ const receipt=JSON.parse(await readFile(path.join(done.result.directory,'receipt.json'),'utf8'));assert.equal(receipt.model_self_check,'not_run_operator_mode');
+});
+test('research stop retains global ownership until the backend confirms quiescence',async t=>{
+ const root=await mkdtemp(path.join(os.tmpdir(),'harness-research-stop-')),c=new Coordinator({root});t.after(async()=>{c.close();await rm(root,{recursive:true,force:true});});
+ const g=c.prepareGoal({submissionId:'g',objective:'Research',acceptance:['Report']},'p');c.activateGoal({goalId:g.id,hash:g.hash},'a');
+ const task=c.submitTask({goalId:g.id,submissionId:'r',kind:'research',objective:'Research queue',acceptance:['Report']},'r');c.claimNext('owner');
+ c.boundary(task.id,{phase:'poll',remoteJobId:'remote',remoteHash:'hash'},'owner');c.control({taskId:task.id,action:'stop'},'stop');
+ const worker=new Worker({c,owner:'owner',config:{research:{pollMs:0}}});let quiescent=false;
+ worker.adapters.research=new ResearchAdapter(worker,{rpc:async request=>request.command==='status'?{status:'stopped',quiescent,manifest_hash:'hash',counters:{model:1,search:0,download:0}}:{status:'stopped'}});
+ await worker.adapters.research.step(c.getTask(task.id),'owner');assert.equal(c.getTask(task.id).status,'running');assert.equal(c.getTask(task.id).owner,'owner');
+ c.submitTask({goalId:g.id,submissionId:'later',kind:'consult',objective:'Later work',acceptance:['Answer']},'later');assert.equal(c.claimNext('other'),null);
+ quiescent=true;await worker.adapters.research.step(c.getTask(task.id),'owner');assert.equal(c.getTask(task.id).status,'stopped');assert.equal(c.getTask(task.id).owner,null);
 });

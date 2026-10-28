@@ -51,3 +51,13 @@ test('Codex-only finalization rejects protected check edits',async t=>{
  await assert.rejects(f.integration.finishNative({taskId:a.id,summary:'Done'},'finish'),/scope|protected|outside/);
  assert.equal(f.c.getTask(a.id).status,'codex_active');
 });
+test('overnight review spends bounded check-gated calls then integrates a revised candidate',async t=>{
+ const f=await fixture(t,'overnight_review'),a=f.c.submitTask({goalId:f.g.id,...task},'s');let reviews=0;
+ const worker=new Worker({...f,provider:provider(),reviewer:{reviewCode:async input=>{assert.ok(input.evidence.checks.every(c=>c.passed));return {decision:++reviews===1?'revise':'accept',feedback:'Recheck and then accept',unverified:[]};}}});await worker.drain();
+ const done=f.c.getTask(a.id);assert.equal(done.status,'accepted');assert.equal(done.attempts,2);assert.equal(done.spent.codexReview,2);assert.equal(reviews,2);assert.equal(done.integration.review,'codex_legacy');
+});
+test('DeepSeek-only refuses a configured Codex reviewer even when code passes',async t=>{
+ const f=await fixture(t,'deepseek_only'),a=f.c.submitTask({goalId:f.g.id,...task},'s');let calls=0;
+ await new Worker({...f,provider:provider(),reviewer:{reviewCode:async()=>{calls++;throw Error('Forbidden review');}}}).drain();
+ assert.equal(f.c.getTask(a.id).status,'accepted');assert.equal(calls,0);assert.equal(f.c.getTask(a.id).spent.codexReview,0);
+});

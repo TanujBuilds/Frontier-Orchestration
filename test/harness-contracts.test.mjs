@@ -44,3 +44,16 @@ test('registry versions are immutable and goal pins survive later definitions',(
  r.registerMode({id:'collaborative',version:2,planner:'codex',actors:['codex'],review:'operator',capabilities:['coding']});
  assert.equal(digest(g.mode),before);assert.equal(normalizeGoal(brief(),r).mode.version,2);
 });
+test('normalized assignments can be validated again without inventing context',()=>{
+ const r=new Registry(),g=normalizeGoal(brief(),r),raw={submissionId:'a',kind:'consult',objective:'Explain a queue',acceptance:['Useful answer']};
+ const normalized=normalizeTask(raw,g,r);assert.deepEqual(normalizeTask(normalized,g,r),normalized);
+});
+test('workflow registration rejects cycles, duplicates and forbidden capabilities',()=>{
+ const r=new Registry(),workflow={id:'research-pair',version:1,mode:'deepseek_only',tasks:[{key:'a',kind:'research',objective:'Read evidence',acceptance:['Cited sources'],dependsOn:['b']},{key:'b',kind:'research',objective:'Compare',acceptance:['Comparison'],dependsOn:['a']}]};
+ assert.throws(()=>r.registerWorkflow(workflow),/cycle/);
+ assert.throws(()=>r.registerWorkflow({...workflow,tasks:[{...workflow.tasks[0],dependsOn:[]},{...workflow.tasks[1],key:'a',dependsOn:[]}]}),/duplicate/i);
+ assert.throws(()=>r.registerMode({id:'forbidden-review',version:1,actors:['deepseek'],planner:'deepseek',review:'operator',capabilities:['coding']}),/actor|review/i);
+});
+test('capability discovery describes schemas, permissions and limits as pinned data',()=>{
+ const g=normalizeGoal(brief());for(const capability of g.capabilities){assert.equal(capability.inputSchema.type,'object');assert.equal(capability.outputSchema.type,'object');assert.ok(capability.permissions);assert.ok(capability.limits);}
+});

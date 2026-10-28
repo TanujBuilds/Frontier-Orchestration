@@ -80,3 +80,11 @@ def providers(config):
     model=DeepSeek(config['model_base_url'],config['model_id'],config.get('api_key_env'))
     search=SearxSearch(config.get('search_url','http://127.0.0.1:8091/search'),tuple(config.get('engines',['duckduckgo','brave'])))
     return model,search.search,read_url,mode
+
+def deterministic_providers(config):
+    mode=config.get('mode','live')
+    if mode=='fixture':
+        f=Fixture(config['fixture_file']);return f.search,f.read,mode
+    if mode!='live':raise ValueError('invalid configured provider mode')
+    search=SearxSearch(config.get('search_url','http://127.0.0.1:8091/search'),tuple(config.get('engines',['duckduckgo','brave'])))
+    return search.search,read_url,mode

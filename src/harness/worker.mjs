@@ -4,12 +4,16 @@ import { LocalProvider } from './provider.mjs';
 import { ResearchAdapter } from './research.mjs';
 import { Integration } from './integration.mjs';
 import { MaintenanceAdapter } from './maintenance.mjs';
+import { Planner } from './planning.mjs';
+import { LegacyReview } from './legacy-review.mjs';
 
 export class Worker {
- constructor({c,coordinator=c,provider,checksFactory,owner=randomUUID(),config={},adapters={}}){
+ constructor({c,coordinator=c,provider,reviewer,checksFactory,owner=randomUUID(),config={},adapters={}}){
   this.c=coordinator;this.owner=owner;this.config=config;this.checksFactory=checksFactory;
   this.provider=provider??null;
+  this.reviewer=reviewer??null;this.legacyReview=new LegacyReview(this);
   this.integration=new Integration({c:this.c,checksFactory,config});
+  this.planner=new Planner(this);
   this.adapters={coding:new CodingAdapter(this),learning:new MaintenanceAdapter(this),...(config.research?{research:new ResearchAdapter(this)}:{}),...adapters};
  }
  async model(task,owner,key,messages,{maxTokens=12000}={}){
@@ -29,11 +33,12 @@ export class Worker {
   }
  }
  async tick(){
-  const automatic=this.c.store.all('task').find(t=>t.status==='ready_to_integrate'&&this.c.store.get('goal',t.goalId).manifest.mode.review==='checks');
+  const automatic=this.c.store.all('task').find(t=>t.status==='ready_to_integrate'&&['checks','legacy'].includes(this.c.store.get('goal',t.goalId).manifest.mode.review));
   if(automatic)return this.integration.accept({taskId:automatic.id,feedback:'Trusted checks passed; no Codex review'},`auto-integrate-${automatic.id}`);
+  const planning=await this.planner.tick();if(planning)return planning;
   let task=this.c.store.all('task').find(t=>t.status==='running'&&t.owner===this.owner);
   if(task)task=this.c.getTask(task.id);else task=this.c.claimNext(this.owner);
-  if(!task)return null;
+  if(!task)return this.legacyReview.tick();
   try{
    if(this.c.store.get('goal',task.goalId).manifest.environment!==(this.config.environment??'live'))throw Error('Approved environment differs from configured providers');
    if(task.spec.kind==='coding'&&!task.checkpoint.executionBase){const target=await this.integration.goalWorkspace(task.goalId,{native:!!this.c.store.get('goal',task.goalId).integrationOwner});const {git}=await import('../project/process.mjs');task=this.c.boundary(task.id,{...task.checkpoint,executionBase:await git(target.workspace.root,'rev-parse','HEAD')},this.owner);if(task.status!=='running')return task;}

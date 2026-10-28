@@ -6,7 +6,7 @@ const bridge=fileURLToPath(new URL('../../.agents/skills/deep-research/scripts/h
 export class ResearchClient {
  constructor(config){this.config=config;}
  async call(request,collectOutput){
-  const cfg=this.config,args=[bridge,...(collectOutput?['--collect-output',collectOutput]:cfg.remoteConfig?['--remote-config',cfg.remoteConfig]:['--data-dir',cfg.dataDir])];
+  const cfg=this.config,args=[bridge,...(collectOutput?['--collect-output',collectOutput]:cfg.remoteConfig?['--remote-config',cfg.remoteConfig]:['--data-dir',cfg.dataDir,...(cfg.providerConfig?['--provider-config',cfg.providerConfig]:[])])];
   return new Promise((resolve,reject)=>{
    const child=spawn(cfg.python??'python3',args,{stdio:['pipe','pipe','pipe']});let out='',err='',oversize=false;
    const timer=setTimeout(()=>child.kill('SIGKILL'),130000);
@@ -46,7 +46,7 @@ export class ResearchAdapter {
    c.store.tx(()=>{const current=c.owned(task.id,owner);for(const [kind,n] of Object.entries(remote.counters??{})){if(n<(current.remoteSpent?.[kind]??0))throw Error('Remote counters decreased');}current.remoteSpent=remote.counters??{};c.store.put('task',current);});
    if(!remote.quiescent){
     if(remote.execution?.status==='uncertain'){c.markUncertain(task.id,'Remote model request outcome is uncertain',owner);return c.getTask(task.id);}
-    return c.boundary(task.id,{...cp,nextPollAt:c.now()+(cfg.pollMs??1000)},owner);
+    return c.boundary(task.id,{...cp,nextPollAt:c.now()+(cfg.pollMs??1000)},owner,{quiescent:false});
    }
    if(['awaiting_supervisor','awaiting_user'].includes(remote.status)){
     const questions=await this.rpc({command:'questions',job:cp.remoteJobId});const q=questions.at(-1);return c.ask(task.id,q.question,{...cp,nextPollAt:0,remoteQuestionId:q.id},owner);

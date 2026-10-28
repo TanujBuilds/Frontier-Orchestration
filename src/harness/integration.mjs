@@ -54,6 +54,7 @@ export class Integration {
   let t=this.c.getTask(input.taskId),g=this.c.store.get('goal',t.goalId);this.c.liveGoal(g);
   if(t.status==='accepted'&&t.integration)return t;
   if(!['awaiting_review','ready_to_integrate'].includes(t.status))throw Error('Candidate is not ready for integration');
+  if(g.manifest.mode.review==='legacy'&&t.legacyDecision?.decision!=='accept')throw Error('Passing legacy review required');
   if(g.integrationOwner&&g.integrationOwner!==t.id)throw Error('Native Codex task owns integration workspace');
   const candidate=await this.candidate(t),releaseCandidate=await candidate.journal.lock();
   try{
@@ -70,7 +71,7 @@ export class Integration {
     if(!results.every(x=>x.passed))throw Error('Integrated checks failed');
     const stage=`task-${t.id}`,imported=await target.journal.memo(`${stage}/checkpoint`,()=>target.workspace.checkpoint({id:stage,writePaths:t.spec.permissions.writePaths}));
     if(!target.journal.events.some(e=>e.type==='stage.accepted'&&e.data.stageId===stage))await target.journal.append('stage.accepted',{stageId:stage,...imported});
-    this.c.store.tx(()=>{const current=this.c.store.get('task',t.id);current.status='accepted';current.integration={commit:imported.commit,candidateCommit:checkpoint.commit,worktree:target.workspace.root,checks:results,review:g.manifest.mode.review==='checks'?'none':'codex_operator'};this.c.store.put('task',current);this.c.emit('task.integrated',g.id,t.id,current.integration);});
+    this.c.store.tx(()=>{const current=this.c.store.get('task',t.id);current.status='accepted';current.integration={commit:imported.commit,candidateCommit:checkpoint.commit,worktree:target.workspace.root,checks:results,review:g.manifest.mode.review==='checks'?'none':g.manifest.mode.review==='legacy'?'codex_legacy':'codex_operator'};this.c.store.put('task',current);this.c.emit('task.integrated',g.id,t.id,current.integration);});
     return this.c.getTask(t.id);
    }finally{await release();}
   }finally{await releaseCandidate();}

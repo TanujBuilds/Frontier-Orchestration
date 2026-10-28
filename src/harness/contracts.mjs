@@ -29,7 +29,12 @@ const baseModes=[
 export class Registry {
  constructor(){
   this.capabilities=new Map();this.modes=new Map();this.workflows=new Map();
-  for(const id of ['coding','research','consult','learning'])this.capabilities.set(`${id}@1`,{id,version:1,actors:['deepseek','codex'],handler:id});
+  for(const id of ['coding','research','consult','learning'])this.capabilities.set(`${id}@1`,{
+   id,version:1,actors:['deepseek','codex'],handler:id,
+   inputSchema:{type:'object',required:['submissionId','kind','objective','acceptance'],additionalProperties:false,properties:{submissionId:{type:'string'},kind:{const:id},actor:{enum:['deepseek','codex']},objective:{type:'string'},context:{type:'string'},acceptance:{type:'array',items:{type:'string'}},dependsOn:{type:'array',items:{type:'string'}},priority:{enum:['blocking','normal','background']},permissions:{type:'object'},scope:{type:'object'},limits:{type:'object'}}},
+   outputSchema:{type:'object',description:'Saved bounded evidence; model text never grants authority'},
+   permissions:{filesystem:id==='coding'?'approved-subset':'none',network:id==='research'?'approved-public-scope':'configured-model-only',acceptance:id==='coding'?'protected-checks-and-pinned-mode':'pinned-mode',executableAuthority:'reviewed-adapter-only'},limits:clone(TASK_LIMITS[id]),
+  });
   for(const m of baseModes)this.registerMode(m);
  }
  registerMode(raw){
@@ -37,13 +42,20 @@ export class Registry {
   const m=clone(raw);identifier(m.id);integer(m.version,'version',1,10000);
   strings(m.actors,'actors');if(m.actors.some(x=>!['codex','deepseek'].includes(x))||!m.actors.includes(m.planner))throw Error('Invalid planner/actor');
   if(!['operator','checks','legacy'].includes(m.review))throw Error('Invalid review policy');
+  if(m.review==='operator'&&!m.actors.includes('codex'))throw Error('Operator review requires the Codex actor');
   strings(m.capabilities,'capabilities');for(const id of m.capabilities)if(!this.capabilities.has(`${id}@1`))throw Error(`Unknown capability ${id}`);
   if(m.review==='legacy'&&(m.actors.join()!=='deepseek'||m.capabilities.join()!=='coding'))throw Error('Legacy capability policy is coding-only');
   const key=`${m.id}@${m.version}`;if(this.modes.has(key))throw Error('Mode version already exists');this.modes.set(key,m);return clone(m);
  }
  mode(id='collaborative',version){const choices=[...this.modes.values()].filter(m=>m.id===id&&(!version||m.version===version)).sort((a,b)=>b.version-a.version);if(!choices.length)throw Error('Unknown mode');return clone(choices[0]);}
  snapshot(){return {capabilities:clone([...this.capabilities.values()]),modes:clone([...this.modes.values()]),workflows:clone([...this.workflows.values()])};}
- registerWorkflow(raw){keys(raw,['id','version','mode','tasks'],'workflow');identifier(raw.id);integer(raw.version,'version',1,10000);this.mode(raw.mode);if(!Array.isArray(raw.tasks)||!raw.tasks.length||raw.tasks.length>10)throw Error('Invalid workflow tasks');for(const t of raw.tasks){keys(t,['key','kind','dependsOn','objective','acceptance'],'workflow task');identifier(t.key);if(!this.capabilities.has(`${t.kind}@1`))throw Error('Unknown capability');text(t.objective,'objective');strings(t.acceptance,'acceptance');}const key=`${raw.id}@${raw.version}`;if(this.workflows.has(key))throw Error('Workflow already exists');this.workflows.set(key,clone(raw));return clone(raw);}
+ registerWorkflow(raw){
+  keys(raw,['id','version','mode','tasks'],'workflow');identifier(raw.id);integer(raw.version,'version',1,10000);const mode=this.mode(raw.mode);
+  if(!Array.isArray(raw.tasks)||!raw.tasks.length||raw.tasks.length>10)throw Error('Invalid workflow tasks');const tasks=new Map();
+  for(const t of raw.tasks){keys(t,['key','kind','dependsOn','objective','acceptance'],'workflow task');identifier(t.key);if(tasks.has(t.key))throw Error('Duplicate workflow task');if(!mode.capabilities.includes(t.kind))throw Error('Mode prohibits workflow capability');text(t.objective,'objective');strings(t.acceptance,'acceptance');strings(t.dependsOn??[],'dependencies',{empty:true});tasks.set(t.key,t);}
+  const visited=new Set(),visiting=new Set(),visit=key=>{if(visiting.has(key))throw Error('Workflow dependency cycle');if(visited.has(key))return;const task=tasks.get(key);if(!task)throw Error('Unknown workflow dependency');visiting.add(key);for(const dep of task.dependsOn??[])visit(dep);visiting.delete(key);visited.add(key);};for(const key of tasks.keys())visit(key);
+  const key=`${raw.id}@${raw.version}`;if(this.workflows.has(key))throw Error('Workflow already exists');this.workflows.set(key,clone(raw));return clone(raw);
+ }
 }
 export function sourceScope(raw={}) {
  keys(raw,['seedUrls','includeDomains','excludeDomains'],'source scope');
@@ -84,5 +96,5 @@ export function normalizeTask(raw,goal,registry=new Registry()) {
  const scope=sourceScope(raw.scope??goal.scope);
  if(goal.scope.includeDomains.length&&(!scope.includeDomains.length||scope.includeDomains.some(d=>!goal.scope.includeDomains.includes(d))))throw Error('Task expands source scope');
  if(goal.scope.excludeDomains.some(d=>!scope.excludeDomains.includes(d)))throw Error('Task removes source exclusion');
- return {submissionId:identifier(raw.submissionId,'submissionId'),kind:raw.kind,actor,objective:text(raw.objective,'objective'),context:raw.context===undefined?'':text(raw.context,'context',40000),acceptance:strings(raw.acceptance,'acceptance'),dependsOn:strings(raw.dependsOn??[],'dependencies',{empty:true,max:100}),priority,permissions,scope,limits};
+ return {submissionId:identifier(raw.submissionId,'submissionId'),kind:raw.kind,actor,objective:text(raw.objective,'objective'),context:raw.context===undefined||raw.context===''?'':text(raw.context,'context',40000),acceptance:strings(raw.acceptance,'acceptance'),dependsOn:strings(raw.dependsOn??[],'dependencies',{empty:true,max:100}),priority,permissions,scope,limits};
 }

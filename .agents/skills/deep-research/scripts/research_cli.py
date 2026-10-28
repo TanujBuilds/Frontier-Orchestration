@@ -58,10 +58,16 @@ def collect(packet,output):
     atomic(directory/'collected.json',json.dumps({'job_id':job_id,'verified_artifacts':list(raw),'remote_sources_retained':True}))
     return {'job_id':job_id,'status':job['status'],'directory':str(directory),'checksums_verified':True}
 
-def rpc(store,request):
+def rpc(store,request,config=None):
     command=request['command']
     if command=='prepare_manifest':
         manifest=normalize_manifest(request['manifest']);return {'manifest':manifest,'hash':manifest_hash(manifest)}
+    if command=='operator_action':
+        if config is None:raise ValueError('operator research requires private deterministic provider configuration')
+        from research_providers import deterministic_providers
+        from research_operator import Operator
+        search,reader,mode=deterministic_providers(config)
+        return Operator(store,search,reader,mode).action(request['job'],request['action'],request['idempotency_key'])
     if command=='submit':return brief_job(store.submit(request['manifest'],request['approved_hash']))
     if command=='status':
         def status(j):return {**brief_job(j),**store.execution_status(j['id'])}
@@ -76,7 +82,9 @@ def rpc(store,request):
 def remote(config,request):
     host=config['ssh_host']
     if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.@:-]{0,250}',host):raise ValueError('invalid SSH host')
-    argv=[config['python'],config['script'],'--data-dir',config['data_dir'],'rpc']
+    argv=[config['python'],config['script'],'--data-dir',config['data_dir']]
+    if config.get('provider_config'):argv+=['--provider-config',config['provider_config']]
+    argv+=['rpc']
     if any(not isinstance(x,str) or '\x00' in x for x in argv):raise ValueError('invalid remote configuration')
     result=subprocess.run(['ssh','-o','BatchMode=yes','-o','ConnectTimeout=10',host,shlex.join(argv)],input=json.dumps(request).encode(),stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=120)
     if len(result.stdout)>MAX_PACKET:raise ValueError('remote packet exceeds limit')
@@ -89,6 +97,7 @@ def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--data-dir',default=str(Path.home()/'.local/share/deep-research'))
     parser.add_argument('--remote-config')
+    parser.add_argument('--provider-config')
     sub=parser.add_subparsers(dest='command',required=True)
     p=sub.add_parser('prepare');p.add_argument('--brief',required=True);p.add_argument('--submission-id',required=True);p.add_argument('--mode',choices=['live','fixture'],default='live');p.add_argument('--output',required=True);p.add_argument('--scope');p.add_argument('--limits')
     p=sub.add_parser('submit');p.add_argument('--manifest',required=True);p.add_argument('--approve-hash',required=True)
@@ -123,7 +132,8 @@ def main():
         elif args.command=='rpc':
             raw=sys.stdin.buffer.read(MAX_PACKET+1)
             if len(raw)>MAX_PACKET:raise ValueError('RPC request too large')
-            result=rpc(Store(args.data_dir),json.loads(raw))
+            config=json.loads(Path(args.provider_config).read_text()) if args.provider_config else None
+            result=rpc(Store(args.data_dir),json.loads(raw),config)
         else:
             request={'command':'export' if args.command=='collect' else args.command}
             if getattr(args,'job',None):request['job']=args.job
