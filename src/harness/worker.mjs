@@ -3,13 +3,14 @@ import { CodingAdapter } from './coding.mjs';
 import { LocalProvider } from './provider.mjs';
 import { ResearchAdapter } from './research.mjs';
 import { Integration } from './integration.mjs';
+import { MaintenanceAdapter } from './maintenance.mjs';
 
 export class Worker {
  constructor({c,coordinator=c,provider,checksFactory,owner=randomUUID(),config={},adapters={}}){
   this.c=coordinator;this.owner=owner;this.config=config;this.checksFactory=checksFactory;
   this.provider=provider??null;
   this.integration=new Integration({c:this.c,checksFactory,config});
-  this.adapters={coding:new CodingAdapter(this),...(config.research?{research:new ResearchAdapter(this)}:{}),...adapters};
+  this.adapters={coding:new CodingAdapter(this),learning:new MaintenanceAdapter(this),...(config.research?{research:new ResearchAdapter(this)}:{}),...adapters};
  }
  async model(task,owner,key,messages,{maxTokens=12000}={}){
   const reservation=this.c.reserve(task.id,{key,kind:'model'},owner);if(reservation.cached)return reservation.result;

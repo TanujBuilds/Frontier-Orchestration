@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import { Store } from './store.mjs';
 import { Registry, normalizeGoal, normalizeTask, digest, text, identifier } from './contracts.mjs';
+import { Learning } from './learning.mjs';
 
 const TERMINAL=new Set(['accepted','failed','partial','cancelled']);
 const SLOT=new Set(['running','uncertain','taking_over']);
@@ -10,6 +11,7 @@ export class Coordinator {
  constructor({root,now=Date.now,registry=new Registry()}={}){
   this.store=new Store(root);this.now=now;this.registry=registry;
   for(const m of this.store.all('mode'))if(!this.registry.modes.has(`${m.id}@${m.version}`))this.registry.registerMode(m);
+  this.learning=new Learning({c:this});
  }
  close(){this.store.close();}
  acquireWorker(token){identifier(token,'worker token');return this.store.tx(()=>{
@@ -22,7 +24,7 @@ export class Coordinator {
   const lease={id:'coordinator',token,pid:process.pid,host:os.hostname(),at:this.now()};this.store.put('lease',lease);return lease;
  });}
  releaseWorker(token){return this.store.tx(()=>{const l=this.store.maybe('lease','coordinator');if(l&&l.token!==token)throw Error('Worker ownership conflict');this.store.db.prepare('DELETE FROM records WHERE kind=? AND id=?').run('lease','coordinator');return {released:true};});}
- emit(type,goalId,taskId,data={}){return this.store.event(type,{goalId,taskId,data,at:this.now()});}
+ emit(type,goalId,taskId,data={}){return this.store.tx(()=>{const seq=this.store.event(type,{goalId,taskId,data,at:this.now()});if(taskId&&this.learning?.captures(type))this.learning.capture(taskId,seq);return seq;});}
  prepareGoal(raw,key){const manifest=normalizeGoal(raw,this.registry);return this.store.command(key,{op:'goal.prepare',manifest},()=>{
   const g=this.store.submission('goal','',manifest.submissionId,digest(manifest),id=>({id,manifest,hash:digest(manifest),version:1,status:'draft',createdAt:this.now(),activatedAt:null,deadline:null}));
   this.emit('goal.prepared',g.id,null,{hash:g.hash});return g;
@@ -58,7 +60,7 @@ export class Coordinator {
   const priorities=this.effectivePriorities();const candidates=tasks.filter(t=>['queued','suspended'].includes(t.status)&&t.spec.actor==='deepseek'&&this.eligible(t)).sort((a,b)=>priorities.get(b.id)-priorities.get(a.id)||a.sequence-b.sequence);
   if(!candidates.length)return null;const t=candidates[0],g=this.store.get('goal',t.goalId);
   t.startedAt??=this.now();t.deadline??=Math.min(g.deadline,t.startedAt+t.spec.limits.seconds*1000);t.owner=owner;t.status='running';t.yieldRequested=false;
-  this.store.put('task',t);this.emit('task.claimed',t.goalId,t.id,{owner});return this.getTask(t.id);
+  this.store.put('task',t);this.learning.pin(t.id);this.emit('task.claimed',t.goalId,t.id,{owner});return this.getTask(t.id);
  });}
  owned(id,owner){const t=this.store.get('task',id);if(t.owner!==owner||!['running','uncertain','taking_over'].includes(t.status))throw Error('Worker ownership conflict');return t;}
  reserve(taskId,{key,kind},owner){identifier(key,'request key');return this.store.tx(()=>{
@@ -97,7 +99,7 @@ export class Coordinator {
   this.store.put('task',t);this.emit('task.result',t.goalId,t.id,{status:t.status,result});return this.getTask(t.id);
  });}
  review(input,key){return this.store.command(key,{op:'task.review',...input},()=>{const t=this.store.get('task',input.taskId),g=this.store.get('goal',t.goalId);this.liveGoal(g);if(g.manifest.mode.review!=='operator')throw Error('Mode prohibits Codex operator review');if(t.status!=='awaiting_review')throw Error('Task is not awaiting review');if(t.reviews>=t.spec.limits.reviews)throw Error('Review limit reached');if(!['accept','revise'].includes(input.decision))throw Error('Invalid review decision');text(input.feedback,'feedback',12000);t.reviews++;t.feedback.push({decision:input.decision,text:input.feedback,at:this.now()});t.reviewed=true;t.status=input.decision==='accept'?(t.spec.kind==='coding'?'ready_to_integrate':'accepted'):t.reviews>=t.spec.limits.reviews?'blocked':'queued';if(input.decision==='revise')t.checkpoint={...t.checkpoint,phase:'attempt'};this.store.put('task',t);this.emit('task.reviewed',t.goalId,t.id,{decision:input.decision});this.requestUrgentYield();return this.getTask(t.id);});}
- setPriority(input,key){return this.store.command(key,{op:'task.priority',...input},()=>{const t=this.store.get('task',input.taskId);if(!(input.priority in rank))throw Error('Invalid priority');text(input.reason,'priority reason',2000);t.priority=input.priority;this.store.put('task',t);this.emit('task.priority',t.goalId,t.id,{priority:input.priority,reason:input.reason});this.requestUrgentYield();return this.getTask(t.id);});}
+ setPriority(input,key){return this.store.command(key,{op:'task.priority',...input},()=>{const t=this.store.get('task',input.taskId);if(!(input.priority in rank))throw Error('Invalid priority');if(t.spec.kind==='learning'&&input.priority!=='background')throw Error('Learning priority must remain background');text(input.reason,'priority reason',2000);t.priority=input.priority;this.store.put('task',t);this.emit('task.priority',t.goalId,t.id,{priority:input.priority,reason:input.reason});this.requestUrgentYield();return this.getTask(t.id);});}
  control(input,key){return this.store.command(key,{op:'control',...input},()=>{
   if(!['pause','stop','resume'].includes(input.action))throw Error('Invalid control');
   const g=input.goalId?this.store.get('goal',input.goalId):this.store.get('goal',this.store.get('task',input.taskId).goalId);

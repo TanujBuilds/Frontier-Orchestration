@@ -72,6 +72,7 @@ export function normalizeTask(raw,goal,registry=new Registry()) {
  if(!goal.capabilities.find(c=>c.id===raw.kind&&c.actors.includes(actor)))throw Error('Pinned capability prohibits actor');
  const max=TASK_LIMITS[raw.kind],limits={...max,...raw.limits};if(raw.limits)keys(raw.limits,Object.keys(max),'task limits');for(const [k,v]of Object.entries(limits))integer(v,k,k==='questions'||k==='reviews'?0:1,max[k]);
  const priority=raw.priority??(raw.kind==='learning'?'background':'normal');if(!['blocking','normal','background'].includes(priority))throw Error('Invalid priority');
+ if(raw.kind==='learning'&&priority!=='background')throw Error('Learning priority must remain background');
  let permissions={readPaths:[],writePaths:[],checks:[]};
  if(raw.kind==='coding'){
   if(!goal.project)throw Error('Coding needs an approved project');

@@ -53,3 +53,33 @@ test('Codex-only native tasks never enter DeepSeek worker',async t=>{
  const f=await setup(t,'codex_only');f.c.submitTask({goalId:f.g.id,...coding()},'submit');let calls=0;
  const worker=new Worker({...f,provider:{complete:async()=>{calls++;throw Error('Forbidden');}}});await worker.drain();assert.equal(calls,0);
 });
+test('oversized or extra-field coding actions spend an attempt without applying edits',async t=>{
+ for(const malformed of ['files','bytes','field']){
+  const f=await setup(t);const task=f.c.submitTask({goalId:f.g.id,...coding()},'submit');let calls=0;
+  const worker=new Worker({...f,provider:{complete:async m=>{if(++calls>1)return answer(m);const reply=JSON.parse(answer(m).content);
+   if(malformed==='files')reply.edits.push(...['src/b.mjs','src/c.mjs'].map(path=>({path,action:'write',baseHash:null,content:'export {};'})));
+   if(malformed==='bytes')reply.edits[0].content=' '.repeat(24577);
+   if(malformed==='field')reply.command='execute arbitrary shell';
+   return {content:JSON.stringify(reply)};
+  }}});await worker.drain();
+  const done=f.c.getTask(task.id);assert.equal(done.status,'awaiting_review');assert.equal(done.attempts,2);assert.equal(done.spent.model,2);
+  assert.equal(f.c.store.all('outcome').filter(o=>o.kind==='attempt.protocol_failed').length,1);
+  assert.doesNotMatch(done.result.diff,/src\/b.mjs|src\/c.mjs/);
+ }
+});
+test('a real protocol failure feeds bounded learning and a later assignment retrieves the promoted recipe',async t=>{
+ const f=await setup(t);let calls=0;
+ const source=f.c.submitTask({goalId:f.g.id,...coding()},'source');
+ const worker=new Worker({...f,provider:{complete:async m=>{
+  const input=JSON.parse(m.at(-1).content);calls++;
+  if(calls===1)return {content:'truncated',finishReason:'length'};
+  if(input.task.kind==='learning')return {content:JSON.stringify({family:'edit_batch',scope:'project',parameters:{maxFiles:1,maxBytes:24576},evidence:[input.outcomes.find(o=>o.kind==='attempt.protocol_failed').id],rationale:'Use smaller batches after truncation'})};
+  if(input.task.submissionId==='fresh'){assert.equal(input.memory.length,1);assert.equal(input.editLimits.maxFiles,1);}
+  return answer(m);
+ }}});await worker.drain();assert.equal(f.c.getTask(source.id).attempts,2);
+ const maintenance=f.c.submitTask({goalId:f.g.id,submissionId:'learn',kind:'learning',objective:'Learn from coding response truncation',acceptance:['Protected evaluation passes']},'learn');await worker.drain();
+ assert.equal(f.c.getTask(maintenance.id).status,'accepted');assert.equal(f.c.getTask(maintenance.id).spent.model,1);
+ const fresh=f.c.submitTask({goalId:f.g.id,...coding('fresh'),objective:'Implement coding answer after response truncation'},'fresh');await worker.drain();
+ const done=f.c.getTask(fresh.id);assert.equal(done.status,'awaiting_review');assert.equal(done.memory.length,1);
+ assert.ok(f.c.store.all('evaluation')[0].passed);assert.equal(f.c.store.all('lesson')[0].status,'active');
+});
