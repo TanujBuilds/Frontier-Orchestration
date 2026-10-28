@@ -1,0 +1,25 @@
+name: frontier-research-search
+services:
+  searxng:
+    image: ghcr.io/searxng/searxng:2026.10.27-b5ed73fcb@sha256:b7118e681e2ef2e63e5d5b6e5d171af61f982f45ae258438fb4ab86ef065ea72
+    platform: linux/arm64
+    restart: unless-stopped
+    cpus: 1.0
+    mem_limit: 1g
+    pids_limit: 64
+    ports:
+      - "127.0.0.1:8091:8080"
+    environment:
+      GRANIAN_HOST: "0.0.0.0"
+      SEARXNG_PORT: "8080"
+      NVIDIA_VISIBLE_DEVICES: "void"
+    volumes:
+      - ./settings.yml:/etc/searxng/settings.yml:ro
+      - search-cache:/var/cache/searxng
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+volumes:
+  search-cache:

@@ -3,5 +3,10 @@
 .env.*
 node_modules/
 PROJECT_MEMORY.md
+__pycache__/
+*.pyc
+.venv/
+.agents/skills/deep-research/*-config.json
+.agents/skills/deep-research/deploy/settings.yml
 
 .overnight-output/

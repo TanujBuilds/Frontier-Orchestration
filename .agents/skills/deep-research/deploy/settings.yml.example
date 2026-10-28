@@ -1,0 +1,23 @@
+use_default_settings:
+  engines:
+    keep_only: [duckduckgo, brave]
+# Upstream marks Startpage inactive because of its proof-of-work CAPTCHA.
+general:
+  debug: false
+search:
+  formats: [json]
+  autocomplete: ""
+  default_lang: en-US
+server:
+  secret_key: "__GENERATE_A_RANDOM_LOCAL_SECRET__"
+  port: 8080
+  bind_address: "0.0.0.0"
+  limiter: false
+  public_instance: false
+  image_proxy: false
+valkey:
+  url: false
+outgoing:
+  request_timeout: 8.0
+  max_request_timeout: 10.0
+  pool_connections: 8

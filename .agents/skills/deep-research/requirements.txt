@@ -1,0 +1,2 @@
+# Passive extraction only; the reader owns all network access.
+-r requirements.lock

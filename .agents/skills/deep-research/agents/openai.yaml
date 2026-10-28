@@ -1,0 +1,4 @@
+interface:
+  display_name: "Deep Research"
+  short_description: "Queue and collect cited DeepSeek research"
+  default_prompt: "Use $deep-research to investigate this question on the Spark and collect its cited report."

@@ -1,0 +1,22 @@
+[Unit]
+Description=Approved DeepSeek research backlog
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__ROOT__
+ExecStart="__ROOT__/.venv/bin/python3" "__ROOT__/scripts/research_cli.py" --data-dir "__DATA__" worker --config "__CONFIG__" --watch
+Restart=on-failure
+RestartSec=15
+Nice=10
+MemoryMax=1G
+CPUQuota=100%
+TasksMax=64
+NoNewPrivileges=true
+UMask=0077
+Environment=PYTHONDONTWRITEBYTECODE=1
+TimeoutStopSec=30
+KillMode=control-group
+
+[Install]
+WantedBy=default.target
