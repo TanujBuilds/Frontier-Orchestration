@@ -1,0 +1,4 @@
+interface:
+  display_name: "Task Queue"
+  short_description: "Run an approved DeepSeek coding backlog sequentially"
+  default_prompt: "Use $task-queue to inspect and run my approved Frontier Orchestrator backlog."

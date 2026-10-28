@@ -10,7 +10,8 @@
     "project": "node src/project-cli.mjs",
     "dashboard": "node src/dashboard.mjs",
     "test": "node --test",
-    "pilot": "node src/pilot.mjs"
+    "pilot": "node src/pilot.mjs",
+    "queue": "node src/task-queue-cli.mjs"
   },
   "engines": {
     "node": ">=20"

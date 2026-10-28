@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { access, writeFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import path from 'node:path';
@@ -22,6 +23,19 @@ function compactFiles(files, limit) {
   return { files: out, truncated };
 }
 
+// A durable intent charges interrupted calls too. Completion records retain the
+// same callId, so usage and stage caps count each attempt exactly once. Legacy
+// journals containing only completion records remain readable.
+function frontierCalls(journal) {
+  const starts = journal.events.filter(event => event.type === 'frontier.call.started');
+  const completed = journal.events.filter(event => event.type === 'frontier.call');
+  const byId = new Map(completed.filter(event => event.data.callId).map(event => [event.data.callId, event]));
+  const startedIds = new Set(starts.map(event => event.data.callId));
+  return [...starts.map(event => byId.get(event.data.callId) ?? event),
+    ...completed.filter(event => !event.data.callId || !startedIds.has(event.data.callId))]
+    .sort((a, b) => a.sequence - b.sequence);
+}
+
 export function summarize(journal) {
   const manifest = journal.last('project.created');
   if (!manifest) throw new Error('Not a project job');
@@ -30,7 +44,7 @@ export function summarize(journal) {
   const stages = manifest.plan.stages.map(stage => {
     const accepted = journal.events.findLast(event => event.type === 'stage.accepted' && event.data.stageId === stage.id)?.data;
     const attempts = journal.events.filter(event => event.type === 'attempt.started' && event.data.stageId === stage.id);
-    const reviews = journal.events.filter(event => event.type === 'frontier.call' && event.data.kind === 'review' && event.data.stageId === stage.id);
+    const reviews = frontierCalls(journal).filter(event => event.data.kind === 'review' && event.data.stageId === stage.id);
     const latest = journal.events.findLast(event => event.type === 'attempt.finished' && event.data.stageId === stage.id)?.data;
     return { id: stage.id, objective: stage.objective, status: accepted ? 'accepted' : attempts.length ? 'unfinished' : 'pending',
       localAttempts: attempts.length, codexReviews: reviews.length,
@@ -45,8 +59,8 @@ export function summarize(journal) {
     budgetStartedAt: journal.events.find(event => event.type === 'budget.started')?.at ?? null,
     reportedLocalTokens: journal.events.filter(event => event.type === 'operation.completed')
       .reduce((total, event) => total + (Number(event.data.value?.usage?.total_tokens) || 0), 0),
-    codexCalls: journal.events.filter(event => event.type === 'frontier.call').length,
-    codexCallMs: journal.events.filter(event => event.type === 'frontier.call').reduce((total, event) => total + (Number(event.data.durationMs) || 0), 0),
+    codexCalls: frontierCalls(journal).length,
+    codexCallMs: frontierCalls(journal).reduce((total, event) => total + (Number(event.data.durationMs) || 0), 0),
     limits, stages, eventFile: journal.file, report: path.join(journal.dir, 'report.md'),
   };
 }
@@ -76,7 +90,7 @@ export async function writeReport(journal) {
 }
 
 export async function runProject(journal, {
-  frontier, local, workspace, checks, signal, now = Date.now,
+  frontier, local, workspace, checks, signal, expectedHash, authorizeRun, beforeReview, now = Date.now,
   sleep = (ms, signal) => delay(ms, undefined, { signal }), keepAwake = true,
 } = {}) {
   const release = await journal.lock();
@@ -89,6 +103,8 @@ export async function runProject(journal, {
   try {
     const manifest = journal.last('project.created');
     if (!manifest || journal.last('project.approved')?.hash !== digest(manifest)) throw new Pause('Approve the exact plan and permissions before running', 'approval');
+    if (expectedHash !== undefined && digest(manifest) !== expectedHash) throw new Pause('Queued approval hash changed before the project lock was acquired', 'approval');
+    await authorizeRun?.(journal);
     if (journal.last('run.finished')?.status === 'accepted') return await writeReport(journal);
     workspace ??= new Workspace(manifest, journal);
     checks ??= new CheckRunner(workspace);
@@ -199,7 +215,7 @@ export async function runProject(journal, {
             feedback = `Required checks failed: ${checkResults.filter(check => !check.passed).map(check => check.id).join(', ')}. Read the check output and repair it in the next attempt.`;
           } else {
             const reviewKey = `${operationKey}/review`;
-            const priorCalls = journal.events.filter(event => event.type === 'frontier.call' && event.data.kind === 'review' && event.data.stageId === stage.id);
+            const priorCalls = frontierCalls(journal).filter(event => event.data.kind === 'review' && event.data.stageId === stage.id);
             const legacyRounds = journal.events.filter(event => event.type === 'attempt.finished' && event.data.stageId === stage.id && event.data.review).length;
             if (!journal.completed(reviewKey) && Math.max(priorCalls.length, legacyRounds) >= reviewRounds) {
               throw new Pause(`Codex review budget of ${reviewRounds} calls is spent; inspect the stage before continuing`, 'needs_review');
@@ -216,15 +232,18 @@ export async function runProject(journal, {
               acceptedStages: summarize(journal).stages.filter(item => item.status === 'accepted'),
               workerSummary: reply.summary, evidence };
             review = await provider(reviewKey, async s => {
-              const spent = journal.events.filter(event => event.type === 'frontier.call' && event.data.kind === 'review' && event.data.stageId === stage.id).length;
+              const spent = frontierCalls(journal).filter(event => event.data.kind === 'review' && event.data.stageId === stage.id).length;
               if (Math.max(spent, legacyRounds) >= reviewRounds) throw new Pause('Codex review call budget is spent', 'needs_review');
-              const started = now();
+              await beforeReview?.({ journal, stage, reviewKey });
+              guard();
+              const started = now(), callId = randomUUID();
+              await journal.append('frontier.call.started', { callId, kind: 'review', key: reviewKey, stageId: stage.id, round: Math.max(spent, legacyRounds) + 1 });
               try {
                 const value = await frontier.reviewCode(reviewInput, s);
-                await journal.append('frontier.call', { kind: 'review', key: reviewKey, stageId: stage.id, round: Math.max(spent, legacyRounds) + 1, durationMs: now() - started, decision: value?.decision ?? 'returned' });
+                await journal.append('frontier.call', { callId, kind: 'review', key: reviewKey, stageId: stage.id, round: Math.max(spent, legacyRounds) + 1, durationMs: now() - started, decision: value?.decision ?? 'returned' });
                 return value;
               } catch (error) {
-                await journal.append('frontier.call', { kind: 'review', key: reviewKey, stageId: stage.id, round: Math.max(spent, legacyRounds) + 1, durationMs: now() - started, decision: 'error' });
+                await journal.append('frontier.call', { callId, kind: 'review', key: reviewKey, stageId: stage.id, round: Math.max(spent, legacyRounds) + 1, durationMs: now() - started, decision: 'error' });
                 throw error;
               }
             }, reviewInput);
