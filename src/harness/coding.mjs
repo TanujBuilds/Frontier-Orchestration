@@ -40,7 +40,10 @@ export class CodingAdapter {
     const inventory=await workspace.inventory(),files=await workspace.readFiles(cp.paths??inventory.slice(0,2).map(x=>x.path));
     const editLimits={maxFiles:2,maxBytes:24576};for(const item of task.memory??[])if(item.recipe.family==='edit_batch'){editLimits.maxFiles=Math.min(editLimits.maxFiles,item.recipe.maxFiles);editLimits.maxBytes=Math.min(editLimits.maxBytes,item.recipe.maxBytes);}
     const input={task:task.spec,files,inventory,feedback:task.feedback,answers:task.answers,memory:task.memory??[],editLimits,attempt:cp.attempt};
-    const result=await this.worker.model(task,owner,`code-${cp.attempt}-${cp.exchange}`,[{role:'system',content:system},{role:'user',content:JSON.stringify(input)}]);
+    const requestKey=`code-${cp.attempt}-${cp.exchange}`;
+    if(!journal.events.some(e=>e.type==='harness.context'&&e.data.key===requestKey))await journal.append('harness.context',{key:requestKey,attempt:cp.attempt,files:files.map(f=>({path:f.path,hash:f.hash,bytes:Buffer.byteLength(f.content??'')}))});
+    const result=await this.worker.model(task,owner,requestKey,[{role:'system',content:system},{role:'user',content:JSON.stringify(input)}]);
+    const state=c.boundary(task.id,cp,owner);if(state.status!=='running')return state;
     if(result.finishReason==='length')throw new AttemptError('Response truncated; submit smaller edits');
     let reply;try{reply=JSON.parse(result.content);}catch{throw new AttemptError('Invalid JSON; return one bounded action');}
     if(reply.type==='ask_supervisor'){
@@ -73,7 +76,7 @@ export class CodingAdapter {
      return c.boundary(task.id,{...cp,phase:'attempt'},owner);
     }
     const evidence=await workspace.evidence();
-    return c.completeTask(task.id,{...evidence,checks:results,worktree:workspace.root,journalRoot:journal.root,workerSummary:cp.reply.summary,baseCommit:manifest.baseCommit},owner,{reviewRequired:true});
+    return c.completeTask(task.id,{...evidence,checks:results,sandbox:journal.last('harness.sandbox'),worktree:workspace.root,journalRoot:journal.root,workerSummary:cp.reply.summary,baseCommit:manifest.baseCommit},owner,{reviewRequired:true});
    }
    throw Error('Unknown coding checkpoint phase');
   }catch(error){

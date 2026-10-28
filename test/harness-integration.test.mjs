@@ -8,6 +8,7 @@ import {Coordinator} from '../src/harness/coordinator.mjs';
 import {Worker} from '../src/harness/worker.mjs';
 import {Integration} from '../src/harness/integration.mjs';
 import {Goals} from '../src/harness/goals.mjs';
+import {spawn} from 'node:child_process';
 
 async function fixture(t,mode='collaborative'){
  const root=await mkdtemp(path.join(os.tmpdir(),'harness-integrate-')),repo=path.join(root,'repo');await mkdir(path.join(repo,'src'),{recursive:true});await mkdir(path.join(repo,'checks'));
@@ -26,6 +27,18 @@ test('operator acceptance imports candidate once and reruns combined checks',asy
  const again=await f.integration.accept({taskId:a.id,feedback:'Actual diff and checks meet acceptance'},'accept');assert.equal(again.integration.commit,accepted.integration.commit);
  assert.equal(await readFile(path.join(f.repo,'src/answer.mjs'),'utf8'),'export const answer=0;\n');
  assert.equal(await readFile(path.join(accepted.integration.worktree,'src/answer.mjs'),'utf8'),'export const answer=42;\n');
+});
+test('SIGKILL after the Git checkpoint but before SQLite acceptance reuses the exact integration commit',async t=>{
+ const f=await fixture(t),a=f.c.submitTask({goalId:f.g.id,...task},'s');await new Worker({...f,provider:provider()}).drain();const before=f.c.getTask(a.id);f.c.close();
+ const script=`import {Coordinator} from ${JSON.stringify(new URL('../src/harness/coordinator.mjs',import.meta.url).href)};import {Integration} from ${JSON.stringify(new URL('../src/harness/integration.mjs',import.meta.url).href)};import {command} from ${JSON.stringify(new URL('../src/project/process.mjs',import.meta.url).href)};
+ const c=new Coordinator({root:process.argv[1]}),emit=c.emit.bind(c);c.emit=(type,g,id,data)=>{if(type==='task.integrated'){console.log(JSON.stringify({commit:data.commit,task:c.getTask(id)}));Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0);}return emit(type,g,id,data);};
+ const checksFactory=w=>({verify:async()=>({fixture:true}),run:async checks=>Promise.all(checks.map(async check=>{const r=await command(check.argv,{cwd:w.root});return {...r,id:check.id,passed:r.code===0,screenshots:[]};}))});await new Integration({c,checksFactory}).accept({taskId:process.argv[2],feedback:'Reviewed actual diff and checks'},'crash-accept');`;
+ const child=spawn(process.execPath,['--input-type=module','-e',script,path.join(f.root,'state'),a.id],{stdio:['ignore','pipe','pipe']});t.after(()=>{if(child.exitCode===null&&child.signalCode===null)child.kill('SIGKILL');});
+ const checkpoint=await new Promise((resolve,reject)=>{let out='',err='';child.stderr.on('data',b=>err+=b);child.stdout.on('data',b=>{out+=b;if(out.includes('\n'))resolve(JSON.parse(out.split('\n')[0]));});child.on('exit',()=>reject(Error('Child ended before checkpoint: '+err)));});
+ const ended=new Promise(resolve=>child.once('exit',resolve));child.kill('SIGKILL');await ended;const recovered=new Coordinator({root:path.join(f.root,'state')});try{
+  const saved=recovered.getTask(a.id);assert.equal(saved.status,'ready_to_integrate');assert.equal(saved.reviews,1);assert.equal(saved.spent.model,before.spent.model);assert.equal(saved.deadline,before.deadline);
+  const integration=new Integration({c:recovered,checksFactory:f.checksFactory}),done=await integration.accept({taskId:a.id,feedback:'Reviewed actual diff and checks'},'crash-accept');assert.equal(done.status,'accepted');assert.equal(done.integration.commit,checkpoint.commit);assert.equal(done.reviews,1);assert.equal(done.deadline,before.deadline);assert.equal(done.spent.model,1);
+ }finally{recovered.close();}
 });
 test('DeepSeek-only automatically integrates passing code with zero operator reviews',async t=>{
  const f=await fixture(t,'deepseek_only'),a=f.c.submitTask({goalId:f.g.id,...task},'s');await new Worker({...f,provider:provider()}).drain();
@@ -86,7 +99,7 @@ test('expanded assignment reads require an approved goal version and keep execut
 });
 test('overnight review spends bounded check-gated calls then integrates a revised candidate',async t=>{
  const f=await fixture(t,'overnight_review'),a=f.c.submitTask({goalId:f.g.id,...task},'s');let reviews=0;
- const worker=new Worker({...f,provider:provider(),reviewer:{reviewCode:async input=>{assert.ok(input.evidence.checks.every(c=>c.passed));return {decision:++reviews===1?'revise':'accept',feedback:'Recheck and then accept',unverified:[]};}}});await worker.drain();
+ const worker=new Worker({...f,provider:provider(),reviewer:{reviewCode:async input=>{assert.ok(input.evidence.checks.every(c=>c.passed));assert.deepEqual(input.evidence.sandbox,{fixture:true});assert.equal(input.evidence.sourceFixture.unchanged,true);assert.ok(input.evidence.modelContext.some(ctx=>ctx.files.some(file=>file.path==='checks/verify.mjs')));return {decision:++reviews===1?'revise':'accept',feedback:'Recheck and then accept',unverified:[]};}}});await worker.drain();
  const done=f.c.getTask(a.id);assert.equal(done.status,'accepted');assert.equal(done.attempts,2);assert.equal(done.spent.codexReview,2);assert.equal(reviews,2);assert.equal(done.integration.review,'codex_legacy');
 });
 test('DeepSeek-only refuses a configured Codex reviewer even when code passes',async t=>{

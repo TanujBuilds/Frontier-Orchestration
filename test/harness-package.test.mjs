@@ -23,5 +23,5 @@ test('standalone snapshot serves installed MCP tools and verifies its checksumme
  await writeFile(path.join(destination,'runtime/src/harness/provider.mjs'),'tampered');await assert.rejects(verifyPackage(destination),/checksum/);
 });
 test('LaunchAgent uses literal escaped arguments and keeps private state outside the runtime',()=>{
- const plist=renderLaunchAgent({node:'/opt/node24/bin/node',entry:'/tmp/Frontier & Test/runtime/src/harness/cli.mjs',root:'/tmp/private state',config:'/tmp/private config.json',port:4332,logs:'/tmp/private logs'});assert.match(plist,/Frontier &amp; Test/);assert.match(plist,/<string>--root<\/string>/);assert.doesNotMatch(plist,/<string>(?:sh|bash|zsh)<\/string>/);
+ const plist=renderLaunchAgent({node:'/opt/node24/bin/node',entry:'/tmp/Frontier & Test/runtime/src/harness/cli.mjs',root:'/tmp/private state',config:'/tmp/private config.json',port:4332,logs:'/tmp/private logs'});assert.match(plist,/Frontier &amp; Test/);assert.match(plist,/<string>--root<\/string>/);assert.doesNotMatch(plist,/<string>(?:sh|bash|zsh)<\/string>/);assert.match(plist,/<key>KeepAlive<\/key><dict><key>SuccessfulExit<\/key><false\/><\/dict>/);
 });

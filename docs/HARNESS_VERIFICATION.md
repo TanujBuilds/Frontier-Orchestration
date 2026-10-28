@@ -1,0 +1,45 @@
+# Harness verification — 2026-10-28
+
+Release is **incomplete**. The implementation is on the isolated `codex/harness`
+branch; it has not been merged or published. Final independent review, installed
+service recovery and the Spark research gates remain required.
+
+Tested runtime: Node 24.22.0, SQLite 3.53.4, MCP SDK 1.32.2, Playwright 1.64.1,
+Python 3.12 and pinned Trafilatura 2.3.1. Actual Mac checks use the existing Codex
+CLI sandbox with network access disabled and an enforcement canary.
+
+| Evidence | Observed result |
+| --- | --- |
+| Extensible policies | A fifth research-only preset registers without scheduler changes, survives restart and rejects coding. Workflow instances atomically pin definitions and map dependencies. |
+| Durability | Actual SIGKILL tests preserve reserved/saved requests and planner responses. An integration killed after its Git checkpoint but before SQLite acceptance reuses the exact commit without another model request or review. |
+| Installed-package fixture | Standalone MCP service, native zero-model work, exact approval, final receipt and tamper detection pass independently of development imports. A separate agent also completed two reviewed fixture consults across restart, preserving counters and idempotency. |
+| Collaborative live pilot | Three sequential DeepSeek assignments plus concurrent native Codex work, a supervisor question/answer, blocking-priority yield, resumption, independent review, same-task correction and combined checked integration. Fourteen DeepSeek requests; native Codex usage is not measured by this coordinator. |
+| Scope correction | The live pilot exposed overly narrow child read permissions for a combined check. An exact new goal version and explicit rebind corrected reads while preserving write scope, task identity, checkpoint, deadline and spending. The sandbox was retained. |
+| DeepSeek-only live pilot | One planning request and two coding requests; malformed JSON consumed an attempt. Protected checks and isolated integration passed with no Codex review or fallback. |
+| Native takeover | A real DeepSeek partial was stopped after saving edits and before checks. Codex inspected and finished it in a separate integration checkout; the frozen worker snapshot and original counters/deadline were preserved. The first extra probe had a syntax error; its corrected passing result is a checksummed addendum to the preserved receipt. |
+| Codex-only live pilot | Native coding plus two actual bounded public-page reads and a cited report. Five claims inspected against original sources. Zero DeepSeek calls; source membership/passage checks and checksummed collection passed. This did not use SearXNG or test remote persistence. |
+| Overnight live compatibility | The first pilot spent two reviews and remained partial because the packet omitted enforcement/context/source-cleanliness proof. After fixing that packet and strengthening a protected type check, a fresh pilot passed with one planning request, one coding request and one bounded Codex review. Original spending was retained. |
+| Learning live pilot | Real zero-base/exponential-overflow failure → reviewed correction and accepted integration → one DeepSeek proposal → protected regression plus two held-out replays → promotion → a fresh task retrieved that exact version and passed first-attempt checks and integration. Two DeepSeek requests across maintenance and fresh work. This is a narrow procedure-reuse demonstration, not a general improvement claim. |
+| Browser controls | Real backend effects for questions, pause/resume, native execution, inert artifact text, correction and archive; keyboard access, reduced motion and 1280/390 layouts. Local notifications preserve useful transitions without repeating unchanged state. |
+
+Machine-specific endpoints, raw pilot records, spending, source text, receipts and
+artifact hashes remain in ignored local evidence. Research extraction omitted an
+overview-list passage in one page; the validator rejected that unsupported saved
+quote, and a corrected finish used an actual saved passage. Failed operations were
+not erased.
+
+## Remaining release gates
+
+- Independent whole-branch code review and any significant corrections.
+- Final versioned package, personal skill/MCP registration and Mac LaunchAgent
+  installation; independent restart recovery on that installed service.
+- Authenticated Spark deployment, CPU-limited loopback SearXNG, two ten-query
+  passes at least thirty minutes apart, relevance/primary-source inspection and
+  ten-page extraction assessment.
+- Real DeepSeek durable-queue research comparison, five original-source claim
+  checks, and Spark completion after Mac-session disconnection with checksummed
+  collection. The native Codex-only note does not substitute for this pilot.
+
+The model HTTP route works independently of SSH. The outstanding SSH browser
+check failure blocks remote installation, not Mac-side inference. No model runtime
+settings, weights, SSH policies or public hosting were changed.

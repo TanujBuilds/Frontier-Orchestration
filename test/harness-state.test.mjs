@@ -35,6 +35,12 @@ test('manual pause and stop preserve a question or review inbox instead of reexe
  c.control({taskId:a.id,action:'stop'},'stop');assert.equal(c.getTask(a.id).status,'stopped');assert.throws(()=>c.review({taskId:a.id,decision:'accept',feedback:'Saved answer checked'},'review-stopped'),/stopped|review/);
  c.control({taskId:a.id,action:'resume'},'resume-review');assert.equal(c.getTask(a.id).status,'awaiting_review');assert.equal(c.claimNext('other'),null);
 });
+test('useful transitions create durable notifications once and answered questions stop requesting a decision',t=>{
+ const {c,g}=fixture(t),a=c.submitTask({goalId:g.id,...task('a')},'a');c.claimNext('o');c.ask(a.id,'Which focus?',{},'o');
+ const notices=c.notifications();assert.equal(notices.length,1);assert.equal(notices[0].kind,'decision');assert.equal(notices[0].taskId,a.id);
+ const input={taskId:a.id,answer:'Reliability',responder:'codex'};c.answer(input,'answer');c.answer(input,'answer');assert.equal(c.notifications().length,0);
+ c.claimNext('o');c.completeTask(a.id,{content:'Saved report'},'o');const result=c.notifications();assert.equal(result.length,1);assert.equal(result[0].kind,'result');c.ackNotification({notificationId:result[0].id},'ack');assert.equal(c.notifications().length,0);assert.equal(c.store.all('notification').length,2);
+});
 test('submission and commands are idempotent but changed content conflicts',t=>{
  const {c,g}=fixture(t);const a=c.submitTask({goalId:g.id,...task('a')},'add-a');
  assert.equal(c.submitTask({goalId:g.id,...task('a')},'add-a').id,a.id);

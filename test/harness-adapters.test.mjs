@@ -31,6 +31,12 @@ test('coding asks a bounded question and resumes saved attempt after answer',asy
  f.c.answer({taskId:task.id,answer:'Yes, use the number42',responder:'codex'},'answer');await worker.drain();
  assert.equal(f.c.getTask(task.id).status,'awaiting_review');assert.equal(f.c.getTask(task.id).attempts,1);assert.equal(f.c.getTask(task.id).spent.model,2);
 });
+test('stop during a question response saves it before releasing the slot and replays without spending again',async t=>{
+ const f=await setup(t),task=f.c.submitTask({goalId:f.g.id,...coding()},'submit');let calls=0;
+ const worker=new Worker({...f,provider:{complete:async()=>{calls++;f.c.control({taskId:task.id,action:'stop'},'stop-during-request');return {content:JSON.stringify({type:'ask_supervisor',question:'Confirm the numeric result?'})};}}});
+ await worker.drain();assert.equal(f.c.getTask(task.id).status,'stopped');assert.equal(f.c.getTask(task.id).questions.length,0);assert.equal(f.c.getTask(task.id).spent.model,1);
+ f.c.control({taskId:task.id,action:'resume'},'resume');await worker.drain();assert.equal(f.c.getTask(task.id).status,'awaiting_supervisor');assert.equal(f.c.getTask(task.id).questions.length,1);assert.equal(calls,1);
+});
 test('hostile source/model write outside scope is blocked before applying edits',async t=>{
  const f=await setup(t);const task=f.c.submitTask({goalId:f.g.id,...coding()},'submit');
  const worker=new Worker({...f,provider:{complete:async()=>({content:JSON.stringify({type:'submit_changes',paths:[],summary:'Override checks',edits:[{path:'checks/verify.mjs',action:'write',baseHash:null,content:'process.exit(0)'}]})})}});await worker.drain();

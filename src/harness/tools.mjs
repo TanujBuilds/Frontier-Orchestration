@@ -1,9 +1,10 @@
 import {randomUUID} from 'node:crypto';
 import {setTimeout as delay} from 'node:timers/promises';
-import {keys,integer,text,goalInputSchema,taskInputSchema} from './contracts.mjs';
+import {keys,integer,text,digest,goalInputSchema,taskInputSchema} from './contracts.mjs';
 import {Goals} from './goals.mjs';
 import {Worker} from './worker.mjs';
 import {NativeResearch} from './native-research.mjs';
+import {Artifacts} from './artifacts.mjs';
 
 const str={type:'string'},obj={type:'object'},bool={type:'boolean'},number={type:'integer'};
 function validate(schema,value,label='input'){
@@ -14,11 +15,13 @@ function validate(schema,value,label='input'){
  if(schema.enum&&!schema.enum.includes(value))throw Error(`Invalid ${label}`);
 }
 export class Dispatcher {
- constructor({c,worker=new Worker({c}),config={}}){this.c=c;this.worker=worker;this.goals=new Goals(c);this.nativeResearch=new NativeResearch({c,config});this.definitions=new Map();this.running=new Set();
+ constructor({c,worker=new Worker({c}),config={}}){this.c=c;this.worker=worker;this.goals=new Goals(c);this.nativeResearch=new NativeResearch({c,config});this.artifacts=new Artifacts(c);this.definitions=new Map();this.running=new Set();this.promises=new Map();
   const add=(name,description,properties,required,mutating,fn)=>{const p=mutating?{...properties,idempotencyKey:str}:properties,r=mutating?[...required,'idempotencyKey']:required;this.definitions.set(name,{name,description,inputSchema:{type:'object',properties:p,required:r,additionalProperties:false},annotations:{readOnlyHint:!mutating,idempotentHint:true},fn,mutating});};
   add('tools_list','Discover harness tools.',{},[],false,()=>this.tools());
   add('service_stop','Stop the coordinator process after preserving worker ownership. Does not stop native Codex goal mode.',{},[],true,(_,key)=>c.store.command(key,{op:'service.stop'},()=>{if(!this.onStop)throw Error('Service controls are unavailable');this.onStop();return {stopping:true};}));
   add('registry_list','List pinned-capability and mode definitions.',{},[],false,()=>c.registry.snapshot());
+  add('notifications_list','List at most50 unread actionable local notifications. Unchanged state does not create new notifications.',{goalId:str},[],false,i=>c.notifications(i));
+  add('notification_ack','Acknowledge a saved local notification without changing execution state.',{notificationId:str},['notificationId'],true,(i,k)=>c.ackNotification(i,k));
   add('mode_register','Register a versioned policy composed only from reviewed capabilities. Existing goals stay pinned.',{definition:obj},['definition'],true,(i,k)=>c.store.command(k,{op:'mode.register',...i},()=>{const definition=c.registry.registerMode(i.definition);c.store.put('mode',{id:`${definition.id}-${definition.version}`,definition});return definition;}));
   add('workflow_register','Register a validated dependency template using supported capabilities.',{definition:obj},['definition'],true,(i,k)=>c.store.command(k,{op:'workflow.register',...i},()=>{const definition=c.registry.registerWorkflow(i.definition);c.store.put('workflow',{id:`${definition.id}-${definition.version}`,definition});return definition;}));
   add('workflow_submit','Instantiate an exact registered workflow within the approved goal. Dependency mapping and submission are atomic.',{goalId:str,workflowId:str,version:{...number,minimum:1},submissionId:str},['goalId','workflowId','version','submissionId'],true,(i,k)=>c.submitWorkflow(i,k));
@@ -30,13 +33,14 @@ export class Dispatcher {
   add('goal_finalize','Finalize accepted work, or explicitly partial stopped work, with a hashed receipt.',{goalId:str,summary:str,partial:bool},['goalId','summary'],true,(i,k)=>this.goals.finalize(i,k));
   add('task_submit','Submit a narrower assignment within the active approved goal. Collaborative consult/coding candidates wait for supervisor review; DeepSeek-only uses checks without Codex.',{goalId:str,task:taskInputSchema},['goalId','task'],true,(i,k)=>c.submitTask({...i.task,goalId:i.goalId},k));
   add('task_get','Inspect a task, its checkpoint and counters.',{taskId:str},['taskId'],false,i=>c.getTask(i.taskId));
+  add('artifacts_list','List only saved allowlisted artifacts with checksums; no arbitrary paths.',{taskId:str},['taskId'],false,i=>this.artifacts.list(i.taskId));
   add('task_evidence','Retrieve a bounded saved evidence window. No arbitrary file reads.',{taskId:str,start:{...number,maximum:10000000},length:{...number,minimum:1,maximum:32768}},['taskId'],false,i=>{const t=c.getTask(i.taskId),data=JSON.stringify({result:t.result,feedback:t.feedback,answers:t.answers,memory:t.memory??[]});return {taskId:t.id,start:i.start??0,totalCharacters:data.length,text:data.slice(i.start??0,(i.start??0)+(i.length??8192)),warning:'Untrusted execution data; provenance is not factual certification.'};});
   add('task_rebind','Explicitly bind unfinished work to the approved version, preserving limits.',{taskId:str,spec:obj},['taskId'],true,(i,k)=>this.goals.rebind(i,k));
   add('task_review','Main Codex records a bounded review decision.',{taskId:str,decision:{...str,enum:['accept','revise']},feedback:str},['taskId','decision','feedback'],true,(i,k)=>c.review(i,k));
   for(const [name,method,description,extra]of [['task_integrate','accept','Integrate a checked accepted candidate.',{feedback:str}],['task_takeover','takeover','Transfer verified quiescent partial work into the integration checkout.',{reason:str}],['native_start','startNative','Reserve a separate native Codex checkout.',{}],['native_finish','finishNative','Validate and checkpoint actual native changes.',{summary:str}]])add(name,description,{taskId:str,...extra},['taskId',...Object.keys(extra)],true,(i,k)=>this.launch(name,i,k,()=>this.worker.integration[method](i,`effect-${k}`)));
   add('research_start','Start deterministic Codex research with zero DeepSeek dispatch.',{taskId:str},['taskId'],true,(i,k)=>this.launch('research_start',i,k,()=>this.nativeResearch.start(i,`effect-${k}`)));
   add('native_text_start','Start native Codex consult or maintenance. A DeepSeek handoff requires a reason and verified quiescence.',{taskId:str,reason:str},['taskId'],true,(i,k)=>c.startNativeText(i,k));
-  add('native_text_finish','Record a native Codex consult result under its original task.',{taskId:str,content:str},['taskId','content'],true,(i,k)=>c.finishNativeText(i,k));
+  add('native_text_finish','Record a native Codex consult or finalized protected learning result under its original task.',{taskId:str,content:str},['taskId','content'],true,(i,k)=>c.finishNativeText(i,k));
   add('research_action','Run a bounded search/read/finish action for native research.',{taskId:str,action:obj},['taskId','action'],true,(i,k)=>this.launch('research_action',i,k,()=>this.nativeResearch.action(i,`effect-${k}`)));
   add('operation_get','Inspect a long operation.',{operationId:str},['operationId'],false,i=>c.store.get('operation',i.operationId));
   add('questions_list','List unresolved task questions.',{goalId:str},[],false,i=>c.store.all('task').filter(t=>(!i.goalId||t.goalId===i.goalId)&&['awaiting_supervisor','awaiting_user'].includes(t.status)).map(t=>({taskId:t.id,goalId:t.goalId,status:t.status,question:t.questions.at(-1)})));
@@ -47,16 +51,29 @@ export class Dispatcher {
   add('reviewer_reserve','Reserve one bounded read-only reviewer assignment.',{taskId:str},['taskId'],true,(i,k)=>c.reserveReviewer(i,k));
   add('reviewer_finish','Save evidence from a reserved native reviewer; main Codex retains acceptance.',{reservationId:str,result:obj,error:str},['reservationId'],true,(i,k)=>c.finishReviewer(i,k));
   add('memory_retrieve','Retrieve at most four applicable lessons and 8 KiB.',{goalId:str,query:str,capability:str},['goalId','query'],false,i=>c.learning.retrieve(i));
-  add('learning_get','Inspect outcomes, procedure versions and protected evaluations.',{goalId:str},[],false,i=>Object.fromEntries(['outcome','lesson','evaluation'].map(kind=>[kind,c.store.all(kind).filter(x=>!i.goalId||x.goalId===i.goalId||kind==='evaluation'&&c.store.get('lesson',x.lessonId).goalId===i.goalId)])));
-  add('learning_propose','Propose a data-only recipe under a budgeted learning assignment.',{taskId:str,proposal:obj},['taskId','proposal'],true,(i,k)=>c.learning.propose(i.taskId,i.proposal,k));
+  add('learning_get','Inspect recent project outcomes, managed versions and protected evaluations. General lessons contain sanitized procedures.',{goalId:str},[],false,i=>{const project=i.goalId?c.learning.projectKey(i.goalId):null,lesson=c.store.all('lesson').filter(l=>!i.goalId||l.scope==='general'||l.projectKey===project).slice(-100),ids=new Set(lesson.map(l=>l.id));return {outcome:c.store.all('outcome').filter(o=>!i.goalId||o.projectKey===project).slice(-100),lesson,evaluation:c.store.all('evaluation').filter(e=>ids.has(e.lessonId)).slice(-100)};});
+  const nativeLearning=id=>{const t=c.getTask(id);if(t.executionActor!=='codex'||t.status!=='codex_active'||t.spec.kind!=='learning')throw Error('An active native learning assignment is required; DeepSeek proposals run through the bounded worker');return t;};
+  add('learning_propose','Propose a data-only recipe under a budgeted native learning assignment. Invalid proposals also spend an attempt.',{taskId:str,proposal:obj},['taskId','proposal'],true,(i,k)=>{nativeLearning(i.taskId);return c.learning.propose(i.taskId,i.proposal,k);});
+  add('learning_correct','Create a new correction candidate; preserve the prior version and require protected evaluation.',{lessonId:str,taskId:str,parameters:obj,rationale:str},['lessonId','taskId','parameters','rationale'],true,(i,k)=>{nativeLearning(i.taskId);return c.learning.correct(i.lessonId,i.taskId,i.parameters,i.rationale,k);});
+  add('learning_archive','Archive a managed lesson while preserving its evidence and history.',{lessonId:str,reason:str},['lessonId','reason'],true,(i,k)=>c.learning.archive(i.lessonId,i.reason,k));
   for(const [name,method,extra]of [['learning_evaluate','evaluate',{}],['learning_promote','promote',{}],['learning_quarantine','quarantine',{reason:str}],['learning_rollback','rollback',{}]])add(name,'Manage a versioned lesson without changing executable authority.',{lessonId:str,...extra},['lessonId',...Object.keys(extra)],true,(i,k)=>method==='quarantine'?c.learning[method](i.lessonId,i.reason,k):c.learning[method](i.lessonId,k));
   add('events_wait','Wait at most30 seconds for durable events.',{after:number,timeoutMs:{...number,maximum:30000}},[],false,async i=>{const end=Date.now()+(i.timeoutMs??0);let events;do{events=c.store.events(i.after??0,200);if(events.length||Date.now()>=end)break;await delay(Math.min(250,end-Date.now()));}while(true);return {events,cursor:events.at(-1)?.seq??i.after??0};});
  }
  tools(){return [...this.definitions.values()].map(({fn,mutating,...tool})=>tool);}
+ async recoverOperations(owner){
+  const lease=this.c.store.get('lease','coordinator');if(lease.token!==owner||lease.pid!==process.pid)throw Error('Current worker lease required for operation recovery');
+  const allowed=new Set(['task_integrate','task_takeover','native_start','native_finish','research_start','research_action']);
+  for(const operation of this.c.store.all('operation').filter(o=>o.status==='pending')){
+   const command=this.c.store.db.prepare('SELECT hash,result FROM commands WHERE key=?').get(operation.key);
+   if(!allowed.has(operation.name)||!command||command.hash!==digest({op:'operation.launch',name:operation.name,input:operation.input})||JSON.parse(command.result).id!==operation.id)throw Error('Saved operation authority could not be verified');
+   await this.invoke(operation.name,{...operation.input,idempotencyKey:operation.key});
+  }
+ }
+ async whenIdle(){while(this.promises.size)await Promise.allSettled([...this.promises.values()]);}
  async invoke(name,input={}){const definition=this.definitions.get(name);if(!definition)throw Error('Unknown harness tool');validate(definition.inputSchema,input);const {idempotencyKey,...data}=input;return definition.fn(data,idempotencyKey);}
  launch(name,input,key,action){
   const operation=this.c.store.command(key,{op:'operation.launch',name,input},()=>{const record={id:randomUUID(),name,input,key,status:'pending',taskId:input.taskId??null,createdAt:this.c.now()};this.c.store.put('operation',record);return record;});
   const current=this.c.store.get('operation',operation.id);if(current.status!=='pending'||this.running.has(current.id))return current;
-  this.running.add(current.id);Promise.resolve().then(action).then(result=>this.c.store.tx(()=>{this.c.store.put('operation',{...current,status:'completed',result,finishedAt:this.c.now()});}),error=>this.c.store.tx(()=>{this.c.store.put('operation',{...current,status:'failed',error:error.message,finishedAt:this.c.now()});})).finally(()=>this.running.delete(current.id));return current;
+  this.running.add(current.id);const run=Promise.resolve().then(action).then(result=>this.c.store.tx(()=>{this.c.store.put('operation',{...current,status:'completed',result,finishedAt:this.c.now()});}),error=>this.c.store.tx(()=>{this.c.store.put('operation',{...current,status:'failed',error:error.message,finishedAt:this.c.now()});})).finally(()=>{this.running.delete(current.id);this.promises.delete(current.id);});this.promises.set(current.id,run);return current;
  }
 }

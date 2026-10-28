@@ -27,6 +27,7 @@ export async function startApi({dispatcher,token,port=0,host='127.0.0.1'}={}){
    const bearer=request.headers.authorization?.startsWith('Bearer ')&&equal(request.headers.authorization.slice(7),token),cookie=request.headers.cookie?.split(';').map(s=>s.trim()).find(s=>s.startsWith('frontier_session='))?.slice(17),session=cookie?sessions.get(cookie):null;
    if(!bearer&&(!session||session.expires<Date.now())){if(pathname==='/'&&request.method==='GET'){response.writeHead(303,{location:'/login'});response.end();return;}throw problem(401,'Authentication required');}
    if(pathname==='/api/session'&&request.method==='GET')return send(200,{authenticated:true,csrf:session?.csrf??null});
+   if(pathname.startsWith('/api/artifacts/')&&request.method==='GET'){const artifact=await dispatcher.artifacts.read(pathname.slice('/api/artifacts/'.length));return send(200,artifact.data,artifact.type);}
    if(pathname==='/api/invoke'&&request.method==='POST'){
     if(!bearer&&(request.headers.origin!==url||!equal(request.headers['x-csrf-token']??'',session.csrf)))throw problem(403,'CSRF check failed');
     if(!request.headers['content-type']?.startsWith('application/json'))throw problem(415,'JSON content type required');

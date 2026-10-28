@@ -10,6 +10,11 @@ import {startApi} from '../src/harness/api.mjs';
 
 async function fixture(t){const root=mkdtempSync(path.join(os.tmpdir(),'harness-api-')),c=new Coordinator({root}),dispatcher=new Dispatcher({c,config:{environment:'fixture'}}),token='a'.repeat(64),api=await startApi({dispatcher,token});t.after(async()=>{await api.close();c.close();rmSync(root,{recursive:true,force:true});});
  const call=(name,input={},headers={})=>fetch(api.url+'/api/invoke',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json',...headers},body:JSON.stringify({name,input})});return {c,dispatcher,token,api,call};}
+test('saved long operations recover under the verified current lease and reuse their original mutation key',async t=>{
+ const f=await fixture(t);f.c.acquireWorker('recovered');f.c.store.command('original-native-command',{op:'operation.launch',name:'native_start',input:{taskId:'saved-task'}},()=>f.c.store.put('operation',{id:'pending-native',name:'native_start',input:{taskId:'saved-task'},key:'original-native-command',status:'pending',taskId:'saved-task',createdAt:f.c.now()}));let calls=0,seen;
+ f.dispatcher.worker.integration.startNative=async(input,key)=>{calls++;seen={input,key};return {id:input.taskId,status:'codex_active'};};
+ await assert.rejects(f.dispatcher.recoverOperations('wrong-owner'),/lease|owner/);await f.dispatcher.recoverOperations('recovered');await f.dispatcher.whenIdle();const done=f.c.store.get('operation','pending-native');assert.equal(done.status,'completed');assert.deepEqual(seen,{input:{taskId:'saved-task'},key:'effect-original-native-command'});await f.dispatcher.recoverOperations('recovered');assert.equal(calls,1);
+});
 test('authenticated tools prepare, activate and control actual durable goals with strict idempotency',async t=>{
  const f=await fixture(t),input={idempotencyKey:'prepare',manifest:{submissionId:'g',objective:'Research a queue',acceptance:['Cited answer'],environment:'fixture'}};
  const response=await f.call('goal_prepare',input);assert.equal(response.status,200);const g=await response.json();assert.equal((await (await f.call('goal_prepare',input)).json()).id,g.id);

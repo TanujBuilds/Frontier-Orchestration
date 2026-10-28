@@ -1,6 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {ProjectFrontier} from '../project/providers.mjs';
 import {keys,text} from './contracts.mjs';
+import {git} from '../project/process.mjs';
 
 export class LegacyReview {
  constructor(worker){this.worker=worker;this.c=worker.c;this.inflight=null;}
@@ -14,7 +15,7 @@ export class LegacyReview {
   if(g.manifest.mode.review!=='legacy')throw Error('Mode prohibits background Codex review');
   const source=await this.worker.integration.candidate(task),unlock=await source.journal.lock();
   try{
-   await source.workspace.recover();const runner=this.worker.integration.checks(source.workspace);await runner.verify();
+   await source.workspace.recover();const runner=this.worker.integration.checks(source.workspace),sandbox=await runner.verify();
    const checks=await runner.run(source.manifest.permissions.checks,`legacy-${task.id}-${task.reviews}`);if(!checks.every(r=>r.passed))throw Error('Legacy review requires passing protected checks');
    const reservation=c.store.tx(()=>{
     const current=c.store.get('task',task.id);c.liveGoal(c.store.get('goal',task.goalId));if(c.now()>=current.deadline)throw Error('Task deadline reached');
@@ -28,7 +29,10 @@ export class LegacyReview {
    if(reservation.status!=='completed'){
     if(!reservation.fresh)throw Error('Interrupted Codex review remains spent; operator reconciliation required');
     this.worker.reviewer??=new ProjectFrontier({command:this.worker.config.codexPath??'codex',timeoutMs:Math.min(300000,task.deadline-c.now())});
-    const evidence={...await source.workspace.evidence(),checks};
+    const repo=g.manifest.project.repo,head=await git(repo,'rev-parse','HEAD'),status=await git(repo,'status','--porcelain'),sourceFixture={head,status,approvedBase:g.manifest.project.baseCommit,unchanged:head===g.manifest.project.baseCommit&&!status};
+    if(!sourceFixture.unchanged)throw Error('Source fixture changed from its approved revision/status');
+    const modelContext=source.journal.events.filter(e=>e.type==='harness.context'&&c.store.request(task.id,e.data.key)?.status==='completed').map(e=>e.data);
+    const evidence={...await source.workspace.evidence(),checks,sandbox,sourceFixture,modelContext};
     try{result=await this.worker.reviewer.reviewCode({brief:g.manifest.objective,approvedPlan:g.manifest.acceptance,stage:task.spec,assignment:task.spec,evidence},AbortSignal.timeout(Math.max(1,Math.min(300000,task.deadline-c.now()))));c.saveRequest(reservation.id,result);}
     catch(error){c.store.tx(()=>{const t=c.store.get('task',task.id);t.status='blocked';t.reason=error.message;t.checkpoint.legacyReviewKey=null;c.store.put('task',t);c.store.db.prepare("UPDATE requests SET status='failed' WHERE id=?").run(reservation.id);c.emit('legacy_review.failed',g.id,t.id,{id:reservation.id,reason:t.reason});});return c.getTask(task.id);}
    }

@@ -27,13 +27,14 @@ export async function serve({root,configFile,port}){
  await atomic(path.join(root,'connection.json'),{url:api.url,token});await atomic(path.join(root,'service.json'),{pid:process.pid,owner,url:api.url,node:process.versions.node,startedAt:Date.now()});
  process.stdout.write(JSON.stringify({status:'ready',url:api.url,root,node:process.versions.node})+'\n');
  try{
+  await dispatcher.recoverOperations(owner);
   while(!quitting){try{await worker.tick();}catch(error){c.emit('service.error',null,null,{reason:error.message.slice(0,1500)});}await delay(250);}
   let active=c.store.all('task').find(t=>t.owner===owner&&t.status==='running');
   if(active){c.store.tx(()=>{active.yieldRequested=true;c.store.put('task',active);});
    const until=Date.now()+25000;while(active&&Date.now()<until){if(active.spec.kind==='research')await worker.adapters.research.step(c.getTask(active.id),owner);else c.boundary(active.id,active.checkpoint,owner);active=c.store.all('task').find(t=>t.owner===owner&&t.status==='running');if(active)await delay(250);}
    if(active)c.markUncertain(active.id,'Service stopped before remote quiescence was confirmed',owner);
   }
- }finally{await api.close();c.releaseWorker(owner);c.close();process.removeListener('SIGTERM',stop);process.removeListener('SIGINT',stop);}
+ }finally{await api.close();await dispatcher.whenIdle();c.releaseWorker(owner);c.close();process.removeListener('SIGTERM',stop);process.removeListener('SIGINT',stop);}
 }
 export async function main(argv=process.argv.slice(2)){
  if(Number(process.versions.node.split('.')[0])<24)throw Error('Harness requires Node24 or newer');

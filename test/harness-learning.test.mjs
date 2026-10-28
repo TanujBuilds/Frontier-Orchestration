@@ -71,3 +71,39 @@ test('only observed batch failures can propose a batch lesson and learning canno
  assert.throws(()=>f.learning.propose(f.maintenance.id,proposal(other),'unrelated'),/batch|truncation|applicable/);
  const g=f.makeGoal('b');assert.throws(()=>f.c.submitTask({goalId:g.id,submissionId:'urgent-learn',kind:'learning',priority:'blocking',objective:'Learn',acceptance:['Measured']},'urgent-learn'),/background|priority/);
 });
+test('research truncation is not applicable evidence for a coding batch recipe',t=>{
+ const f=setup(t),source=f.c.submitTask({goalId:f.g.id,submissionId:'research',kind:'research',objective:'Research evidence',acceptance:['Citations']},'research');
+ const seq=f.c.emit('attempt.protocol_failed',f.g.id,source.id,{reason:'Response truncated'}),outcome=f.learning.capture(source.id,seq);
+ assert.throws(()=>f.learning.propose(f.maintenance.id,proposal(outcome),'wrong-capability'),/coding|applicable/);
+});
+test('native learning permits one proposal and one repair, including invalid proposals',t=>{
+ const f=setup(t);
+ // Use a separate approved goal so its one learning assignment is native.
+ const g=f.makeGoal('native'),m=f.c.submitTask({goalId:g.id,submissionId:'native-learning',actor:'codex',kind:'learning',objective:'Distill batch lesson',acceptance:['Protected evaluation']},'native-learn');f.c.startNativeText({taskId:m.id},'native-start');
+ assert.throws(()=>f.learning.propose(m.id,{...proposal(f.outcome),family:'shell-execution'},'native-bad'),/evaluator/);assert.equal(f.c.getTask(m.id).attempts,1);
+ const lesson=f.learning.propose(m.id,proposal(f.outcome),'native-repair');assert.equal(f.c.getTask(m.id).attempts,2);assert.equal(f.learning.propose(m.id,proposal(f.outcome),'native-repair').id,lesson.id);
+ assert.throws(()=>f.learning.propose(m.id,proposal(f.outcome),'native-third'),/proposal|attempt|repair/);
+ f.learning.evaluate(lesson.id,'native-evaluate');f.learning.promote(lesson.id,'native-promote');const done=f.c.finishNativeText({taskId:m.id,content:'Protected regression and held-out replay passed'},'native-finish');assert.equal(done.status,'accepted');assert.equal(done.spent.model,0);assert.equal(done.attempts,2);
+});
+test('owner correction creates a separately evaluated candidate without editing the active lesson',t=>{
+ const f=setup(t),a=f.learning.propose(f.maintenance.id,proposal(f.outcome),'a');f.learning.evaluate(a.id,'ea');f.learning.promote(a.id,'pa');
+ const g=f.makeGoal('correction'),m=f.c.submitTask({goalId:g.id,submissionId:'learn',actor:'codex',kind:'learning',objective:'Correct the batch procedure',acceptance:['Protected evaluation']},'correction-task');f.c.startNativeText({taskId:m.id},'correction-start');
+ const corrected=f.learning.correct(a.id,m.id,{maxFiles:1,maxBytes:20000},'Use a stricter size bound','correct');assert.equal(corrected.correctedFrom,a.id);assert.equal(corrected.status,'candidate');assert.equal(f.c.store.get('lesson',a.id).status,'active');assert.equal(f.c.store.get('lesson',a.id).recipe.maxBytes,24576);assert.equal(f.c.getTask(m.id).attempts,1);
+ assert.equal(f.learning.correct(a.id,m.id,{maxFiles:1,maxBytes:20000},'Use a stricter size bound','correct').id,corrected.id);assert.throws(()=>f.learning.promote(corrected.id,'early'),/evaluation/);
+});
+test('a verified backoff correction promotes a bounded procedure after regression and held-out replay',t=>{
+ const f=setup(t);f.c.store.tx(()=>{const task=f.c.store.get('task',f.source.id);task.feedback=[{decision:'revise',text:'Zero base times Infinity returns NaN for attempt1024; guard zero before exponent overflow'},{decision:'accept',text:'Corrected source independently checked'}];task.status='accepted';f.c.store.put('task',task);});
+ const revised=f.c.emit('task.reviewed',f.g.id,f.source.id,{decision:'revise'}),accepted=f.c.emit('task.integrated',f.g.id,f.source.id,{commit:'a'.repeat(40),checks:[{id:'verify',passed:true}]}),evidence=[f.learning.capture(f.source.id,revised).id,f.learning.capture(f.source.id,accepted).id];
+ const raw={family:'backoff_zero',scope:'project',parameters:{guardZeroBeforeExponent:true},evidence,rationale:'Preserve finite zero results when the exponential overflows'};
+ const lesson=f.learning.propose(f.maintenance.id,raw,'backoff'),result=f.learning.evaluate(lesson.id,'eval-backoff');assert.equal(result.passed,true);assert.equal(result.cases.filter(c=>c.role==='heldout').length,2);assert.equal(result.candidate.failures,0);assert.ok(result.baseline.failures>0);f.learning.promote(lesson.id,'promote-backoff');
+ const memory=f.learning.retrieve({goalId:f.g.id,query:'capped exponential backoff',capability:'coding'});assert.equal(memory[0].recipe.family,'backoff_zero');assert.match(memory[0].content,/zero|Infinity/);
+ assert.throws(()=>f.learning.propose(f.maintenance.id,{...raw,evidence:[evidence[0]]},'no-correction'),/accepted|integration|correction/);
+});
+test('archive preserves evidence and rollback does not reactivate a quarantined predecessor',t=>{
+ const f=setup(t),a=f.learning.propose(f.maintenance.id,proposal(f.outcome),'a');f.learning.evaluate(a.id,'ea');f.learning.promote(a.id,'pa');
+ f.learning.quarantine(a.id,'Real regression','qa');
+ const b=f.learning.propose(f.maintenance.id,proposal(f.outcome),'b');f.learning.evaluate(b.id,'eb');f.learning.promote(b.id,'pb');
+ // A rollback may restore only previously superseded, eligible versions.
+ f.c.store.tx(()=>{const record=f.c.store.get('lesson',b.id);record.previousIds=[a.id];f.c.store.put('lesson',record);});f.learning.rollback(b.id,'rollback-b');assert.equal(f.c.store.get('lesson',a.id).status,'quarantined');
+ f.learning.archive(b.id,'Archived by owner','archive');assert.equal(f.c.store.get('lesson',b.id).status,'archived');assert.ok(f.c.store.get('lesson',b.id).evaluationId);
+});

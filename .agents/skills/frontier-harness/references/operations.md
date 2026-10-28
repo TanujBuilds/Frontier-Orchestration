@@ -61,6 +61,9 @@ DeepSeek planner. A Codex-only task is ready for native execution, not a DeepSee
 queue item.
 
 `task_get` shows counters/checkpoints; `task_evidence` returns bounded windows.
+`artifacts_list` returns checksummed allowlisted report/screenshot references.
+Artifact reads are authenticated, reject symlinks and changed checksums, and serve
+source/report text as plain text. Page instructions remain untrusted data.
 `questions_list` and `question_answer` use the saved assignment; an answer cannot
 expand its envelope. `task_review` records accept/revise. Coding acceptance still
 needs `task_integrate` and combined checks. Research/consult acceptance is not a
@@ -83,15 +86,24 @@ spent and blocks conflicting dispatch. Never delete the database/lease to recove
 
 For changed scope, prepare and approve an exact goal revision after quiescence,
 then explicitly rebind unfinished assignments. Rebinding preserves original task
-limits and spending. Started assignments keep their exact specification; focused
-implementation corrections use same-task review feedback. Changed repositories or
+limits and spending. Started assignments keep their objective and limits. A coding
+permission correction additionally requires an approved new goal version and
+explicit rebind; research-scope changes still require a versioned backend handoff.
+Focused implementation corrections use same-task review feedback. Changed repositories or
 bases after execution need separate explicit handling.
 
 `learning_get` and `memory_retrieve` expose scoped evidence and pinned versions.
-The first protected evaluator supports only the reviewed `edit_batch` recipe;
-its regression and two held-out replays are labeled `protected_replay`, not broad
+Reviewed evaluators support `edit_batch` and the narrowly applicable JavaScript
+`backoff_zero` procedure. The latter requires a reviewed zero/overflow failure and
+checked integration of its accepted correction. Their regression and two held-out
+replays are labeled `protected_replay`, not broad
 performance measurements. A budgeted learning task can propose/evaluate/promote;
 quarantine and rollback affect future retrieval, not running assignments.
+Native maintenance starts with `native_text_start`; its first proposal and one
+repair are counted even if invalid. `learning_correct` creates a separately
+evaluated candidate. `learning_archive` preserves evidence while removing a lesson
+from future retrieval. Finish native maintenance after protected evaluation and a
+recorded procedure decision.
 
 `goal_finalize` produces a hashed immutable receipt only when work is accepted.
 Explicit partial finalization requires stopped/quiescent unfinished work. Report

@@ -42,7 +42,14 @@ export class Coordinator {
   if(this.now()>=g.deadline){p.status='partial';p.owner=null;}else{p.status='running';p.owner=owner;}
   this.store.put('planning',p);this.emit('planning.recovered',goalId,null,{attempt:p.attempt,status:p.status,spent:this.store.spent(goalId)});return p;
  });}
- emit(type,goalId,taskId,data={}){return this.store.tx(()=>{const seq=this.store.event(type,{goalId,taskId,data,at:this.now()});if(taskId&&this.learning?.captures(type))this.learning.capture(taskId,seq);return seq;});}
+ emit(type,goalId,taskId,data={}){return this.store.tx(()=>{const seq=this.store.event(type,{goalId,taskId,data,at:this.now()});if(taskId&&this.learning?.captures(type))this.learning.capture(taskId,seq);
+  if(type==='task.answered')for(const n of this.store.all('notification').filter(n=>n.taskId===taskId&&n.kind==='decision'&&!n.resolved)){n.resolved=true;n.resolvedAt=this.now();this.store.put('notification',n);}
+  const kind=type==='task.question'?'decision':['task.blocked','task.uncertain','legacy_review.failed'].includes(type)?'blocker':type==='goal.finalized'?'completion':['task.result','task.integrated','task.native_finished','learning.promoted'].includes(type)?'result':null;
+  if(kind){const task=taskId?this.store.get('task',taskId):null,title=type==='task.question'?'An answer is needed':type==='goal.finalized'?'Goal '+data.status:type==='learning.promoted'?'Tested procedure available':kind==='blocker'?'Work needs attention':'Saved work is ready';this.store.put('notification',{id:`notice-${seq}`,sequence:seq,goalId,taskId,kind,title,objective:task?.spec.objective??this.store.maybe('goal',goalId)?.manifest.objective??'',at:this.now(),acknowledged:false,resolved:false});}
+  return seq;
+ });}
+ notifications({goalId}={}){return this.store.all('notification').filter(n=>!n.acknowledged&&!n.resolved&&(!goalId||n.goalId===goalId)).sort((a,b)=>b.sequence-a.sequence).slice(0,50);}
+ ackNotification(input,key){return this.store.command(key,{op:'notification.ack',...input},()=>{const n=this.store.get('notification',input.notificationId);n.acknowledged=true;n.acknowledgedAt=this.now();this.store.put('notification',n);return n;});}
  prepareGoal(raw,key){const manifest=normalizeGoal(raw,this.registry);return this.store.command(key,{op:'goal.prepare',manifest},()=>{
   const g=this.store.submission('goal','',manifest.submissionId,digest(manifest),id=>({id,manifest,hash:digest(manifest),version:1,status:'draft',createdAt:this.now(),activatedAt:null,deadline:null}));
   this.emit('goal.prepared',g.id,null,{hash:g.hash});return g;
@@ -54,7 +61,7 @@ export class Coordinator {
  });}
  getGoal(id){const g=this.store.get('goal',id),planning=this.store.maybe('planning',id);return {...g,planning:planning?{...planning,spent:this.store.spent(id).model??0}:null,tasks:this.store.all('task').filter(t=>t.goalId===id).map(t=>this.getTask(t.id)),reviewerRuns:this.store.all('reviewer').filter(r=>r.goalId===id)};}
  getTask(id){const t=this.store.get('task',id),local=this.store.spent(id),spent={model:0,search:0,download:0,codexReview:0};for(const k of Object.keys(spent))spent[k]=Math.max(local[k]??0,t.remoteSpent?.[k]??0);return {...t,spent};}
- snapshot(){return {goals:this.store.all('goal').map(g=>this.getGoal(g.id)),events:this.store.events(0,1000),registry:this.registry.snapshot()};}
+ snapshot(){return {goals:this.store.all('goal').map(g=>this.getGoal(g.id)),notifications:this.notifications(),events:this.store.events(Math.max(0,Number(this.store.db.prepare('SELECT COALESCE(MAX(seq),0) AS n FROM events').get().n)-1000),1000),operations:this.store.all('operation').slice(-30).map(({result,...r})=>r),registry:this.registry.snapshot()};}
  liveGoal(g){if(g.status!=='active')throw Error('Goal is not active');if(this.now()>=g.deadline)throw Error('Goal deadline exceeded');}
  liveTask(t,{allowStopped=false}={}){const current=this.store.get('task',t.id),g=this.store.get('goal',current.goalId);this.liveGoal(g);if(current.goalVersion!==g.version)throw Error('Task needs explicit rebind to the approved goal version');if(current.deadline&&this.now()>=current.deadline)throw Error('Original task deadline exceeded');if(current.pauseRequested||(current.stopRequested&&!(allowStopped&&current.status==='stopped'&&!current.owner)))throw Error('Task is paused or stopped');return current;}
  startNativeText(input,key){return this.store.command(key,{op:'native.text.start',...input},()=>{
@@ -66,8 +73,10 @@ export class Coordinator {
   t.status='codex_active';t.executionActor='codex';t.startedAt??=this.now();t.deadline??=Math.min(g.deadline,t.startedAt+t.spec.limits.seconds*1000);this.store.put('task',t);this.learning.pin(t.id);this.emit('task.native_started',g.id,t.id,{kind:t.spec.kind,reason:input.reason??null});return this.getTask(t.id);
  });}
  finishNativeText(input,key){return this.store.command(key,{op:'native.text.finish',...input},()=>{
-  const t=this.getTask(input.taskId);this.liveTask(t);if(t.status!=='codex_active'||t.executionActor!=='codex'||t.spec.kind!=='consult')throw Error('Native consult ownership required');
-  text(input.content,'native result',20000);t.result={content:input.content,actor:'codex',accounting:'native host; token totals unavailable'};t.status='accepted';this.store.put('task',t);this.emit('task.native_finished',t.goalId,t.id,{status:t.status,actor:'codex'});return this.getTask(t.id);
+  const t=this.getTask(input.taskId);this.liveTask(t);if(t.status!=='codex_active'||t.executionActor!=='codex'||!['consult','learning'].includes(t.spec.kind))throw Error('Native text ownership required');
+  const lessons=t.spec.kind==='learning'?this.store.all('lesson').filter(l=>l.maintenanceId===t.id):[];
+  if(t.spec.kind==='learning'&&(!lessons.length||lessons.some(l=>l.status==='candidate')||!this.store.all('evaluation').some(e=>lessons.some(l=>l.id===e.lessonId))))throw Error('Native learning needs a protected evaluation and finalized procedure decision');
+  text(input.content,'native result',20000);t.result={content:input.content,actor:'codex',accounting:'native host; token totals unavailable',...(lessons.length?{lessons:lessons.map(l=>({id:l.id,status:l.status,recipeHash:l.recipeHash}))}:{})};t.status='accepted';this.store.put('task',t);this.emit('task.native_finished',t.goalId,t.id,{status:t.status,actor:'codex'});return this.getTask(t.id);
  });}
  submitTask(input,key){const {goalId,...raw}=input;return this.store.command(key,{op:'task.submit',...input},()=>{
   const g=this.store.get('goal',goalId);this.liveGoal(g);const spec=normalizeTask(raw,g.manifest,this.registry),hash=digest(spec);
