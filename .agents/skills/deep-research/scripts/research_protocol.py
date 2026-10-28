@@ -24,10 +24,13 @@ def parse_action(raw):
         raise ValueError('action must be an object')
     action = raw.get('action')
     allowed = {'search':{'action','query'}, 'read':{'action','url','source_id','start','length'},
-               'finish':{'action','report'}}
+               'finish':{'action','report'}, 'ask_supervisor':{'action','question'}}
     if action not in allowed or set(raw) - allowed[action]:
         raise ValueError('only search, read and finish actions are permitted')
-    if action == 'search':
+    if action == 'ask_supervisor':
+        if not isinstance(raw.get('question'),str) or not 1 <= len(raw['question'].strip()) <= 8000:
+            raise ValueError('question must contain 1..8000 characters')
+    elif action == 'search':
         if not isinstance(raw.get('query'),str) or not 1 <= len(raw['query'].strip()) <= 1000:
             raise ValueError('search query must contain 1..1000 characters')
     elif action == 'read':

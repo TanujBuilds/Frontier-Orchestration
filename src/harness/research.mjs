@@ -1,0 +1,65 @@
+import { spawn } from 'node:child_process';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const bridge=fileURLToPath(new URL('../../.agents/skills/deep-research/scripts/harness_rpc.py',import.meta.url));
+export class ResearchClient {
+ constructor(config){this.config=config;}
+ async call(request,collectOutput){
+  const cfg=this.config,args=[bridge,...(collectOutput?['--collect-output',collectOutput]:cfg.remoteConfig?['--remote-config',cfg.remoteConfig]:['--data-dir',cfg.dataDir])];
+  return new Promise((resolve,reject)=>{
+   const child=spawn(cfg.python??'python3',args,{stdio:['pipe','pipe','pipe']});let out='',err='',oversize=false;
+   const timer=setTimeout(()=>child.kill('SIGKILL'),130000);
+   child.stdout.on('data',b=>{out+=b;if(Buffer.byteLength(out)>34*1024*1024){oversize=true;child.kill('SIGKILL');}});
+   child.stderr.on('data',b=>{err=(err+b).slice(-4000);});child.stdin.on('error',()=>{});child.stdin.end(JSON.stringify(request));
+   child.once('error',e=>{clearTimeout(timer);reject(e);});child.once('close',code=>{clearTimeout(timer);try{if(oversize)throw Error('Research packet exceeds bound');const result=JSON.parse(out);if(code!==0||result.error)throw Error(result.error??err??'Research bridge failed');resolve(result);}catch(e){reject(new Error(e.message.replace(/https:\/\/login\.tailscale\.com\/a\/[A-Za-z0-9]+/g,'[SSH identity check required]')));}});
+  });
+ }
+}
+export class ResearchAdapter {
+ constructor(worker,{rpc,collect}={}){
+  this.worker=worker;const client=new ResearchClient(worker.config.research??{});this.rpc=rpc??(r=>client.call(r));this.collect=collect??((packet,output)=>client.call(packet,output));
+ }
+ async step(task,owner){
+  const {c}=this.worker,cp={...task.checkpoint},cfg=this.worker.config.research??{},g=c.store.get('goal',task.goalId);
+  if(!cp.phase){
+   const manifest={schema:2,submission_id:task.id,question:task.spec.objective,mode:g.manifest.environment,
+    scope:{seed_urls:task.spec.scope.seedUrls,include_domains:task.spec.scope.includeDomains,exclude_domains:task.spec.scope.excludeDomains},
+    limits:{seconds:task.spec.limits.seconds,searches:task.spec.limits.searches,downloads:task.spec.limits.downloads,model_calls:task.spec.limits.modelCalls},
+    not_after:Math.floor(task.deadline/1000),collaboration:{supervisor:g.manifest.mode.actors.includes('codex')?'codex':'user',max_questions:task.spec.limits.questions}};
+   const prepared=await this.rpc({command:'prepare_manifest',manifest});return c.boundary(task.id,{phase:'submit',manifest:prepared.manifest,remoteHash:prepared.hash},owner);
+  }
+  if(cp.phase==='submit'){
+   try{const remote=await this.rpc({command:'submit',manifest:cp.manifest,approved_hash:cp.remoteHash});return c.boundary(task.id,{...cp,phase:'poll',remoteJobId:remote.id},owner);}
+   catch(e){c.markUncertain(task.id,'Ambiguous research submission: '+e.message,owner);return c.getTask(task.id);}
+  }
+  if(cp.nextPollAt&&c.now()<cp.nextPollAt)return {waiting:true,taskId:task.id};
+  try{
+   if(task.answers.length>(cp.answeredCount??0)){
+    const answer=task.answers.at(-1);await this.rpc({command:'answer',job:cp.remoteJobId,answer:answer.text,responder:answer.responder});cp.answeredCount=task.answers.length;
+   }
+   if(task.stopRequested||task.pauseRequested||task.yieldRequested){
+    await this.rpc({command:task.stopRequested?'stop':'yield',job:cp.remoteJobId});
+   }else if(cp.remotePaused){await this.rpc({command:'resume',job:cp.remoteJobId});cp.remotePaused=false;}
+   const remote=await this.rpc({command:'status',job:cp.remoteJobId});
+   if(remote.manifest_hash&&remote.manifest_hash!==cp.remoteHash)throw Error('Research manifest identity mismatch');
+   c.store.tx(()=>{const current=c.owned(task.id,owner);for(const [kind,n] of Object.entries(remote.counters??{})){if(n<(current.remoteSpent?.[kind]??0))throw Error('Remote counters decreased');}current.remoteSpent=remote.counters??{};c.store.put('task',current);});
+   if(!remote.quiescent){
+    if(remote.execution?.status==='uncertain'){c.markUncertain(task.id,'Remote model request outcome is uncertain',owner);return c.getTask(task.id);}
+    return c.boundary(task.id,{...cp,nextPollAt:c.now()+(cfg.pollMs??1000)},owner);
+   }
+   if(['awaiting_supervisor','awaiting_user'].includes(remote.status)){
+    const questions=await this.rpc({command:'questions',job:cp.remoteJobId});const q=questions.at(-1);return c.ask(task.id,q.question,{...cp,nextPollAt:0,remoteQuestionId:q.id},owner);
+   }
+   if(['suspended','stopped'].includes(remote.status))return c.boundary(task.id,{...cp,remotePaused:true,nextPollAt:0},owner);
+   if(['completed','partial'].includes(remote.status)){
+    const packet=await this.rpc({command:'export',job:cp.remoteJobId}),collected=await this.collect(packet,path.join(c.store.root,'research-results'));
+    if(!collected.checksums_verified)throw Error('Research collection lacked verified checksums');
+    const done=c.completeTask(task.id,{directory:collected.directory,checksumsVerified:true,remoteJobId:cp.remoteJobId,receiptStatus:remote.status,independentReview:'not_requested'},owner);
+    if(remote.status==='partial')c.store.tx(()=>{const t=c.store.get('task',task.id);t.status='partial';c.store.put('task',t);});return c.getTask(done.id);
+   }
+   if(['blocked','failed'].includes(remote.status))throw Error(remote.reason??'Remote research failed');
+   return c.boundary(task.id,{...cp,nextPollAt:c.now()+(cfg.pollMs??1000)},owner);
+  }catch(e){if(c.getTask(task.id).status==='uncertain')return c.getTask(task.id);c.markUncertain(task.id,'Research contact/evidence uncertain: '+e.message,owner);return c.getTask(task.id);}
+ }
+}

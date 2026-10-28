@@ -60,8 +60,15 @@ def collect(packet,output):
 
 def rpc(store,request):
     command=request['command']
+    if command=='prepare_manifest':
+        manifest=normalize_manifest(request['manifest']);return {'manifest':manifest,'hash':manifest_hash(manifest)}
     if command=='submit':return brief_job(store.submit(request['manifest'],request['approved_hash']))
-    if command=='status':return brief_job(store.get(request['job'])) if request.get('job') else [brief_job(j) for j in store.list_jobs()]
+    if command=='status':
+        def status(j):return {**brief_job(j),**store.execution_status(j['id'])}
+        return status(store.get(request['job'])) if request.get('job') else [status(j) for j in store.list_jobs()]
+    if command=='yield':return {**brief_job(store.request_yield(request['job'])),**store.execution_status(request['job'])}
+    if command=='answer':return brief_job(store.answer(request['job'],request['answer'],request['responder']))
+    if command=='questions':return [e['data'] for e in store.events(request['job']) if e['type']=='question']
     if command in ('stop','resume'):return brief_job(getattr(store,command)(request['job']))
     if command=='export':return export(store,request['job'])
     raise ValueError('unsupported RPC command')

@@ -11,6 +11,7 @@ test('goal materializes mode and budgets before hashing exact approval',()=>{
  assert.equal(digest({b:2,a:1}),digest({a:1,b:2}));
  assert.throws(()=>normalizeGoal(brief({limits:{hours:Infinity}}),r),/hours/);
  assert.throws(()=>normalizeGoal(brief({shell:'rm -rf'}),r),/unknown/);
+ assert.notEqual(digest(g),digest(normalizeGoal(brief({environment:'fixture'}),r)));
 });
 test('fifth mode narrows registered capabilities without scheduler edits',()=>{
  const r=new Registry();r.registerMode({id:'research-brief',version:1,planner:'deepseek',actors:['deepseek'],review:'checks',capabilities:['research']});

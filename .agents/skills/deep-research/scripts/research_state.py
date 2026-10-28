@@ -8,6 +8,8 @@ from contextlib import contextmanager
 import fcntl
 import hashlib
 import json
+import math
+import os
 from pathlib import Path
 import re
 import sqlite3
@@ -45,12 +47,25 @@ def _keys(value, allowed, label):
 
 def normalize_manifest(raw):
     """Validate a manifest and materialize defaults before approval hashing."""
-    _keys(raw, ('schema', 'mode', 'submission_id', 'question', 'scope', 'limits'), 'manifest')
+    _keys(raw, ('schema', 'mode', 'submission_id', 'question', 'scope', 'limits', 'not_after', 'collaboration'), 'manifest')
     mode = raw.get('mode', 'live')
     if mode not in ('live', 'fixture'):
         raise StateError('mode must be live or fixture')
-    if type(raw.get('schema', 1)) is not int or raw.get('schema', 1) != 1:
-        raise StateError('manifest schema must be 1')
+    schema = raw.get('schema', 1)
+    if type(schema) is not int or schema not in (1, 2):
+        raise StateError('manifest schema must be 1 or 2')
+    extension = {}
+    if schema == 1 and ('not_after' in raw or 'collaboration' in raw):
+        raise StateError('harness fields require manifest schema 2')
+    if schema == 2:
+        deadline = raw.get('not_after')
+        if type(deadline) not in (int, float) or not math.isfinite(deadline) or deadline <= 0:
+            raise StateError('schema 2 requires an absolute not_after deadline')
+        policy = raw.get('collaboration')
+        _keys(policy, ('supervisor', 'max_questions'), 'collaboration')
+        if policy.get('supervisor') not in ('codex', 'user', 'none') or type(policy.get('max_questions')) is not int or not 0 <= policy['max_questions'] <= 3:
+            raise StateError('invalid collaboration policy')
+        extension = {'not_after': deadline, 'collaboration': policy}
     submission = raw.get('submission_id')
     if not isinstance(submission, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,80}', submission):
         raise StateError('submission_id must contain 1 to 80 letters, numbers, underscores, or hyphens')
@@ -73,8 +88,8 @@ def normalize_manifest(raw):
             raise StateError(f'limits.{name} must be a positive integer')
     if normalized_limits['model_calls'] < 4:
         raise StateError('limits.model_calls must allow at least four calls')
-    return {'schema': 1, 'mode': mode, 'submission_id': submission, 'question': question,
-            'scope': normalized_scope, 'limits': normalized_limits}
+    return {'schema': schema, 'mode': mode, 'submission_id': submission, 'question': question,
+            'scope': normalized_scope, 'limits': normalized_limits, **extension}
 
 
 def manifest_hash(normalized):
@@ -127,6 +142,10 @@ class Store:
                     type TEXT NOT NULL,
                     time REAL NOT NULL,
                     data_json TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS executions (
+                    job_id TEXT PRIMARY KEY REFERENCES jobs(id), token TEXT NOT NULL,
+                    pid INTEGER NOT NULL, status TEXT NOT NULL, updated_at REAL NOT NULL
                 );
                 PRAGMA user_version=1;
             ''')
@@ -251,6 +270,7 @@ class Store:
             if job['status'] == 'queued':
                 started = job['started_at'] if job['started_at'] is not None else now
                 deadline = job['deadline'] if job['deadline'] is not None else started + job['manifest']['limits']['seconds']
+                deadline = min(deadline, job['manifest'].get('not_after', deadline))
                 db.execute("UPDATE jobs SET status='running',started_at=?,deadline=?,updated_at=? WHERE id=?",
                            (started, deadline, now, job['id']))
                 self._event(db, job['id'], 'started' if job['started_at'] is None else 'claimed', {}, now)
@@ -352,7 +372,7 @@ class Store:
         now = time.time() if now is None else now
         with self._db(transaction=True) as db:
             job = self._get(db, job_id)
-            if job['status'] not in ('stopped', 'blocked', 'failed'):
+            if job['status'] not in ('stopped', 'blocked', 'failed', 'suspended'):
                 raise StateError('only stopped, blocked, or failed jobs can resume')
             if job['deadline'] is not None and now >= job['deadline']:
                 raise BudgetExceeded('the original research deadline has been reached')
@@ -361,6 +381,77 @@ class Store:
             db.execute("UPDATE jobs SET status='queued',reason=NULL,updated_at=? WHERE id=?", (now, job_id))
             self._event(db, job_id, 'resumed', {}, now)
             return self._get(db, job_id)
+
+    def execution_start(self, job_id, token):
+        with self._db(transaction=True) as db:
+            job = self._get(db, job_id)
+            previous = db.execute('SELECT * FROM executions WHERE job_id=?', (job_id,)).fetchone()
+            pending = db.execute("SELECT 1 FROM operations WHERE job_id=? AND kind='model' AND status='pending'", (job_id,)).fetchone()
+            if job['manifest']['schema'] == 2 and previous and (previous['status'] == 'uncertain' or (previous['status'] == 'active' and pending)):
+                db.execute("UPDATE executions SET status='uncertain',updated_at=? WHERE job_id=?", (time.time(),job_id))
+                raise StateError('Ambiguous remote inference requires operator reconciliation')
+            db.execute('INSERT INTO executions VALUES(?,?,?,?,?) ON CONFLICT(job_id) DO UPDATE SET token=excluded.token,pid=excluded.pid,status=excluded.status,updated_at=excluded.updated_at',
+                       (job_id,token,os.getpid(),'active',time.time()))
+
+    def execution_end(self, job_id, token):
+        with self._db(transaction=True) as db:
+            db.execute("UPDATE executions SET status='quiescent',updated_at=? WHERE job_id=? AND token=? AND status='active'", (time.time(),job_id,token))
+
+    def execution_uncertain(self, job_id):
+        with self._db(transaction=True) as db:
+            db.execute("UPDATE executions SET status='uncertain',updated_at=? WHERE job_id=?", (time.time(),job_id))
+
+    def execution_status(self, job_id):
+        with self._db() as db:
+            job = self._get(db, job_id)
+            row = db.execute('SELECT * FROM executions WHERE job_id=?', (job_id,)).fetchone()
+            return {'quiescent': row['status']=='quiescent' if row else job['status']!='running',
+                    'execution': dict(row) if row else None}
+
+    def request_yield(self, job_id):
+        with self._db(transaction=True) as db:
+            job=self._get(db,job_id)
+            if job['status']=='queued':
+                db.execute("UPDATE jobs SET status='suspended' WHERE id=?",(job_id,))
+            elif job['status']=='running':
+                db.execute("UPDATE jobs SET reason='yield_requested' WHERE id=?",(job_id,))
+            self._event(db,job_id,'yield_requested')
+            return self._get(db,job_id)
+
+    def yield_boundary(self, job_id):
+        with self._db(transaction=True) as db:
+            job=self._get(db,job_id)
+            if job['status']=='running' and job['reason']=='yield_requested':
+                db.execute("UPDATE jobs SET status='suspended',reason=NULL,updated_at=? WHERE id=?",(time.time(),job_id))
+                self._event(db,job_id,'yielded')
+                return True
+            return False
+
+    def ask(self, job_id, question):
+        if not isinstance(question,str) or not 1 <= len(question.strip()) <= 8000:
+            raise StateError('invalid supervisor question')
+        with self._db(transaction=True) as db:
+            job=self._get(db,job_id);policy=job['manifest'].get('collaboration',{})
+            if job['status']!='running' or policy.get('supervisor','none')=='none':
+                raise StateError('approved manifest does not allow questions')
+            count=db.execute("SELECT COUNT(*) FROM events WHERE job_id=? AND type='question'",(job_id,)).fetchone()[0]
+            if count>=policy['max_questions']:raise BudgetExceeded('clarification budget reached')
+            status='awaiting_user' if policy['supervisor']=='user' else 'awaiting_supervisor'
+            db.execute('UPDATE jobs SET status=?,updated_at=? WHERE id=?',(status,time.time(),job_id))
+            self._event(db,job_id,'question',{'id':str(uuid.uuid4()),'question':question})
+            return self._get(db,job_id)
+
+    def answer(self, job_id, answer, responder):
+        if not isinstance(answer,str) or not 1 <= len(answer.strip()) <= 8000:raise StateError('invalid answer')
+        with self._db(transaction=True) as db:
+            job=self._get(db,job_id)
+            if job['status'] not in ('awaiting_user','awaiting_supervisor'):raise StateError('job is not waiting for an answer')
+            if responder not in ('user','codex') or (job['status']=='awaiting_user' and responder!='user'):raise StateError('this mode requires a user answer')
+            if job['deadline'] is not None and time.time()>=job['deadline']:raise BudgetExceeded('original deadline reached')
+            state=job['checkpoint'];state.setdefault('history',[]).append({'role':'user','content':{'supervisor_answer':answer}})
+            db.execute("UPDATE jobs SET status='queued',checkpoint_json=?,updated_at=? WHERE id=?",(_json(state),time.time(),job_id))
+            self._event(db,job_id,'answered',{'answer':answer,'responder':responder})
+            return self._get(db,job_id)
 
     def events(self, job_id):
         with self._db() as db:

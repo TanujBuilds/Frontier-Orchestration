@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import time
+import uuid
 from urllib.parse import urlsplit, urljoin
 from research_state import BudgetExceeded, StateError
 from research_protocol import parse_action, validate_report, render_report, REPORT_SHAPE
@@ -59,7 +60,10 @@ class Worker:
         if c['phase']!='explore':
             content.update(candidate=c.get('draft'),validation_errors=c['errors'][-15:],
                 instruction='Return finish with a complete report. Check every passage and factual label; correct unsupported claims or mark unknown. No more searches or downloads.')
-        messages=[{'role':'system','content':SYSTEM},{'role':'user','content':json.dumps(content,ensure_ascii=False)}]
+        extra=''
+        if job['manifest'].get('collaboration',{}).get('supervisor','none')!='none':
+            extra='\nDuring exploration you may ask a necessary clarification using {"action":"ask_supervisor","question":"..."}. This cannot expand scope.'
+        messages=[{'role':'system','content':SYSTEM+extra},{'role':'user','content':json.dumps(content,ensure_ascii=False)}]
         return {'phase':c['phase'],'messages':messages}
 
     def invoke(self,job,c,kind,payload,call):
@@ -78,6 +82,9 @@ class Worker:
         except Exception as error:
             detail={'code':type(error).__name__,'message':str(error)[:400]}
             self.store.fail_operation(opid,detail)
+            if kind=='model' and job['manifest']['schema']==2 and isinstance(error,(TimeoutError,ConnectionError,OSError)):
+                self.store.execution_uncertain(job['id'])
+                self.store.finish(job['id'],'blocked','Uncertain remote inference: '+str(error)[:300])
             return {'error':detail}
 
     def drain(self):
@@ -92,6 +99,12 @@ class Worker:
                     if self.store.get(job['id'])['status']=='running': self.store.finish(job['id'],'failed',str(e))
 
     def run_job(self,job):
+        token=str(uuid.uuid4())
+        self.store.execution_start(job['id'],token)
+        try:return self._run_job(job)
+        finally:self.store.execution_end(job['id'],token)
+
+    def _run_job(self,job):
         c=job['checkpoint'] or {'step':0,'phase':'explore','next':'model','history':[],
             'sources':{},'known_urls':job['manifest']['scope']['seed_urls'][:],
             'draft':None,'errors':[],'limited':False}
@@ -99,13 +112,15 @@ class Worker:
         while True:
             job=self.store.get(job['id'])
             if job['status']!='running': return
+            if self.store.yield_boundary(job['id']):return
             remaining=job['deadline']-time.time()
             if remaining<=0: return self.finalize(job,c,'deadline reached')
             if c['next']=='finalize': return self.finalize(job,c,c.get('reason'))
             if c['next']=='model':
                 limit=job['manifest']['limits']['model_calls']
                 replay=any(o['id']==job['id']+':'+str(c['step'])+':model' for o in self.store.operations(job['id']))
-                if not replay and c['phase']=='explore' and (job['counters']['model']>=limit-3 or remaining<=min(1800,job['manifest']['limits']['seconds']/4)):
+                effective_span=max(1,job['deadline']-job['started_at'])
+                if not replay and c['phase']=='explore' and (job['counters']['model']>=limit-3 or remaining<=min(1800,effective_span/4)):
                     c['phase']='draft';c['limited']=True
                     self.store.checkpoint(job['id'],c)
                 if self.scout_busy(): time.sleep(min(5,remaining)); continue
@@ -118,7 +133,12 @@ class Worker:
                     if result.get('error'): raise ValueError(str(result['error']))
                     action=parse_action(result['content'])
                     c['history'].append({'role':'assistant','content':action})
-                    if action['action']=='finish':
+                    if action['action']=='ask_supervisor':
+                        if c['phase']!='explore':raise ValueError('Clarification is only allowed during exploration')
+                        self.store.checkpoint(job['id'],c)
+                        self.store.ask(job['id'],action['question'])
+                        return
+                    elif action['action']=='finish':
                         errors=validate_report(action['report'],c['sources'])
                         c['errors']=errors
                         if not errors: c['draft']=action['report']

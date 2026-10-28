@@ -54,14 +54,15 @@ export function sourceScope(raw={}) {
  return clone(scope);
 }
 export function normalizeGoal(raw,registry=new Registry()){
- keys(raw,['submissionId','objective','acceptance','project','mode','modeVersion','scope','limits'],'goal');
+ keys(raw,['submissionId','objective','acceptance','project','mode','modeVersion','scope','limits','environment'],'goal');
+ const environment=raw.environment??'live';if(!['live','fixture'].includes(environment))throw Error('Invalid execution environment');
  const mode=registry.mode(raw.mode,raw.modeVersion),limits={hours:8,maxTasks:10,reviewAgentRuns:mode.review==='operator'?2:0,...raw.limits};
  if(raw.limits)keys(raw.limits,['hours','maxTasks','reviewAgentRuns'],'goal limits');
  integer(limits.hours,'hours',1,24);integer(limits.maxTasks,'maxTasks',1,100);integer(limits.reviewAgentRuns,'reviewAgentRuns',0,10);
  if(mode.review!=='operator'&&limits.reviewAgentRuns)throw Error('Mode prohibits Codex review agents');
  let project=null;
  if(raw.project){keys(raw.project,['repo','baseCommit','readPaths','writePaths','checks'],'project');project=clone(raw.project);text(project.repo,'repository');if(!path.isAbsolute(project.repo))throw Error('Repository must be absolute');if(!/^[a-f0-9]{40}$/.test(project.baseCommit??''))throw Error('Invalid base commit');validatePermissions(project);}
- return {schema:1,submissionId:identifier(raw.submissionId,'submissionId'),objective:text(raw.objective,'objective'),acceptance:strings(raw.acceptance,'acceptance'),project,mode,capabilities:registry.snapshot().capabilities.filter(c=>mode.capabilities.includes(c.id)),scope:sourceScope(raw.scope),limits};
+ return {schema:1,environment,submissionId:identifier(raw.submissionId,'submissionId'),objective:text(raw.objective,'objective'),acceptance:strings(raw.acceptance,'acceptance'),project,mode,capabilities:registry.snapshot().capabilities.filter(c=>mode.capabilities.includes(c.id)),scope:sourceScope(raw.scope),limits};
 }
 const TASK_LIMITS={coding:{seconds:28800,attempts:5,modelCalls:50,reviews:2,questions:3},research:{seconds:7200,attempts:20,modelCalls:20,reviews:2,questions:3,searches:30,downloads:50},consult:{seconds:600,attempts:1,modelCalls:1,reviews:0,questions:0},learning:{seconds:600,attempts:2,modelCalls:6,reviews:0,questions:0}};
 export function normalizeTask(raw,goal,registry=new Registry()) {

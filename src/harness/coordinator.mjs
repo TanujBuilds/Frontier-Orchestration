@@ -33,7 +33,7 @@ export class Coordinator {
   return g;
  });}
  getGoal(id){const g=this.store.get('goal',id);return {...g,tasks:this.store.all('task').filter(t=>t.goalId===id).map(t=>this.getTask(t.id)),reviewerRuns:this.store.all('reviewer').filter(r=>r.goalId===id)};}
- getTask(id){const t=this.store.get('task',id);return {...t,spent:{model:0,search:0,download:0,...this.store.spent(id)}};}
+ getTask(id){const t=this.store.get('task',id),local=this.store.spent(id),spent={model:0,search:0,download:0};for(const k of Object.keys(spent))spent[k]=Math.max(local[k]??0,t.remoteSpent?.[k]??0);return {...t,spent};}
  snapshot(){return {goals:this.store.all('goal').map(g=>this.getGoal(g.id)),events:this.store.events(0,1000),registry:this.registry.snapshot()};}
  liveGoal(g){if(g.status!=='active')throw Error('Goal is not active');if(this.now()>=g.deadline)throw Error('Goal deadline exceeded');}
  submitTask(input,key){const {goalId,...raw}=input;return this.store.command(key,{op:'task.submit',...input},()=>{
