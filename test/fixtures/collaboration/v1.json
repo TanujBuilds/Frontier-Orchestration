@@ -1,0 +1,6 @@
+{
+  "registration": {"version":1,"taskId":"task-1","hostAgentId":"host/child-1","role":"implementer","actor":"codex","model":{"requested":null,"resolved":null}},
+  "progress": {"version":1,"agentId":"agent-1","status":"running","summary":"Implementing the assigned function","evidenceIds":[]},
+  "observer": {"goalId":null,"actor":null,"after":0,"limit":50},
+  "activity": {"version":1,"seq":1,"at":0,"goalId":"goal-1","taskId":"task-1","agentId":"agent-1","requestId":null,"type":"agent.progress","actor":"codex","provenance":"reported","summary":"Implementing the assigned function","artifactIds":[]}
+}
