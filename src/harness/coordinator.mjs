@@ -43,6 +43,13 @@ export class Coordinator {
   this.store.put('planning',p);this.emit('planning.recovered',goalId,null,{attempt:p.attempt,status:p.status,spent:this.store.spent(goalId)});return p;
  });}
  emit(type,goalId,taskId,data={}){return this.store.tx(()=>{const seq=this.store.event(type,{goalId,taskId,data,at:this.now()});if(taskId&&this.learning?.captures(type))this.learning.capture(taskId,seq);
+  if(taskId&&['task.result','task.reviewed','task.integrated','task.native_finished'].includes(type)&&this.store.get('task',taskId).status==='accepted'){
+   for(const link of this.store.all('help_link').filter(l=>l.helperTaskId===taskId&&l.status==='waiting')){
+    link.status='ready';link.resultHash=digest(this.store.get('task',taskId).result);link.acceptedAt=this.now();this.store.put('help_link',link);
+    const parent=this.store.get('task',link.taskId);parent.feedback.push({kind:'helper',helperTaskId:taskId,questionId:link.questionId,resultHash:link.resultHash,text:'Linked helper accepted; main supervisor must answer the original question',at:this.now()});this.store.put('task',parent);
+    this.emit('help.ready',link.goalId,link.taskId,{helperTaskId:taskId,questionId:link.questionId,resultHash:link.resultHash});
+   }
+  }
   if(type==='task.answered')for(const n of this.store.all('notification').filter(n=>n.taskId===taskId&&n.kind==='decision'&&!n.resolved)){n.resolved=true;n.resolvedAt=this.now();this.store.put('notification',n);}
   const kind=type==='task.question'?'decision':['task.blocked','task.uncertain','legacy_review.failed'].includes(type)?'blocker':type==='goal.finalized'?'completion':['task.result','task.integrated','task.native_finished','learning.promoted'].includes(type)?'result':null;
   if(kind){const task=taskId?this.store.get('task',taskId):null,title=type==='task.question'?'An answer is needed':type==='goal.finalized'?'Goal '+data.status:type==='learning.promoted'?'Tested procedure available':kind==='blocker'?'Work needs attention':'Saved work is ready';this.store.put('notification',{id:`notice-${seq}`,sequence:seq,goalId,taskId,kind,title,objective:task?.spec.objective??this.store.maybe('goal',goalId)?.manifest.objective??'',at:this.now(),acknowledged:false,resolved:false});}
@@ -117,7 +124,7 @@ export class Coordinator {
  claimNext(owner){identifier(owner,'owner');return this.store.tx(()=>{
   if(this.store.all('planning').some(p=>['running','uncertain'].includes(p.status)))return null;
   const tasks=this.store.all('task');if(tasks.some(t=>SLOT.has(t.status)&&t.spec.actor==='deepseek'))return null;
-  const priorities=this.effectivePriorities();const candidates=tasks.filter(t=>['queued','suspended'].includes(t.status)&&t.spec.actor==='deepseek'&&this.eligible(t)).sort((a,b)=>priorities.get(b.id)-priorities.get(a.id)||a.sequence-b.sequence);
+  const priorities=this.effectivePriorities();const candidates=tasks.filter(t=>['queued','suspended'].includes(t.status)&&t.spec.actor==='deepseek'&&t.executionActor!=='codex'&&this.eligible(t)).sort((a,b)=>priorities.get(b.id)-priorities.get(a.id)||a.sequence-b.sequence);
   if(!candidates.length)return null;const t=candidates[0],g=this.store.get('goal',t.goalId);
   t.startedAt??=this.now();t.deadline??=Math.min(g.deadline,t.startedAt+t.spec.limits.seconds*1000);t.owner=owner;t.status='running';t.yieldRequested=false;
   this.store.put('task',t);this.learning.pin(t.id);this.emit('task.claimed',t.goalId,t.id,{owner});return this.getTask(t.id);
@@ -153,7 +160,8 @@ export class Coordinator {
  answer(input,key){return this.store.command(key,{op:'task.answer',...input},()=>{const t=this.store.get('task',input.taskId),g=this.store.get('goal',t.goalId);this.liveGoal(g);
   if(!['awaiting_supervisor','awaiting_user'].includes(t.status))throw Error('Task is not waiting for an answer');
   if(t.status==='awaiting_user'&&input.responder!=='user')throw Error('This mode requires a user answer');
-  text(input.answer,'answer',8000);const answer={questionId:t.questions.at(-1).id,text:input.answer,responder:input.responder,at:this.now()};t.answers.push(answer);t.status=t.spec.actor==='codex'?'codex_ready':'queued';this.store.put('task',t);this.emit('task.answered',t.goalId,t.id,answer);this.requestUrgentYield();return this.getTask(t.id);
+  this.liveTask(t);const help=this.store.all('help_link').find(l=>l.taskId===t.id&&l.questionId===t.questions.at(-1)?.id);if(help&&this.getTask(help.helperTaskId).status!=='accepted')throw Error('Linked helper must be accepted before answering');
+  text(input.answer,'answer',8000);const answer={questionId:t.questions.at(-1).id,text:input.answer,responder:input.responder,at:this.now()};if(help){answer.helperTaskId=help.helperTaskId;answer.helperResultHash=digest(this.getTask(help.helperTaskId).result);help.status='answered';help.answeredAt=this.now();help.resultHash=answer.helperResultHash;this.store.put('help_link',help);}t.answers.push(answer);t.status=t.spec.actor==='codex'?'codex_ready':'queued';this.store.put('task',t);this.emit('task.answered',t.goalId,t.id,answer);this.requestUrgentYield();return this.getTask(t.id);
  });}
  completeTask(taskId,result,owner,{reviewRequired=false}={}){return this.store.tx(()=>{const t=this.owned(taskId,owner),g=this.store.get('goal',t.goalId);t.result=result;t.owner=null;t.yieldRequested=false;
   t.status=this.now()>=Math.min(g.deadline,t.deadline)?'partial':t.spec.kind==='coding'?(g.manifest.mode.review==='checks'?'ready_to_integrate':g.manifest.mode.review==='legacy'?'awaiting_legacy_review':'awaiting_review'):reviewRequired&&g.manifest.mode.review==='operator'?'awaiting_review':'accepted';
@@ -162,8 +170,9 @@ export class Coordinator {
   this.store.put('task',t);this.emit('task.result',t.goalId,t.id,{status:t.status,result});return this.getTask(t.id);
  });}
  review(input,key){return this.store.command(key,{op:'task.review',...input},()=>{const t=this.store.get('task',input.taskId),g=this.store.get('goal',t.goalId);this.liveTask(t);if(g.manifest.mode.review!=='operator')throw Error('Mode prohibits Codex operator review');if(t.status!=='awaiting_review')throw Error('Task is not awaiting review');if(t.reviews>=t.spec.limits.reviews)throw Error('Review limit reached');if(!['accept','revise'].includes(input.decision))throw Error('Invalid review decision');text(input.feedback,'feedback',12000);t.reviews++;t.feedback.push({decision:input.decision,text:input.feedback,at:this.now()});t.reviewed=true;
+  if(g.integrationPending?.taskId===t.id)throw Error('Pending integration must finish before revision');
   const exhausted=t.reviews>=t.spec.limits.reviews||t.attempts>=t.spec.limits.attempts||(this.store.spent(t.id).model??0)>=t.spec.limits.modelCalls;
-  t.status=input.decision==='accept'?(t.spec.kind==='coding'?'ready_to_integrate':'accepted'):exhausted?'blocked':'queued';if(input.decision==='revise'){t.checkpoint={...t.checkpoint,phase:'attempt'};if(exhausted)t.reason='Revision cannot proceed: original review, attempt or request budget exhausted';}
+  t.status=input.decision==='accept'?(t.spec.kind==='coding'?'ready_to_integrate':'accepted'):exhausted?'blocked':t.native?.layout==='candidate_v1'?'codex_ready':'queued';if(input.decision==='revise'){if(t.native?.layout==='candidate_v1')t.native.status='revision_requested';t.checkpoint={...t.checkpoint,phase:'attempt'};if(exhausted)t.reason='Revision cannot proceed: original review, attempt or request budget exhausted';}
   this.store.put('task',t);this.emit('task.reviewed',t.goalId,t.id,{decision:input.decision});this.requestUrgentYield();return this.getTask(t.id);});}
  setPriority(input,key){return this.store.command(key,{op:'task.priority',...input},()=>{const t=this.store.get('task',input.taskId);if(!(input.priority in rank))throw Error('Invalid priority');if(t.spec.kind==='learning'&&input.priority!=='background')throw Error('Learning priority must remain background');text(input.reason,'priority reason',2000);t.priority=input.priority;this.store.put('task',t);this.emit('task.priority',t.goalId,t.id,{priority:input.priority,reason:input.reason});this.requestUrgentYield();return this.getTask(t.id);});}
  control(input,key){return this.store.command(key,{op:'control',...input},()=>{

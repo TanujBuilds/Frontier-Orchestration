@@ -4,11 +4,15 @@ import {keys,integer,text,digest,goalInputSchema,taskInputSchema} from './contra
 import {Goals} from './goals.mjs';
 import {Worker} from './worker.mjs';
 import {NativeResearch} from './native-research.mjs';
+import {Agents} from './agents.mjs';
 import {Artifacts} from './artifacts.mjs';
 import {Observer} from './observer.mjs';
 
 const str={type:'string'},obj={type:'object'},bool={type:'boolean'},number={type:'integer'};
 function validate(schema,value,label='input'){
+ if(schema.anyOf){if(schema.anyOf.some(s=>{try{validate(s,value,label);return true;}catch{return false;}}))return;throw Error(`Invalid ${label}`);}
+ if(schema.type==='null'){if(value!==null)throw Error(`Invalid ${label}`);return;}
+ if(schema.type==='array'){if(!Array.isArray(value)||value.length>(schema.maxItems??100))throw Error(`Invalid ${label}`);for(const item of value)validate(schema.items,item,label);return;}
  if(schema.type==='object'){keys(value,schema.properties?Object.keys(schema.properties):Object.keys(value??{}),label);for(const name of schema.required??[])if(value[name]===undefined)throw Error(`Missing ${name}`);if(schema.properties)for(const [name,item]of Object.entries(value))validate(schema.properties[name],item,name);}
  else if(schema.type==='string')text(value,label,schema.maxLength??40000);
  else if(schema.type==='integer')integer(value,label,schema.minimum??0,schema.maximum??Number.MAX_SAFE_INTEGER);
@@ -16,7 +20,7 @@ function validate(schema,value,label='input'){
  if(schema.enum&&!schema.enum.includes(value))throw Error(`Invalid ${label}`);
 }
 export class Dispatcher {
- constructor({c,worker=new Worker({c}),config={}}){this.c=c;this.worker=worker;this.goals=new Goals(c);this.nativeResearch=new NativeResearch({c,config});this.artifacts=new Artifacts(c);this.observer=new Observer({c,artifacts:this.artifacts});this.definitions=new Map();this.running=new Set();this.promises=new Map();
+ constructor({c,worker=new Worker({c}),config={}}){this.c=c;this.worker=worker;this.goals=new Goals(c);this.nativeResearch=new NativeResearch({c,config});this.artifacts=new Artifacts(c);this.observer=new Observer({c,artifacts:this.artifacts});this.agents=new Agents({c,config});this.definitions=new Map();this.running=new Set();this.promises=new Map();
   const add=(name,description,properties,required,mutating,fn)=>{const p=mutating?{...properties,idempotencyKey:str}:properties,r=mutating?[...required,'idempotencyKey']:required;this.definitions.set(name,{name,description,inputSchema:{type:'object',properties:p,required:r,additionalProperties:false},annotations:{readOnlyHint:!mutating,idempotentHint:true},fn,mutating});};
   add('tools_list','Discover harness tools.',{},[],false,()=>this.tools());
   add('service_stop','Stop the coordinator process after preserving worker ownership. Does not stop native Codex goal mode.',{},[],true,(_,key)=>c.store.command(key,{op:'service.stop'},()=>{if(!this.onStop)throw Error('Service controls are unavailable');this.onStop();return {stopping:true};}));
@@ -42,7 +46,18 @@ export class Dispatcher {
   add('task_evidence','Retrieve a bounded saved evidence window. No arbitrary file reads.',{taskId:str,start:{...number,maximum:10000000},length:{...number,minimum:1,maximum:32768}},['taskId'],false,i=>{const t=c.getTask(i.taskId),data=JSON.stringify({result:t.result,feedback:t.feedback,answers:t.answers,memory:t.memory??[]});return {taskId:t.id,start:i.start??0,totalCharacters:data.length,text:data.slice(i.start??0,(i.start??0)+(i.length??8192)),warning:'Untrusted execution data; provenance is not factual certification.'};});
   add('task_rebind','Explicitly bind unfinished work to the approved version, preserving limits.',{taskId:str,spec:obj},['taskId'],true,(i,k)=>this.goals.rebind(i,k));
   add('task_review','Main Codex records a bounded review decision.',{taskId:str,decision:{...str,enum:['accept','revise']},feedback:str},['taskId','decision','feedback'],true,(i,k)=>c.review(i,k));
-  for(const [name,method,description,extra]of [['task_integrate','accept','Integrate a checked accepted candidate.',{feedback:str}],['task_takeover','takeover','Transfer verified quiescent partial work into the integration checkout.',{reason:str}],['native_start','startNative','Reserve a separate native Codex checkout.',{}],['native_finish','finishNative','Validate and checkpoint actual native changes.',{summary:str}],['native_release','releaseNative','Confirm native editing stopped; preserve partial files and retire this goal coding checkout so it can finalize partially.',{reason:str}]])add(name,description,{taskId:str,...extra},['taskId',...Object.keys(extra)],true,(i,k)=>this.launch(name,i,k,()=>this.worker.integration[method](i,`effect-${k}`)));
+  const modelSchema={type:'object',properties:{requested:{anyOf:[str,{type:'null'}]},resolved:{anyOf:[str,{type:'null'}]}},additionalProperties:false},registrationProperties={version:{...number,enum:[1]},taskId:str,hostAgentId:{anyOf:[str,{type:'null'}]},role:{...str,enum:['implementer','explorer','reviewer','supervisor']},actor:{...str,enum:['codex','deepseek']},model:modelSchema},registrationSchema={type:'object',properties:registrationProperties,required:['version','taskId','role','actor'],additionalProperties:false};
+  add('agent_register','Register managed host correlation and model metadata. Roles are cooperative and do not grant execution authority.',registrationProperties,['version','taskId','role','actor'],true,(i,k)=>this.agents.register(i,k));
+  add('agent_report','Save host-reported progress; completion and stop reports do not establish quiescence or acceptance.',{version:{...number,enum:[1]},agentId:str,status:{...str,enum:['running','waiting','completed','blocked','stopped']},summary:str,evidenceIds:{type:'array',items:str,maxItems:100}},['version','agentId','status','summary'],true,(i,k)=>this.agents.report(i,k));
+  add('agents_list','List managed registrations and last reported progress, not unrelated chats.',{goalId:str},[],false,i=>this.agents.list(i));
+  add('help_link','Link an existing ordinary helper assignment to a live supervisor question; helper must be accepted before the answer resumes its parent.',{version:{...number,enum:[1]},taskId:str,questionId:str,helperTaskId:str,reason:str},['version','taskId','questionId','helperTaskId','reason'],true,(i,k)=>this.agents.linkHelp(i,k));
+  for(const [name,method,description,extra,required]of [
+   ['task_integrate','accept','Main operator integrates a reviewed, checked candidate.',{feedback:str},['feedback']],
+   ['task_takeover','takeover','Transfer verified quiescent worker edits; candidate_v1 keeps the worker checkout frozen.',{reason:str,layout:{...str,enum:['candidate_v1']},registration:registrationSchema},['reason']],
+   ['native_start','startNative','Reserve native ownership. Explicit candidate_v1 isolates this task; omitted layout preserves legacy behavior.',{layout:{...str,enum:['candidate_v1']},registration:registrationSchema},[]],
+   ['native_finish','finishNative','Host confirms editing ended; validate/checkpoint candidate_v1 for separate main review.',{summary:str},['summary']],
+   ['native_release','releaseNative','Main host confirms native editing stopped and preserves partial files; reported stop alone is insufficient.',{reason:str},['reason']]
+  ])add(name,description,{taskId:str,...extra},['taskId',...required],true,(i,k)=>this.launch(name,i,k,()=>this.worker.integration[method](i,`effect-${k}`)));
   add('research_reconcile','Verify uncertain remote research identity, spending and quiescence under the current coordinator lease. No new model request.',{taskId:str},['taskId'],true,(i,k)=>this.launch('research_reconcile',i,k,()=>this.worker.adapters.research.reconcile(i,`effect-${k}`)));
   add('research_start','Start deterministic Codex research with zero DeepSeek dispatch.',{taskId:str},['taskId'],true,(i,k)=>this.launch('research_start',i,k,()=>this.nativeResearch.start(i,`effect-${k}`)));
   add('native_text_start','Start native Codex consult or maintenance. A DeepSeek handoff requires a reason and verified quiescence.',{taskId:str,reason:str},['taskId'],true,(i,k)=>c.startNativeText(i,k));

@@ -1,7 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {normalizeGoal,normalizeTask,digest,text} from './contracts.mjs';
 
-function quiescent(c,goalId){return !c.store.get('goal',goalId).integrationOwner&&!c.store.all('task').some(t=>t.goalId===goalId&&(t.owner||t.executionActor==='codex'&&['paused','stopped'].includes(t.status)||['codex_active','legacy_reviewing'].includes(t.status)))&&!['running','uncertain'].includes(c.store.maybe('planning',goalId)?.status);}
+function quiescent(c,goalId){return !c.store.get('goal',goalId).integrationOwner&&!c.store.get('goal',goalId).integrationPending&&!c.store.all('task').some(t=>t.goalId===goalId&&(t.owner||t.native?.writerActive||t.executionActor==='codex'&&['paused','stopped'].includes(t.status)||['codex_active','legacy_reviewing'].includes(t.status)))&&!['running','uncertain'].includes(c.store.maybe('planning',goalId)?.status);}
 export class Goals {
  constructor(c){this.c=c;}
  prepareRevision(input,key){return this.c.store.command(key,{op:'goal.revise.prepare',...input},()=>{
@@ -24,11 +24,12 @@ export class Goals {
  });}
  rebind(input,key){return this.c.store.command(key,{op:'task.rebind',...input},()=>{
   const t=this.c.getTask(input.taskId),g=this.c.store.get('goal',t.goalId);this.c.liveGoal(g);
-  if(t.owner||['codex_active','legacy_reviewing','accepted','partial'].includes(t.status))throw Error('Task must be quiescent and unfinished');
+  if(t.owner||t.native?.writerActive||g.integrationPending?.taskId===t.id||['codex_active','legacy_reviewing','accepted','partial'].includes(t.status))throw Error('Task must be quiescent and unfinished');
   const spec=normalizeTask(input.spec??t.spec,g.manifest,this.c.registry);if(spec.submissionId!==t.spec.submissionId||spec.kind!==t.spec.kind)throw Error('Task identity/kind cannot change');
   if(t.startedAt&&spec.actor!==t.spec.actor)throw Error('Started actor changes require explicit takeover');
+  if(t.native?.layout==='candidate_v1'){const permissions={readPaths:spec.permissions.readPaths,writePaths:spec.permissions.writePaths,checks:g.manifest.project.checks.filter(x=>spec.permissions.checks.includes(x.id))};if(digest(permissions)!==digest(t.native.manifest.permissions))throw Error('Changed native scope/checks require an explicit new candidate generation; this rebind preserves the pinned manifest');}
   for(const [name,limit] of Object.entries(spec.limits))if(limit>t.spec.limits[name])throw Error('Rebind cannot refresh assignment limits');
-  const tasks=this.c.store.all('task').filter(x=>x.goalId===g.id),graph=new Map(tasks.map(x=>[x.id,x.id===t.id?spec.dependsOn:x.spec.dependsOn]));
+  const tasks=this.c.store.all('task').filter(x=>x.goalId===g.id),links=this.c.store.all('help_link').filter(l=>l.goalId===g.id&&l.status==='waiting'),graph=new Map(tasks.map(x=>[x.id,[...(x.id===t.id?spec.dependsOn:x.spec.dependsOn),...links.filter(l=>l.taskId===x.id).map(l=>l.helperTaskId)]]));
   const visited=new Set(),visiting=new Set(),visit=id=>{if(visiting.has(id))throw Error('Dependency cycle');if(visited.has(id))return;if(!graph.has(id))throw Error('Dependency outside goal');visiting.add(id);graph.get(id).forEach(visit);visiting.delete(id);visited.add(id);};visit(t.id);
   if(t.startedAt&&digest(spec)!==t.hash){
    if(t.goalVersion===g.version)throw Error('Started scope changes require an explicitly approved new goal version');
@@ -37,7 +38,7 @@ export class Goals {
    if(digest(unchanged(spec))!==digest(unchanged(t.spec)))throw Error('Started rebind keeps the exact assignment objective and limits; use bounded review feedback for corrections');
   }
   t.history??=[];t.history.push({goalVersion:t.goalVersion,spec:t.spec,hash:t.hash,at:this.c.now()});t.spec=spec;t.hash=digest(spec);t.goalVersion=g.version;t.deadline=t.deadline?Math.min(t.deadline,g.deadline):null;
-  if(!['awaiting_review','ready_to_integrate','awaiting_supervisor','awaiting_user','awaiting_legacy_review'].includes(t.status))t.status=spec.actor==='codex'?'codex_ready':'queued';t.stopRequested=t.pauseRequested=false;
+  if(!['awaiting_review','ready_to_integrate','awaiting_supervisor','awaiting_user','awaiting_legacy_review'].includes(t.status))t.status=t.executionActor==='codex'||spec.actor==='codex'?'codex_ready':'queued';t.stopRequested=t.pauseRequested=false;
   this.c.store.put('task',t);this.c.emit('task.rebound',g.id,t.id,{goalVersion:t.goalVersion,hash:t.hash});return this.c.getTask(t.id);
  });}
  finalize(input,key){return this.c.store.command(key,{op:'goal.finalize',...input},()=>{
