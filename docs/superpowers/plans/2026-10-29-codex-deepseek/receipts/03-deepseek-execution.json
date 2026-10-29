@@ -1,0 +1,71 @@
+{
+  "stage": "03",
+  "objective": "Bounded retained DeepSeek working context, captured execution activity, optional SSE and durable model pins",
+  "prerequisite": "dd7bc7477edbce7f535311b3bf590be67d3e6596",
+  "commits": [
+    "107cb23",
+    "91d6c06",
+    "49e1dd2"
+  ],
+  "acceptance": "incomplete",
+  "fixtureImplementation": "passed",
+  "tests": {
+    "focused": {
+      "command": "node --test test/harness-provider.test.mjs test/harness-context.test.mjs test/harness-working-set.test.mjs test/harness-crash.test.mjs",
+      "passed": 39,
+      "failed": 0
+    },
+    "fullNode": {
+      "command": "npm test",
+      "passed": 221,
+      "failed": 18,
+      "total": 239,
+      "dependency": "Stage02 Integration.executionBase absent; exact failed tests in private report"
+    },
+    "diffCheck": "passed"
+  },
+  "liveEvidence": {
+    "deepseekRequests": 0,
+    "automatedCodexCliCalls": 0,
+    "streamingSupport": "unverified; default disabled",
+    "nativeHostTokens": null
+  },
+  "interfaces": {
+    "checkpoint": "workingSet v1 selection metadata only",
+    "modelPin": "task.providerModel; actual model in saved result; cached response revalidated",
+    "provider": "complete result unchanged; optional visible onContent and per-request streaming boolean",
+    "executionBase": "Integration.executionBase(goalId) returns committed SHA; no fallback",
+    "events": "captured v1 metadata, stable task/request/operation IDs; observer normalization Stage05"
+  },
+  "bounds": {
+    "fileBytes": 131072,
+    "serializedContextBytes": 524288,
+    "workingSetPaths": 128,
+    "editedFiles": 2,
+    "editBytes": 24576,
+    "exchangesPerAttempt": 10,
+    "providerResultAndSseWireBytes": 524288,
+    "capturedVisibleBytesPerRequest": 131072,
+    "visibleChunkBytes": 4096,
+    "presentationEventBytes": 32768
+  },
+  "compatibility": "Paths-only checkpoints seed working set. Existing default completed transport, budgets, deadlines, permissions, ownership and request keys preserved. Streaming does not retry/probe automatically. Saved wrong-model results remain spent/inert.",
+  "limitations": [
+    "Combined Stage02 suite pending; isolated18 resolver dependency failures",
+    "Actual streaming support/capability probe and live pilot pending parent coordination",
+    "Observer normalization and public/evidence API Stage05",
+    "No final installation or promotion"
+  ],
+  "artifacts": {
+    "stage03-context-red.log": "5af2199e49581e47f9684c685c1ab8fc2dba2aec4058b602b00145516199820f",
+    "stage03-stream-red.log": "1bb114a7ec9b5216c7fc1797e7bba80d6f55be70c598562a7a35fd683ed8d2c5",
+    "stage03-pin-red.log": "71ef8a3cd268dd2ffbbc0c0c2b18c72052dca03bc404c44be3831dbf0fef2fc2",
+    "stage03-events-red.log": "ba69f947ded468ca87399bc724cc32f535dd30bbfa08bfe54d1dc8679fae61b9",
+    "stage03-eviction-red.log": "79d51dad2f5eb13570176d93d47a22dbd95cbe3d6f1cc508bf7dadc198f85017",
+    "stage03-base-red.log": "c03c1c6ab1181ca886bbf8395f515906855976ab20f95de4cacc2803e9e2cecb",
+    "stage03-stream-config-red.log": "ab8127a0dfc25b5843d69acef1a3016c479e552a98860901724cbf01c6326521",
+    "stage03-focused-green.log": "b5fbf444143e3f7285d9b5c5e2918fe893928c6b8d0fd87773965af8efc3af74",
+    "stage03-full-suite.log": "08d7d97c84b14d68dad2e35acceb14db3be4c348efe332e6c3edfc02767fd9e0",
+    "stage03-dependencies.log": "e25b1bc4a0c25dd0f039309e318c5fd2eeb1c645f1efc6ad26485329b16c931a"
+  }
+}
