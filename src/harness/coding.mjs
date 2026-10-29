@@ -34,13 +34,13 @@ export class CodingAdapter {
    let cp={...task.checkpoint},phase=cp.phase??'attempt';
    if(!journal.events.some(e=>e.type==='harness.sandbox'&&e.data.permissionsHash===digest(manifest.permissions))){const probe=await checks.verify();await journal.append('harness.sandbox',{...probe,permissionsHash:digest(manifest.permissions)});}
    if(phase==='attempt'){
-    const attempt=c.beginAttempt(task.id,owner);return c.boundary(task.id,{...cp,phase:'model',attempt,exchange:0},owner);
+    const attempt=c.beginAttempt(task.id,owner);return this.worker.checkpoint(task,{...cp,phase:'model',attempt,exchange:0},owner);
    }
    if(phase==='model'){
     if(cp.exchange>=10)throw new AttemptError('Context exchange limit reached');
     const inventory=await workspace.inventory(),context=await selectContext(workspace,cp,inventory),{files}=context;
     cp={...cp,workingSet:context.workingSet};
-    c.boundary(task.id,cp,owner,{quiescent:false});
+    this.worker.checkpoint(task,cp,owner,{quiescent:false});
     this.worker.activity(task,'coding.context.refreshed',{operationId:`context-${cp.attempt}-${cp.exchange}`,files:context.workingSet.entries});
     if(context.evicted.length)this.worker.activity(task,'coding.context.evicted',{operationId:`evict-${cp.attempt}-${cp.exchange}`,paths:context.evicted});
     const editLimits={maxFiles:2,maxBytes:24576};for(const item of task.memory??[])if(item.recipe.family==='edit_batch'){editLimits.maxFiles=Math.min(editLimits.maxFiles,item.recipe.maxFiles);editLimits.maxBytes=Math.min(editLimits.maxBytes,item.recipe.maxBytes);}
@@ -48,12 +48,14 @@ export class CodingAdapter {
     const requestKey=`code-${cp.attempt}-${cp.exchange}`;
     if(!journal.events.some(e=>e.type==='harness.context'&&e.data.key===requestKey))await journal.append('harness.context',{key:requestKey,attempt:cp.attempt,files:files.map(f=>({path:f.path,hash:f.hash,bytes:Buffer.byteLength(f.content??'')}))});
     const result=await this.worker.model(task,owner,requestKey,[{role:'system',content:system},{role:'user',content:JSON.stringify(input)}]);
-    const state=c.boundary(task.id,cp,owner);if(state.status!=='running')return state;
+    cp={...cp,requestId:c.store.request(task.id,requestKey)?.id??null};
+    const state=this.worker.checkpoint(task,cp,owner);if(state.status!=='running')return state;
     if(result.finishReason==='length')throw new AttemptError('Response truncated; submit smaller edits');
     let reply;try{reply=JSON.parse(result.content);}catch{throw new AttemptError('Invalid JSON; return one bounded action');}
+    if(!reply||typeof reply!=='object'||Array.isArray(reply))throw new AttemptError('Invalid action object');
     if(reply.type==='ask_supervisor'){
      if(Object.keys(reply).some(k=>!['type','question'].includes(k)))throw new AttemptError('Malformed question action');
-     return c.ask(task.id,reply.question,{...cp,exchange:cp.exchange+1},owner);
+     return this.worker.question(task,reply.question,{...cp,exchange:cp.exchange+1},owner);
     }
     try{keys(reply,['type','paths','edits','summary'],'coding action');}catch(error){throw new AttemptError(error.message);}
     reply=validateReply(reply);
@@ -67,33 +69,32 @@ export class CodingAdapter {
      if(bytes>editLimits.maxBytes)throw new AttemptError('Edit batch exceeds pinned byte limit; submit smaller batches');
     }
     if(reply.type==='needs_approval')throw Error('Assignment needs expanded approval');
-    if(reply.type==='read_files'){const selected=await selectContext(workspace,cp,inventory,reply.paths);this.worker.activity(task,'coding.files.read',{operationId:`read-${requestKey}`,paths:reply.paths});if(selected.evicted.length)this.worker.activity(task,'coding.context.evicted',{operationId:`read-evict-${requestKey}`,paths:selected.evicted});return c.boundary(task.id,{...cp,paths:reply.paths,workingSet:selected.workingSet,exchange:cp.exchange+1},owner);}
-    this.worker.activity(task,'coding.edit.proposed',{operationId:`proposal-${requestKey}`,paths:reply.edits.map(e=>e.path),bytes:reply.edits.reduce((n,e)=>n+Buffer.byteLength(e.content??''),0)});
-    return c.boundary(task.id,{...cp,phase:'apply',reply},owner);
+    if(reply.type==='read_files'){const selected=await selectContext(workspace,cp,inventory,reply.paths);this.worker.activity(task,'coding.files.read',{operationId:`read-${requestKey}`,requestId:cp.requestId,files:selected.workingSet.entries.filter(e=>reply.paths.includes(e.path))});if(selected.evicted.length)this.worker.activity(task,'coding.context.evicted',{operationId:`read-evict-${requestKey}`,paths:selected.evicted});return this.worker.checkpoint(task,{...cp,paths:reply.paths,workingSet:selected.workingSet,exchange:cp.exchange+1},owner);}
+    this.worker.activity(task,'coding.edit.proposed',{operationId:`proposal-${requestKey}`,requestId:cp.requestId,paths:reply.edits.map(e=>e.path),bytes:reply.edits.reduce((n,e)=>n+Buffer.byteLength(e.content??''),0)});
+    return this.worker.checkpoint(task,{...cp,phase:'apply',reply},owner);
    }
    if(phase==='apply'){
     await workspace.apply(`harness-attempt-${cp.attempt}`,{writePaths:manifest.permissions.writePaths},cp.reply.edits);
-    this.worker.activity(task,'coding.edit.applied',{operationId:`apply-${cp.attempt}`,paths:cp.reply.edits.map(e=>e.path)});
+    this.worker.activity(task,'coding.edit.applied',{operationId:`apply-${cp.attempt}`,requestId:cp.requestId??null,paths:cp.reply.edits.map(e=>e.path)});
     const changed=new Set(cp.reply.edits.map(e=>e.path));if(cp.workingSet)cp.workingSet={...cp.workingSet,entries:cp.workingSet.entries.map(e=>changed.has(e.path)?{...e,hash:null}:e)};
-    return c.boundary(task.id,{...cp,phase:'checks'},owner);
+    return this.worker.checkpoint(task,{...cp,phase:'checks'},owner);
    }
    if(phase==='checks'){
-    this.worker.activity(task,'coding.checks.started',{operationId:`checks-start-${cp.attempt}`,attempt:cp.attempt});
-    const results=await journal.memo(`harness-attempt-${cp.attempt}/checks`,()=>checks.run(manifest.permissions.checks,`attempt-${cp.attempt}`));
-    this.worker.activity(task,results.every(r=>r.passed)?'coding.checks.passed':'coding.checks.failed',{operationId:`checks-end-${cp.attempt}`,attempt:cp.attempt,checks:results.map(r=>({id:r.id,passed:r.passed}))});
+    this.worker.activity(task,'coding.checks.started',{operationId:`checks-start-${cp.attempt}`,requestId:cp.requestId??null,attempt:cp.attempt});
+    let results;try{results=await journal.memo(`harness-attempt-${cp.attempt}/checks`,()=>checks.run(manifest.permissions.checks,`attempt-${cp.attempt}`));}catch(error){this.worker.activity(task,'coding.checks.failed',{operationId:`checks-end-${cp.attempt}`,requestId:cp.requestId??null,attempt:cp.attempt,outcome:'error'});throw error;}
+    this.worker.activity(task,results.every(r=>r.passed)?'coding.checks.passed':'coding.checks.failed',{operationId:`checks-end-${cp.attempt}`,requestId:cp.requestId??null,attempt:cp.attempt,checks:results.map(r=>({id:r.id,passed:r.passed}))});
     if(!results.every(r=>r.passed)){
      c.store.tx(()=>{const current=c.owned(task.id,owner);current.feedback.push({text:JSON.stringify(results).slice(-16000),at:c.now(),kind:'check'});c.store.put('task',current);c.emit('checks.failed',task.goalId,task.id,{attempt:cp.attempt});});
-     return c.boundary(task.id,{...cp,phase:'attempt'},owner);
+     return this.worker.checkpoint(task,{...cp,phase:'attempt'},owner);
     }
     const evidence=await workspace.evidence();
-    this.worker.activity(task,'coding.candidate.saved',{operationId:`candidate-${cp.attempt}`,attempt:cp.attempt});
-    return c.completeTask(task.id,{...evidence,checks:results,sandbox:journal.last('harness.sandbox'),worktree:workspace.root,journalRoot:journal.root,workerSummary:cp.reply.summary,baseCommit:manifest.baseCommit},owner,{reviewRequired:true});
+    return c.store.tx(()=>{const state=c.completeTask(task.id,{...evidence,checks:results,sandbox:journal.last('harness.sandbox'),worktree:workspace.root,journalRoot:journal.root,workerSummary:cp.reply.summary,baseCommit:manifest.baseCommit},owner,{reviewRequired:true});this.worker.activity(task,'coding.candidate.saved',{operationId:`candidate-${cp.attempt}`,requestId:cp.requestId??null,attempt:cp.attempt});return state;});
    }
    throw Error('Unknown coding checkpoint phase');
   }catch(error){
    if(error instanceof AttemptError){
     c.store.tx(()=>{const current=c.owned(task.id,owner);current.feedback.push({text:error.message,at:c.now(),kind:'protocol'});c.store.put('task',current);c.emit('attempt.protocol_failed',task.goalId,task.id,{reason:error.message,attempt:current.attempts});});
-    return c.boundary(task.id,{...c.getTask(task.id).checkpoint,phase:'attempt'},owner);
+    return this.worker.checkpoint(task,{...c.getTask(task.id).checkpoint,phase:'attempt'},owner);
    }
    throw error;
   }finally{await release();}

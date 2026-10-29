@@ -10,13 +10,13 @@ export async function selectContext(workspace,checkpoint,inventory,requested){
  if(newest.length>MAX_PATHS)throw new AttemptError('Requested context exceeds 128 exact paths');
  // Validate the whole explicitly requested set first; no requested error can be evicted.
  const required=explicit?await workspace.readFiles(newest):[];
- const files=[...required],evicted=[];
+ const files=[...required],evicted=[];let full=false;
  for(const file of prior){
   if(newest.includes(file))continue;
   if(secretPath(file)||!matches(file,workspace.manifest.permissions.readPaths)){evicted.push(file);continue;}
-  if(files.length>=MAX_PATHS){evicted.push(file);continue;}
+  if(full||files.length>=MAX_PATHS){evicted.push(file);continue;}
   const [entry]=await workspace.readFiles([file]);
-  if(Buffer.byteLength(JSON.stringify([...files,entry]))>MAX_BYTES){evicted.push(file);continue;}
+  if(Buffer.byteLength(JSON.stringify([...files,entry]))>MAX_BYTES){full=true;evicted.push(file);continue;}
   files.push(entry);
  }
  return {files,evicted,workingSet:{version:1,executionBase:base,entries:files.map(({path,hash})=>({path,hash}))}};
