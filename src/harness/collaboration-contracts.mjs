@@ -6,7 +6,7 @@ import {keys,identifier,integer,text,canonical} from './contracts.mjs';
 export const COLLABORATION_VERSION=1;
 export const OBSERVER_LIMITS=Object.freeze({pageDefault:50,pageMax:200,evidenceBytes:32768});
 const copy=value=>JSON.parse(canonical(value));
-function version(raw,fields,label){keys(raw,['version',...fields],label);if((raw.version??1)!==COLLABORATION_VERSION)throw Error(`Unsupported ${label} version`);}
+function version(raw,fields,label){keys(raw,['version',...fields],label);if(raw.version!==COLLABORATION_VERSION)throw Error(`Unsupported ${label} version`);}
 function choice(value,values,label){if(!values.includes(value))throw Error(`Invalid ${label}`);return value;}
 function nullable(value,fn){return value===undefined||value===null?null:fn(value);}
 function ids(raw,label){if(!Array.isArray(raw)||raw.length>100)throw Error(`Invalid ${label}`);const out=raw.map(x=>identifier(x,label));if(new Set(out).size!==out.length)throw Error(`Duplicate ${label}`);return out;}
@@ -17,7 +17,7 @@ export function normalizeModelSelection(raw={}){
 }
 export function normalizeAgentRegistration(raw){
  version(raw,['taskId','hostAgentId','role','actor','model'],'agent registration');
- return {version:1,taskId:identifier(raw.taskId,'taskId'),hostAgentId:nullable(raw.hostAgentId,x=>text(x,'hostAgentId',200)),role:choice(raw.role??'implementer',['implementer','explorer','reviewer','supervisor'],'role'),actor:choice(raw.actor??'codex',['codex','deepseek'],'actor'),model:normalizeModelSelection(raw.model??{})};
+ return {version:1,taskId:identifier(raw.taskId,'taskId'),hostAgentId:nullable(raw.hostAgentId,x=>text(x,'hostAgentId',120)),role:choice(raw.role,['implementer','explorer','reviewer','supervisor'],'role'),actor:choice(raw.actor,['codex','deepseek'],'actor'),model:normalizeModelSelection(raw.model??{})};
 }
 export function normalizeProgressReport(raw){
  version(raw,['agentId','status','summary','evidenceIds'],'progress report');

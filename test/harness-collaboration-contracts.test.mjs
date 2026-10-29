@@ -16,6 +16,12 @@ test('registration and model metadata are copied, bounded and cannot create exec
  assert.deepEqual(v.normalizeModelSelection({}),{requested:null,resolved:null});
  for(const x of [{...registration,version:2},{...registration,command:'run'},{...registration,role:'integrator'},{...registration,actor:'cloud'},{...registration,taskId:'../outside'},{...registration,model:{requested:'',resolved:null}},{...registration,model:{requested:null,resolved:null,provider:'other'}}])assert.throws(()=>v.normalizeAgentRegistration(x));
 });
+test('version, actor and role are explicit and host correlations are bounded',()=>{
+ for(const field of ['version','actor','role']){const x={...registration};delete x[field];assert.throws(()=>v.normalizeAgentRegistration(x));}
+ assert.throws(()=>v.normalizeAgentRegistration({...registration,version:null}));assert.throws(()=>v.normalizeAgentRegistration({...registration,hostAgentId:'h'.repeat(121)}));
+ for(const fn of [v.normalizeProgressReport,v.normalizeNativeCandidate,v.normalizeHelpRequest,v.normalizeActivityEvent])assert.throws(()=>fn({version:null}));
+});
+
 test('progress is reported bounded data, not a stopped-worker certificate',()=>{
  const result=v.normalizeProgressReport({version:1,agentId:'agent-1',status:'stopped',summary:'Host reports stopping',evidenceIds:['artifact-1']});assert.equal(result.status,'stopped');assert.equal(result.quiescent,undefined);
  for(const x of [{...result,quiescent:true},{...result,status:'integrated'},{...result,summary:'x'.repeat(2001)},{...result,evidenceIds:['/etc/passwd']}])assert.throws(()=>v.normalizeProgressReport(x));
