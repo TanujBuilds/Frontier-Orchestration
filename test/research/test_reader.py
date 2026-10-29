@@ -1,4 +1,5 @@
 """Offline contract tests: only DNS, sockets, and TLS are substituted."""
+import errno
 import gzip
 import hashlib
 import importlib.util
@@ -116,6 +117,57 @@ class ReaderTests(unittest.TestCase):
             self.assertIn(b'Host: public.example.com\r\n', self.sockets[0].sent)
             self.assertTrue(self.sockets[0].closed)
             json.dumps(result)
+
+    def test_unroutable_public_ipv6_falls_back_to_vetted_ipv4(self):
+        class Unroutable(WireSocket):
+            def connect(self, address):
+                raise OSError(errno.ENETUNREACH, 'Network is unreachable')
+        first = Unroutable(response(), peer='2606:4700:4700::1111')
+        second = WireSocket(response())
+        sockets = iter([first, second])
+        result = reader.read_url('https://public.example.com/article',
+            _resolver=lambda host, timeout: ['2606:4700:4700::1111', PUBLIC],
+            _socket_factory=lambda *args: next(sockets), _tls_context=self.tls)
+        self.assertTrue(result['ok'], result.get('error'))
+        self.assertIn('bounded readers preserve', result['text'])
+        self.assertEqual(result['contentSha256'], hashlib.sha256(ARTICLE).hexdigest())
+        self.assertEqual(second.connected, (PUBLIC, 443))
+        self.assertEqual(self.tls.hostnames, ['public.example.com'])
+        self.assertTrue(first.closed)
+        self.assertTrue(second.closed)
+
+    def test_route_error_after_get_does_not_restart_download_on_another_address(self):
+        class ReadFailure(WireSocket):
+            def recv(self, size):
+                raise OSError(errno.EHOSTUNREACH, 'Route lost after GET')
+        first = ReadFailure(response())
+        second = WireSocket(response(), peer='1.1.1.1')
+        sockets = iter([first, second])
+        result = reader.read_url('https://public.example.com/article',
+            _resolver=lambda host, timeout: [PUBLIC, '1.1.1.1'],
+            _socket_factory=lambda *args: next(sockets), _tls_context=self.tls)
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['error']['code'], 'io_error')
+        self.assertIn(b'GET /article ', first.sent)
+        self.assertEqual(second.sent, b'')
+        self.assertTrue(first.closed)
+
+    def test_fallback_still_rejects_mixed_private_dns_before_any_connect(self):
+        result = self.fetch(ips=['2606:4700:4700::1111', PUBLIC, '10.0.0.1'])
+        self.assertEqual(result['error']['code'], 'unsafe_address')
+        self.assertEqual(self.sockets, [])
+
+    def test_fallback_does_not_retry_certificate_failure(self):
+        class BadTLS:
+            def wrap_socket(self, sock, *, server_hostname):
+                raise ssl.SSLCertVerificationError('certificate rejected')
+        first = WireSocket(response())
+        result = reader.read_url('https://public.example.com/article',
+            _resolver=lambda host, timeout: [PUBLIC, '1.1.1.1'],
+            _socket_factory=lambda *args: first, _tls_context=BadTLS())
+        self.assertEqual(result['error']['code'], 'tls_error')
+        self.assertEqual(first.sent, b'')
+        self.assertTrue(first.closed)
 
     def test_links_are_extracted_inside_bounded_child_and_capped(self):
         body=ARTICLE+b''.join(b'<a href="/page">link</a>' for _ in range(300))

@@ -9,6 +9,7 @@ they are deliberately absent from any command-line interface.
 """
 import base64
 import datetime
+import errno
 import hashlib
 from html.parser import HTMLParser
 import http.client
@@ -30,6 +31,10 @@ MAX_TEXT = 50000
 MAX_TOTAL_SECONDS = 25.0
 MAX_PARSER_SECONDS = 5.0
 REDIRECT_CODES = {301, 302, 303, 307, 308}
+
+
+class _UnreachableAddress(OSError):
+    """A vetted address could not be reached before TLS or any HTTP request."""
 
 
 class ReaderError(Exception):
@@ -152,7 +157,12 @@ def _request(host, authority, target, address, deadline, socket_factory, tls_con
     try:
         sock.settimeout(_remaining(deadline))
         # Numeric address and an explicit family: this connect performs no further DNS lookup.
-        sock.connect((str(address), 443, 0, 0) if address.version == 6 else (str(address), 443))
+        try:
+            sock.connect((str(address), 443, 0, 0) if address.version == 6 else (str(address), 443))
+        except OSError as error:
+            if error.errno in (errno.ENETUNREACH, errno.EHOSTUNREACH):
+                raise _UnreachableAddress(error.errno, 'Vetted address has no reachable route.') from error
+            raise
         if ipaddress.ip_address(sock.getpeername()[0]) != address:
             raise ReaderError('peer_mismatch', 'Connected peer differs from the vetted public address.')
         sock.settimeout(_remaining(deadline))
@@ -282,8 +292,18 @@ def read_url(url, *, artifact_dir=None, total_timeout=MAX_TOTAL_SECONDS,
                 raise ReaderError('dns_error', 'DNS must return between one and 64 addresses.')
             # Validate EVERY answer before opening ANY socket, including mixed v4/v6 responses.
             addresses = [_public_ip(value) for value in answers]
-            result = _request(host, authority, target, addresses[0], deadline,
-                              socket_factory, tls_context)
+            for index, address in enumerate(addresses):
+                _remaining(deadline)
+                try:
+                    result = _request(host, authority, target, address, deadline,
+                                      socket_factory, tls_context)
+                    break
+                except _UnreachableAddress:
+                    # Only connect-time routing failures permit trying another vetted
+                    # address. Reuse this DNS answer set and the original deadline;
+                    # TLS, peer validation, response and source-limit failures abort.
+                    if index == len(addresses) - 1:
+                        raise
             record['status'] = result['status']
             if 'location' in result:
                 if hop == 3:
