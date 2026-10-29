@@ -104,7 +104,15 @@ export class Coordinator {
   while(changed){changed=false;for(const t of tasks)if(!TERMINAL.has(t.status))for(const id of t.spec.dependsOn)if(p.get(id)<p.get(t.id)){p.set(id,p.get(t.id));changed=true;}}
   return p;
  }
- eligible(t){const g=this.store.get('goal',t.goalId);return g.status==='active'&&g.deadline>this.now()&&(!t.deadline||t.deadline>this.now())&&t.goalVersion===g.version&&t.spec.dependsOn.every(id=>this.store.get('task',id).status==='accepted');}
+ eligible(t){const g=this.store.get('goal',t.goalId);return g.status==='active'&&g.deadline>this.now()&&(!t.deadline||t.deadline>this.now())&&!(g.integrationSealed&&t.spec.kind==='coding')&&!t.pauseRequested&&!t.stopRequested&&t.goalVersion===g.version&&t.spec.dependsOn.every(id=>this.store.get('task',id).status==='accepted');}
+ expireQuiescent(){return this.store.tx(()=>{
+  for(const t of this.store.all('task')){
+   const g=this.store.get('goal',t.goalId);
+   if(TERMINAL.has(t.status)||t.owner||t.status==='legacy_reviewing'||t.executionActor==='codex'||g.integrationOwner===t.id)continue;
+   if(this.now()<Math.min(g.deadline,t.deadline??g.deadline))continue;
+   t.status='partial';t.reason='Original deadline reached; saved evidence retained';this.store.put('task',t);this.emit('task.expired',g.id,t.id,{reason:t.reason});
+  }
+ });}
  requestUrgentYield(){const tasks=this.store.all('task'),p=this.effectivePriorities();for(const active of tasks.filter(t=>t.status==='running'&&t.spec.actor==='deepseek'))if(tasks.some(t=>['queued','suspended'].includes(t.status)&&this.eligible(t)&&p.get(t.id)>p.get(active.id))){active.yieldRequested=true;this.store.put('task',active);this.emit('task.yield_requested',active.goalId,active.id);}}
  claimNext(owner){identifier(owner,'owner');return this.store.tx(()=>{
   if(this.store.all('planning').some(p=>['running','uncertain'].includes(p.status)))return null;
@@ -149,6 +157,8 @@ export class Coordinator {
  });}
  completeTask(taskId,result,owner,{reviewRequired=false}={}){return this.store.tx(()=>{const t=this.owned(taskId,owner),g=this.store.get('goal',t.goalId);t.result=result;t.owner=null;t.yieldRequested=false;
   t.status=this.now()>=Math.min(g.deadline,t.deadline)?'partial':t.spec.kind==='coding'?(g.manifest.mode.review==='checks'?'ready_to_integrate':g.manifest.mode.review==='legacy'?'awaiting_legacy_review':'awaiting_review'):reviewRequired&&g.manifest.mode.review==='operator'?'awaiting_review':'accepted';
+  if(t.status!=='partial'&&(t.stopRequested||g.status==='stopped')){t.controlReturnStatus=t.status;t.status='stopped';}
+  else if(t.status!=='partial'&&(t.pauseRequested||g.status==='paused')){t.controlReturnStatus=t.status;t.status='paused';}
   this.store.put('task',t);this.emit('task.result',t.goalId,t.id,{status:t.status,result});return this.getTask(t.id);
  });}
  review(input,key){return this.store.command(key,{op:'task.review',...input},()=>{const t=this.store.get('task',input.taskId),g=this.store.get('goal',t.goalId);this.liveTask(t);if(g.manifest.mode.review!=='operator')throw Error('Mode prohibits Codex operator review');if(t.status!=='awaiting_review')throw Error('Task is not awaiting review');if(t.reviews>=t.spec.limits.reviews)throw Error('Review limit reached');if(!['accept','revise'].includes(input.decision))throw Error('Invalid review decision');text(input.feedback,'feedback',12000);t.reviews++;t.feedback.push({decision:input.decision,text:input.feedback,at:this.now()});t.reviewed=true;

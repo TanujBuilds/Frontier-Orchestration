@@ -7,7 +7,8 @@ export class LegacyReview {
  constructor(worker){this.worker=worker;this.c=worker.c;this.inflight=null;}
  async tick(){
   if(this.inflight)return null;
-  const task=this.c.store.all('task').find(t=>['awaiting_legacy_review','legacy_reviewing'].includes(t.status));if(!task)return null;
+  this.c.expireQuiescent();
+  const task=this.c.store.all('task').find(t=>['awaiting_legacy_review','legacy_reviewing'].includes(t.status)&&this.c.eligible(t));if(!task)return null;
   const run=this.run(task);this.inflight=run;try{return await run;}finally{this.inflight=null;}
  }
  async run(task){
@@ -18,7 +19,7 @@ export class LegacyReview {
    await source.workspace.recover();const runner=this.worker.integration.checks(source.workspace),sandbox=await runner.verify();
    const checks=await runner.run(source.manifest.permissions.checks,`legacy-${task.id}-${task.reviews}`);if(!checks.every(r=>r.passed))throw Error('Legacy review requires passing protected checks');
    const reservation=c.store.tx(()=>{
-    const current=c.store.get('task',task.id);c.liveGoal(c.store.get('goal',task.goalId));if(c.now()>=current.deadline)throw Error('Task deadline reached');
+    const current=c.liveTask(task);if(c.now()>=current.deadline)throw Error('Task deadline reached');
     if(current.checkpoint.legacyReviewKey)return c.store.request(task.id,current.checkpoint.legacyReviewKey);
     if(c.store.db.prepare("SELECT 1 FROM requests WHERE kind='codexReview' AND status='reserved'").get())throw Error('Another background review has uncertain ownership');
     if((c.store.spent(task.id).codexReview??0)>=current.spec.limits.reviews)throw Error('Legacy review budget exhausted');

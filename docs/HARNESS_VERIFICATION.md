@@ -1,8 +1,8 @@
 # Harness verification — 2026-10-28
 
 Release is **incomplete**. The implementation is on the isolated `codex/harness`
-branch; it has not been merged or published. Final independent review, installed
-service recovery and the Spark research gates remain required.
+branch; it has not been merged or published. Installed service recovery and the
+Spark research gates remain required.
 
 Tested runtime: Node 24.22.0, SQLite 3.53.4, MCP SDK 1.32.2, Playwright 1.64.1,
 Python 3.12 and pinned Trafilatura 2.3.1. Actual Mac checks use the existing Codex
@@ -12,6 +12,8 @@ CLI sandbox with network access disabled and an enforcement canary.
 | --- | --- |
 | Extensible policies | A fifth research-only preset registers without scheduler changes, survives restart and rejects coding. Workflow instances atomically pin definitions and map dependencies. |
 | Durability | Actual SIGKILL tests preserve reserved/saved requests and planner responses. An integration killed after its Git checkpoint but before SQLite acceptance reuses the exact commit without another model request or review. |
+| Independent review and corrections | A fresh reviewer ran 53 selected tests and found eight significant lifecycle/ownership failures. Eleven reproductions failed before corrections; the full corrected suite passes 193 Node and 86 Python tests. Additional coverage checks typed gateway failures and actual SIGKILL after native acceptance but before effect completion, with no second commit. |
+| Recovery controls | Research submission holds ownership until remote quiescence; uncertain research can reconcile exact remote identity and counters under the current coordinator lease. Native collection stores remote finalization separately and retries the original operation without another finish request. Stops arriving during checks/collection are preserved. |
 | Installed-package fixture | Standalone MCP service, native zero-model work, exact approval, final receipt and tamper detection pass independently of development imports. A separate agent also completed two reviewed fixture consults across restart, preserving counters and idempotency. |
 | Collaborative live pilot | Three sequential DeepSeek assignments plus concurrent native Codex work, a supervisor question/answer, blocking-priority yield, resumption, independent review, same-task correction and combined checked integration. Fourteen DeepSeek requests; native Codex usage is not measured by this coordinator. |
 | Scope correction | The live pilot exposed overly narrow child read permissions for a combined check. An exact new goal version and explicit rebind corrected reads while preserving write scope, task identity, checkpoint, deadline and spending. The sandbox was retained. |
@@ -30,7 +32,6 @@ not erased.
 
 ## Remaining release gates
 
-- Independent whole-branch code review and any significant corrections.
 - Final versioned package, personal skill/MCP registration and Mac LaunchAgent
   installation; independent restart recovery on that installed service.
 - Authenticated Spark deployment, CPU-limited loopback SearXNG, two ten-query
@@ -43,3 +44,9 @@ not erased.
 The model HTTP route works independently of SSH. The outstanding SSH browser
 check failure blocks remote installation, not Mac-side inference. No model runtime
 settings, weights, SSH policies or public hosting were changed.
+
+Explicit release of stopped native coding preserves its real checkout and retires
+that goal's coding workspace. It permits a partial receipt without discarding or
+silently integrating unfinished changes; continuing coding requires a separately
+approved goal. Unknown remote ownership still holds the shared slot. Reconciliation
+does not recreate a missing remote submission or refund requests.

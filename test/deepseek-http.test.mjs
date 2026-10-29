@@ -61,3 +61,10 @@ test('truncated answer is retained but marked failed', async () => {
   assert.equal(result.status, 'failed');
   assert.equal(result.answer, 'Partial answer');
 });
+
+test('request errors distinguish an uncertain dispatched completion from model discovery failure',async()=>{
+ const discovery=new DeepSeekHttpAdapter({baseUrl:'http://example.test/v1',fetchImpl:async()=>response({},504)});
+ await assert.rejects(discovery.resolveModel(),error=>error.httpStatus===504&&error.requestOutcome==='not_dispatched');
+ const completion=new DeepSeekHttpAdapter({baseUrl:'http://example.test/v1',fetchImpl:async()=>response({},504)});
+ await assert.rejects(completion.request(completion.chatUrl,{method:'POST',body:'{}'}),error=>error.httpStatus===504&&error.requestOutcome==='unknown');
+});

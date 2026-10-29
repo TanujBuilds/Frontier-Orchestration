@@ -94,3 +94,10 @@ test('collaborative consult results wait for the main supervisor review',async t
  await new Worker({...f,provider:{complete:async()=>({content:'Candidate explanation'})}}).drain();assert.equal(f.c.getTask(task.id).status,'awaiting_review');
  const done=f.c.review({taskId:task.id,decision:'accept',feedback:'Explanation checked against the question'},'review');assert.equal(done.status,'accepted');assert.equal(done.spent.model,1);assert.equal(done.attempts,1);
 });
+
+test('gateway timeout remains uncertain and retains global DeepSeek ownership',async t=>{
+ const root=await mkdtemp(path.join(os.tmpdir(),'harness-gateway-')),c=new Coordinator({root});t.after(async()=>{c.close();await rm(root,{recursive:true,force:true});});
+ const g=c.prepareGoal({submissionId:'g',objective:'Answer',acceptance:['Pass'],environment:'fixture'},'p');c.activateGoal({goalId:g.id,hash:g.hash},'a');
+ const first=c.submitTask({goalId:g.id,submissionId:'first',kind:'consult',objective:'First',acceptance:['Answer']},'first');c.submitTask({goalId:g.id,submissionId:'second',kind:'consult',objective:'Second',acceptance:['Answer']},'second');
+ const worker=new Worker({c,config:{environment:'fixture'},provider:{complete:async()=>{throw Error('DeepSeek /v1/chat/completions returned HTTP 504');}}});await worker.tick();assert.equal(c.getTask(first.id).status,'uncertain');assert.equal(c.getTask(first.id).spent.model,1);assert.equal(c.claimNext('other'),null);
+});

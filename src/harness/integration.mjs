@@ -18,7 +18,7 @@ export class Integration {
   this.inflight.set(key,run);try{return await run;}finally{this.inflight.delete(key);}
  }
  async goalWorkspace(goalId,{native=false}={}){
-  const g=this.c.store.get('goal',goalId);if(!g.manifest.project)throw Error('Goal has no coding project');
+  const g=this.c.store.get('goal',goalId);if(g.integrationSealed)throw Error('Preserved partial integration workspace is retired; use a separately approved goal');if(!g.manifest.project)throw Error('Goal has no coding project');
   const journal=await new Journal(path.join(this.c.store.root,'integration'),g.id).load();
   const p=g.manifest.project,manifest={repo:p.repo,baseCommit:p.baseCommit,permissions:p};
   if(!journal.last('workspace.created')){const inspected=await inspectRepository(p.repo,p);if(inspected.baseCommit!==p.baseCommit)throw Error('Approved source revision changed');}
@@ -50,8 +50,9 @@ export class Integration {
   await workspace.apply(key,{writePaths},edits);
  }
  async accept(input,key){return this.effect(key,{op:'integration.accept',...input},async()=>{
-  let t=this.c.getTask(input.taskId),g=this.c.store.get('goal',t.goalId);this.c.liveGoal(g);
+  let t=this.c.getTask(input.taskId),g=this.c.store.get('goal',t.goalId);
   if(t.status==='accepted'&&t.integration)return t;
+  this.c.liveGoal(g);
   this.c.liveTask(t);
   if(!['awaiting_review','ready_to_integrate'].includes(t.status))throw Error('Candidate is not ready for integration');
   if(g.manifest.mode.review==='legacy'&&t.legacyDecision?.decision!=='accept')throw Error('Passing legacy review required');
@@ -72,7 +73,7 @@ export class Integration {
     this.c.liveTask(t);
     const stage=`task-${t.id}`,imported=await target.journal.memo(`${stage}/checkpoint`,()=>target.workspace.checkpoint({id:stage,writePaths:t.spec.permissions.writePaths}));
     if(!target.journal.events.some(e=>e.type==='stage.accepted'&&e.data.stageId===stage))await target.journal.append('stage.accepted',{stageId:stage,...imported});
-    this.c.store.tx(()=>{const current=this.c.store.get('task',t.id);current.status='accepted';current.integration={commit:imported.commit,candidateCommit:checkpoint.commit,worktree:target.workspace.root,checks:results,review:g.manifest.mode.review==='checks'?'none':g.manifest.mode.review==='legacy'?'codex_legacy':'codex_operator'};this.c.store.put('task',current);this.c.emit('task.integrated',g.id,t.id,current.integration);});
+    this.c.store.tx(()=>{const current=this.c.liveTask(t);current.status='accepted';current.integration={commit:imported.commit,candidateCommit:checkpoint.commit,worktree:target.workspace.root,checks:results,review:g.manifest.mode.review==='checks'?'none':g.manifest.mode.review==='legacy'?'codex_legacy':'codex_operator'};this.c.store.put('task',current);this.c.emit('task.integrated',g.id,t.id,current.integration);});
     return this.c.getTask(t.id);
    }finally{await release();}
   }finally{await releaseCandidate();}
@@ -103,7 +104,9 @@ export class Integration {
   }finally{await release();}
  });}
  async finishNative(input,key){return this.effect(key,{op:'native.finish',...input},async()=>{
-  const t=this.c.getTask(input.taskId),g=this.c.store.get('goal',t.goalId);this.c.liveGoal(g);text(input.summary,'summary');if(t.status!=='codex_active'||g.integrationOwner!==t.id)throw Error('Native task ownership mismatch');
+  const t=this.c.getTask(input.taskId),g=this.c.store.get('goal',t.goalId);text(input.summary,'summary');
+  if(t.status==='accepted'&&t.integration?.review==='codex_native')return t;
+  this.c.liveGoal(g);if(t.status!=='codex_active'||g.integrationOwner!==t.id)throw Error('Native task ownership mismatch');
   this.c.liveTask(t);
   const target=await this.goalWorkspace(g.id,{native:true}),release=await target.journal.lock();try{
    if(t.native.workerSnapshot){const source=await this.candidate(t),unlock=await source.journal.lock();try{if(digest(await source.workspace.snapshot())!==digest(t.native.workerSnapshot))throw Error('Frozen worker checkout changed after takeover');}finally{await unlock();}}
@@ -111,9 +114,28 @@ export class Integration {
    for(const f of new Set([...Object.keys(snapshot),...Object.keys(before)]))if(snapshot[f]!==before[f]&&(protectedPath(f)||!matches(f,t.spec.permissions.writePaths)))throw Error('Native change outside approved scope or protected checks');
    await target.journal.append('native.adopted',{taskId:t.id,snapshot});
    const runner=this.checks(target.workspace);await runner.verify();const results=await runner.run(g.manifest.project.checks,`native-${t.id}`);if(!results.every(x=>x.passed))throw Error('Native checks failed');
+   this.c.liveTask(t);
    const stage=`native-${t.id}`,checkpoint=await target.journal.memo(`${stage}/checkpoint`,()=>target.workspace.checkpoint({id:stage,writePaths:t.spec.permissions.writePaths}));
    if(!target.journal.events.some(e=>e.type==='stage.accepted'&&e.data.stageId===stage))await target.journal.append('stage.accepted',{stageId:stage,...checkpoint});
-   this.c.store.tx(()=>{const current=this.c.store.get('task',t.id);current.status='accepted';current.result={summary:input.summary,checks:results};current.integration={commit:checkpoint.commit,worktree:target.workspace.root,checks:results,review:'codex_native'};this.c.store.put('task',current);const goal=this.c.store.get('goal',g.id);goal.integrationOwner=null;this.c.store.put('goal',goal);this.c.emit('task.native_finished',g.id,t.id,current.integration);});return this.c.getTask(t.id);
+   this.c.store.tx(()=>{const current=this.c.liveTask(t);const goal=this.c.store.get('goal',g.id);if(current.status!=='codex_active'||goal.integrationOwner!==t.id)throw Error('Native task ownership changed');current.status='accepted';current.result={summary:input.summary,checks:results};current.integration={commit:checkpoint.commit,worktree:target.workspace.root,checks:results,review:'codex_native'};this.c.store.put('task',current);goal.integrationOwner=null;this.c.store.put('goal',goal);this.c.emit('task.native_finished',g.id,t.id,current.integration);});return this.c.getTask(t.id);
   }finally{await release();}
+ });}
+ async releaseNative(input,key){return this.effect(key,{op:'native.release',...input},async()=>{
+  const t=this.c.getTask(input.taskId);text(input.reason,'release reason');
+  if(t.status==='partial'&&t.result?.savedNative)return t;
+  const g=this.c.store.get('goal',t.goalId);
+  if(t.spec.kind!=='coding'||t.executionActor!=='codex'||t.status!=='stopped'||t.owner||g.integrationOwner!==t.id)throw Error('Stop native editing and retain its ownership before explicit release');
+  const target=await this.goalWorkspace(g.id,{native:true}),unlock=await target.journal.lock();
+  try{
+   const snapshot=await target.workspace.snapshot(),head=await git(target.workspace.root,'rev-parse','HEAD');
+   const savedNative={worktree:target.workspace.root,head,snapshot,snapshotHash:digest(snapshot),reason:input.reason};
+   await target.journal.append('native.released',{taskId:t.id,...savedNative});
+   return this.c.store.tx(()=>{
+    const current=this.c.store.get('task',t.id),goal=this.c.store.get('goal',g.id);
+    if(current.status!=='stopped'||goal.integrationOwner!==t.id)throw Error('Native ownership changed before release');
+    current.status='partial';current.result={summary:input.reason,savedNative};current.reason='Native partial preserved; integration workspace retired';goal.integrationOwner=null;goal.integrationSealed=savedNative;
+    this.c.store.put('task',current);this.c.store.put('goal',goal);this.c.emit('task.native_released',g.id,t.id,{snapshotHash:savedNative.snapshotHash,reason:input.reason});return this.c.getTask(t.id);
+   });
+  }finally{await unlock();}
  });}
 }

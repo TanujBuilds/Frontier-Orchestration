@@ -107,3 +107,44 @@ test('DeepSeek-only refuses a configured Codex reviewer even when code passes',a
  await new Worker({...f,provider:provider(),reviewer:{reviewCode:async()=>{calls++;throw Error('Forbidden review');}}}).drain();
  assert.equal(f.c.getTask(a.id).status,'accepted');assert.equal(calls,0);assert.equal(f.c.getTask(a.id).spent.codexReview,0);
 });
+
+test('expired automatic integration becomes partial without starving independent queued work',async t=>{
+ const f=await fixture(t,'deepseek_only'),a=f.c.submitTask({goalId:f.g.id,...task,limits:{seconds:1}},'s');f.c.claimNext('owner');f.c.completeTask(a.id,{checks:[]},'owner');const deadline=f.c.getTask(a.id).deadline;f.c.now=()=>deadline+1;
+ const other=f.c.submitTask({goalId:f.g.id,submissionId:'other',kind:'consult',objective:'Independent answer',acceptance:['Answer']},'other');
+ await new Worker({...f,provider:{complete:async()=>({content:'Answer'})}}).tick();assert.equal(f.c.getTask(a.id).status,'partial');assert.equal(f.c.getTask(other.id).status,'accepted');assert.equal(f.c.getTask(a.id).deadline,deadline);
+});
+test('native finalization rechecks controls after protected checks and preserves the partial files',async t=>{
+ const f=await fixture(t,'codex_only'),a=f.c.submitTask({goalId:f.g.id,...task},'s'),native=await f.integration.startNative({taskId:a.id},'start');await writeFile(path.join(native.native.worktree,'src/answer.mjs'),'export const answer=42;\n');
+ const integration=new Integration({c:f.c,checksFactory:w=>({verify:async()=>({fixture:true}),run:async checks=>{const result=await f.checksFactory(w).run(checks);f.c.control({taskId:a.id,action:'stop'},'stop-during-check');return result;}})});
+ await assert.rejects(integration.finishNative({taskId:a.id,summary:'Done'},'finish'),/stopped|ownership|active/);assert.equal(f.c.getTask(a.id).status,'stopped');assert.equal(f.c.getTask(a.id).integration,undefined);assert.equal(await readFile(path.join(native.native.worktree,'src/answer.mjs'),'utf8'),'export const answer=42;\n');
+});
+test('stopped expired native work can be preserved and explicitly released for partial finalization',async t=>{
+ const f=await fixture(t,'codex_only'),a=f.c.submitTask({goalId:f.g.id,...task,limits:{seconds:1}},'s'),native=await f.integration.startNative({taskId:a.id},'start');await writeFile(path.join(native.native.worktree,'src/answer.mjs'),'export const answer=7;\n');const before=f.c.getTask(a.id);f.c.now=()=>before.deadline+1;f.c.control({taskId:a.id,action:'stop'},'stop');
+ const {Dispatcher}=await import('../src/harness/tools.mjs'),dispatcher=new Dispatcher({c:f.c,worker:new Worker({...f})}),operation=await dispatcher.invoke('native_release',{taskId:a.id,reason:'Native editing stopped; preserve expired partial work',idempotencyKey:'release'});await dispatcher.whenIdle();assert.equal(f.c.store.get('operation',operation.id).status,'completed');
+ const released=f.c.getTask(a.id);assert.equal(released.status,'partial');assert.equal(released.deadline,before.deadline);assert.deepEqual(released.spent,before.spent);assert.equal(f.c.getGoal(f.g.id).integrationOwner,null);assert.equal(await readFile(path.join(native.native.worktree,'src/answer.mjs'),'utf8'),'export const answer=7;\n');
+ const done=new Goals(f.c).finalize({goalId:f.g.id,summary:'Expired native work preserved',partial:true},'partial');assert.equal(done.status,'partial');assert.ok(released.result.savedNative);
+});
+test('native acceptance survives the accepted-task to effect-completion interruption',async t=>{
+ const f=await fixture(t,'codex_only'),a=f.c.submitTask({goalId:f.g.id,...task},'s'),native=await f.integration.startNative({taskId:a.id},'start');await writeFile(path.join(native.native.worktree,'src/answer.mjs'),'export const answer=42;\n');
+ const put=f.c.store.put.bind(f.c.store);f.c.store.put=(kind,value)=>{if(kind==='effect'&&value.id==='finish'&&value.status==='completed')throw Error('Simulated interruption');return put(kind,value);};
+ await assert.rejects(f.integration.finishNative({taskId:a.id,summary:'Done'},'finish'),/interruption/);f.c.store.put=put;const accepted=f.c.getTask(a.id);assert.equal(accepted.status,'accepted');new Goals(f.c).finalize({goalId:f.g.id,summary:'Complete'},'final');
+ const recovered=await f.integration.finishNative({taskId:a.id,summary:'Done'},'finish');assert.equal(recovered.integration.commit,accepted.integration.commit);assert.equal(f.c.store.get('effect','finish').status,'completed');
+});
+
+test('candidate acceptance replays its committed result after the goal is finalized',async t=>{
+ const f=await fixture(t),a=f.c.submitTask({goalId:f.g.id,...task},'s');await new Worker({...f,provider:provider()}).drain();const put=f.c.store.put.bind(f.c.store);f.c.store.put=(kind,value)=>{if(kind==='effect'&&value.id==='accept-gap'&&value.status==='completed')throw Error('Simulated interruption');return put(kind,value);};
+ await assert.rejects(f.integration.accept({taskId:a.id,feedback:'Reviewed actual code'},'accept-gap'),/interruption/);f.c.store.put=put;const before=f.c.getTask(a.id);new Goals(f.c).finalize({goalId:f.g.id,summary:'Complete'},'final');const recovered=await f.integration.accept({taskId:a.id,feedback:'Reviewed actual code'},'accept-gap');assert.equal(recovered.integration.commit,before.integration.commit);assert.equal(recovered.reviews,before.reviews);
+});
+test('expired legacy candidate does not block an eligible review in another goal',async t=>{
+ const f=await fixture(t,'overnight_review'),a=f.c.submitTask({goalId:f.g.id,...task,limits:{seconds:1}},'s');f.c.claimNext('owner');f.c.completeTask(a.id,{checks:[]},'owner');f.c.now=()=>f.c.getTask(a.id).deadline+1;let reviews=0;const worker=new Worker({...f,reviewer:{reviewCode:async()=>{reviews++;return {decision:'accept',feedback:'Pass',unverified:[]};}}});await worker.tick();assert.equal(f.c.getTask(a.id).status,'partial');assert.equal(reviews,0);
+});
+
+test('SIGKILL after native acceptance before effect completion replays without a second commit',async t=>{
+ const f=await fixture(t,'codex_only'),a=f.c.submitTask({goalId:f.g.id,...task},'s'),native=await f.integration.startNative({taskId:a.id},'start');await writeFile(path.join(native.native.worktree,'src/answer.mjs'),'export const answer=42;\n');f.c.close();
+ const script=`import {Coordinator} from ${JSON.stringify(new URL('../src/harness/coordinator.mjs',import.meta.url).href)};import {Integration} from ${JSON.stringify(new URL('../src/harness/integration.mjs',import.meta.url).href)};import {command} from ${JSON.stringify(new URL('../src/project/process.mjs',import.meta.url).href)};
+ const c=new Coordinator({root:process.argv[1]}),put=c.store.put.bind(c.store);c.store.put=(kind,value)=>{if(kind==='effect'&&value.id==='kill-finish'&&value.status==='completed'){console.log(JSON.stringify({commit:c.getTask(process.argv[2]).integration.commit}));Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0);}return put(kind,value);};
+ const checksFactory=w=>({verify:async()=>({fixture:true}),run:async checks=>Promise.all(checks.map(async check=>{const r=await command(check.argv,{cwd:w.root});return {...r,id:check.id,passed:r.code===0,screenshots:[]};}))});await new Integration({c,checksFactory}).finishNative({taskId:process.argv[2],summary:'Done'},'kill-finish');`;
+ const child=spawn(process.execPath,['--input-type=module','-e',script,path.join(f.root,'state'),a.id],{stdio:['ignore','pipe','pipe']});t.after(()=>{if(child.exitCode===null&&child.signalCode===null)child.kill('SIGKILL');});
+ const checkpoint=await new Promise((resolve,reject)=>{let out='',err='';child.stderr.on('data',b=>err+=b);child.stdout.on('data',b=>{out+=b;if(out.includes('\n'))resolve(JSON.parse(out.split('\n')[0]));});child.on('exit',()=>reject(Error('Child ended before acceptance: '+err)));});const ended=new Promise(resolve=>child.once('exit',resolve));child.kill('SIGKILL');await ended;
+ const recovered=new Coordinator({root:path.join(f.root,'state')});try{assert.equal(recovered.getTask(a.id).status,'accepted');assert.equal(recovered.store.get('effect','kill-finish').status,'pending');new Goals(recovered).finalize({goalId:f.g.id,summary:'Complete'},'done');const done=await new Integration({c:recovered,checksFactory:f.checksFactory}).finishNative({taskId:a.id,summary:'Done'},'kill-finish');assert.equal(done.integration.commit,checkpoint.commit);assert.equal(done.spent.model,0);assert.equal(await git(done.integration.worktree,'rev-list','--count',`${f.g.manifest.project.baseCommit}..HEAD`),'1');}finally{recovered.close();}
+});

@@ -7,6 +7,13 @@ function endpoint(baseUrl, route) {
   return new URL(route, url);
 }
 
+function requestError(message,url,status){
+  const error=new Error(message);
+  error.requestOutcome=url.pathname.endsWith('/chat/completions')&&(status===undefined||status>=500)?'unknown':'not_dispatched';
+  if(status!==undefined)error.httpStatus=status;
+  return error;
+}
+
 function requestWithoutHeaderDeadline(url, options, signal) {
   return new Promise((resolve, reject) => {
     const transport = url.protocol === 'https:' ? https : http;
@@ -55,18 +62,18 @@ export class DeepSeekHttpAdapter {
     try {
       response = await this.fetchImpl(url, { ...options, signal: combined }, combined);
     } catch (error) {
-      if (signal?.aborted) throw new Error('DeepSeek call interrupted');
-      if (timeout.aborted) throw new Error(`DeepSeek call timed out after ${this.timeoutMs} ms`);
+      if (signal?.aborted) throw requestError('DeepSeek call interrupted',url);
+      if (timeout.aborted) throw requestError(`DeepSeek call timed out after ${this.timeoutMs} ms`,url);
       const detail = error.cause?.code ?? error.message;
-      throw new Error(`DeepSeek connection failed: ${detail}`);
+      throw requestError(`DeepSeek connection failed: ${detail}`,url);
     }
-    if (!response.ok) throw new Error(`DeepSeek ${url.pathname} returned HTTP ${response.status}`);
+    if (!response.ok) throw requestError(`DeepSeek ${url.pathname} returned HTTP ${response.status}`,url,response.status);
     try {
       return await response.json();
     } catch {
-      if (signal?.aborted) throw new Error('DeepSeek call interrupted');
-      if (timeout.aborted) throw new Error(`DeepSeek call timed out after ${this.timeoutMs} ms`);
-      throw new Error(`DeepSeek ${url.pathname} returned invalid JSON`);
+      if (signal?.aborted) throw requestError('DeepSeek call interrupted',url);
+      if (timeout.aborted) throw requestError(`DeepSeek call timed out after ${this.timeoutMs} ms`,url);
+      throw requestError(`DeepSeek ${url.pathname} returned invalid JSON`,url);
     }
   }
 

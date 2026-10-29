@@ -71,6 +71,11 @@ claim that independent factual certification occurred. Consults use one model
 request by default, so a revision may exhaust their original request allowance.
 
 `native_start` / `native_finish` manage native coding ownership.
+After native editing has actually stopped, stop the assignment, then use
+`native_release` with a reason to preserve an unfinished or expired checkout and
+release ownership for a partial receipt. This retires that goal's coding checkout;
+it does not discard files or integrate unaccepted changes. Stop other unfinished
+tasks before partial finalization. Continuing coding needs a separately approved goal.
 `native_text_start` / `native_text_finish` record native Codex consults without a
 DeepSeek request. A takeover reason is required when the original actor differs.
 `research_start` / `research_action` provide native search/read/finish, backed by
@@ -83,6 +88,14 @@ the approved live/fixture environment.
 stop is not verified remote quiescence. Completed responses can replay after a
 verified dead coordinator without new calls; pending/ambiguous inference remains
 spent and blocks conflicting dispatch. Never delete the database/lease to recover.
+For uncertain remote research use `research_reconcile`: the current coordinator
+verifies the saved exact submission/hash, requests a remote yield, preserves
+monotonic counters and requires verified quiescence before recovery. If contact or
+identity is still uncertain, ownership stays held. Missing submissions are not
+silently recreated. Collection failures marked `retryable` reuse the exact original
+operation key; native research stores the remote action/finalization separately,
+so a collection retry sends no second finish action. The dashboard shows these
+operations and recovery controls. Integrity failures require investigation.
 
 For changed scope, prepare and approve an exact goal revision after quiescence,
 then explicitly rebind unfinished assignments. Rebinding preserves original task

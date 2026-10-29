@@ -28,13 +28,14 @@ export class Worker {
   }catch(error){
    this.c.store.tx(()=>{const row=this.c.store.db.prepare('SELECT data FROM requests WHERE id=?').get(reservation.id);const data=JSON.parse(row.data);data.error=error.message.slice(0,500);this.c.store.db.prepare('UPDATE requests SET status=?,data=? WHERE id=?').run('failed',JSON.stringify(data),reservation.id);});
    // The HTTP client cannot certify that a failed connection stopped remote inference.
-   if(/timeout|timed out|ECONN|socket|interrupted|abort|fetch failed/i.test(error.message))this.c.markUncertain(task.id,error.message,owner);
+   if(error.requestOutcome==='unknown'||(!error.requestOutcome&&/timeout|timed out|ECONN|socket|interrupted|abort|fetch failed|connection failed|HTTP 5\d\d/i.test(error.message)))this.c.markUncertain(task.id,error.message,owner);
    throw error;
   }
  }
  async tick(){
-  const automatic=this.c.store.all('task').find(t=>t.status==='ready_to_integrate'&&['checks','legacy'].includes(this.c.store.get('goal',t.goalId).manifest.mode.review));
-  if(automatic)return this.integration.accept({taskId:automatic.id,feedback:'Trusted checks passed; no Codex review'},`auto-integrate-${automatic.id}`);
+  this.c.expireQuiescent();
+  const automatic=this.c.store.all('task').find(t=>t.status==='ready_to_integrate'&&this.c.eligible(t)&&['checks','legacy'].includes(this.c.store.get('goal',t.goalId).manifest.mode.review));
+  if(automatic){try{return await this.integration.accept({taskId:automatic.id,feedback:'Trusted checks passed; no Codex review'},`auto-integrate-${automatic.id}`);}catch(error){this.c.store.tx(()=>{const t=this.c.store.get('task',automatic.id);if(t.status==='ready_to_integrate'){t.status='blocked';t.reason=error.message;this.c.store.put('task',t);this.c.emit('task.blocked',t.goalId,t.id,{reason:t.reason});}});return this.c.getTask(automatic.id);}}
   const planning=await this.planner.tick();if(planning)return planning;
   let task=this.c.store.all('task').find(t=>t.status==='running'&&t.owner===this.owner);
   if(task)task=this.c.getTask(task.id);else task=this.c.claimNext(this.owner);

@@ -30,7 +30,7 @@ export class ResearchAdapter {
    const prepared=await this.rpc({command:'prepare_manifest',manifest});return c.boundary(task.id,{phase:'submit',manifest:prepared.manifest,remoteHash:prepared.hash},owner);
   }
   if(cp.phase==='submit'){
-   try{const remote=await this.rpc({command:'submit',manifest:cp.manifest,approved_hash:cp.remoteHash});return c.boundary(task.id,{...cp,phase:'poll',remoteJobId:remote.id},owner);}
+   try{const remote=await this.rpc({command:'submit',manifest:cp.manifest,approved_hash:cp.remoteHash});return c.boundary(task.id,{...cp,phase:'poll',remoteJobId:remote.id},owner,{quiescent:false});}
    catch(e){c.markUncertain(task.id,'Ambiguous research submission: '+e.message,owner);return c.getTask(task.id);}
   }
   if(cp.nextPollAt&&c.now()<cp.nextPollAt)return {waiting:true,taskId:task.id};
@@ -49,6 +49,7 @@ export class ResearchAdapter {
     return c.boundary(task.id,{...cp,nextPollAt:c.now()+(cfg.pollMs??1000)},owner,{quiescent:false});
    }
    if(['awaiting_supervisor','awaiting_user'].includes(remote.status)){
+    const current=c.boundary(task.id,cp,owner);if(current.status!=='running')return current;
     const questions=await this.rpc({command:'questions',job:cp.remoteJobId});const q=questions.at(-1);return c.ask(task.id,q.question,{...cp,nextPollAt:0,remoteQuestionId:q.id},owner);
    }
    if(['suspended','stopped'].includes(remote.status))return c.boundary(task.id,{...cp,remotePaused:true,nextPollAt:0},owner);
@@ -62,4 +63,29 @@ export class ResearchAdapter {
    return c.boundary(task.id,{...cp,nextPollAt:c.now()+(cfg.pollMs??1000)},owner);
   }catch(e){if(c.getTask(task.id).status==='uncertain')return c.getTask(task.id);c.markUncertain(task.id,'Research contact/evidence uncertain: '+e.message,owner);return c.getTask(task.id);}
  }
+ async reconcile(input,key){return this.worker.integration.effect(key,{op:'research.reconcile',...input},async()=>{
+  const {c,owner}=this.worker,lease=c.store.get('lease','coordinator');
+  if(lease.token!==owner||lease.pid!==process.pid)throw Error('Current coordinator lease required for reconciliation');
+  const t=c.getTask(input.taskId),cp={...t.checkpoint};
+  if(t.spec.kind!=='research'||t.spec.actor!=='deepseek'||t.status!=='uncertain')throw Error('Uncertain DeepSeek research task required');
+  if(!cp.remoteHash)throw Error('Missing approved remote identity');
+  if(!cp.remoteJobId){
+   const jobs=await this.rpc({command:'status'}),matches=jobs.filter(j=>j.manifest_hash===cp.remoteHash&&j.manifest?.submission_id===t.id);
+   if(matches.length!==1)throw Error('Exact remote submission could not be located; ownership remains uncertain');
+   cp.remoteJobId=matches[0].id;cp.phase='poll';
+  }
+  // Quiescent queued work can be claimed remotely immediately. Request a durable
+  // yield, then require both the exact identity and a safe remote lifecycle state.
+  await this.rpc({command:'yield',job:cp.remoteJobId});
+  const remote=await this.rpc({command:'status',job:cp.remoteJobId});
+  if(remote.id!==cp.remoteJobId||remote.manifest_hash!==cp.remoteHash)throw Error('Research manifest identity mismatch');
+  c.store.tx(()=>{
+   const current=c.store.get('task',t.id);if(current.status!=='uncertain')throw Error('Research ownership changed');
+   for(const [kind,n]of Object.entries(remote.counters??{}))if(!Number.isInteger(n)||n<0||n<(current.remoteSpent?.[kind]??0))throw Error('Remote counters decreased or invalid');
+   current.remoteSpent=remote.counters??{};current.checkpoint={...cp,nextPollAt:0};c.store.put('task',current);
+  });
+  if(!remote.quiescent||!['suspended','stopped','completed','partial','blocked','failed','awaiting_supervisor','awaiting_user'].includes(remote.status))return c.getTask(t.id);
+  c.store.tx(()=>{const current=c.store.get('task',t.id);current.owner=owner;current.status='running';c.store.put('task',current);c.emit('research.reconciled',t.goalId,t.id,{remoteJobId:cp.remoteJobId,status:remote.status,counters:remote.counters});});
+  return this.step(c.getTask(t.id),owner);
+ });}
 }
