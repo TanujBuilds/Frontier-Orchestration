@@ -109,3 +109,6 @@ test('restart after context checkpoint and before reservation reuses attempt wit
  const f=await setup(t),task=f.c.submitTask({goalId:f.g.id,...coding()},'submit');let calls=0;let worker=isolatedWorker(f,{complete:async m=>{calls++;return answer(m);}});await worker.tick();worker.model=async()=>{throw Error('Fixture interruption before reservation');};await assert.rejects(worker.adapters.coding.step(f.c.getTask(task.id),worker.owner),/Fixture interruption/);const before=f.c.getTask(task.id);assert.equal(before.checkpoint.workingSet.version,1);assert.equal(before.spent.model,0);assert.equal(before.attempts,1);
  worker=isolatedWorker(f,{complete:async m=>{calls++;return answer(m);}},worker.owner);await worker.drain();const done=f.c.getTask(task.id);assert.equal(done.status,'awaiting_review',done.reason);assert.equal(done.attempts,1);assert.equal(done.spent.model,1);assert.equal(calls,1);assert.equal(done.deadline,before.deadline);
 });
+test('worker forwards explicit streaming config even when a provider is already present',async t=>{
+ const f=await setup(t),task=f.c.submitTask({goalId:f.g.id,...coding()},'submit');f.config.deepseekStreaming=true;const worker=isolatedWorker(f,{complete:async(m,options)=>{assert.equal(options.streaming,true);return answer(m);}});await worker.drain();assert.equal(f.c.getTask(task.id).status,'awaiting_review');
+});

@@ -40,3 +40,6 @@ test('visible callback capture is capped at128KiB and callback backpressure cann
 test('resolved pin mismatch refuses POST; reported response mismatch cannot be executed',async t=>{
  const f=await fixture(t,(_req,res)=>success(res));await assert.rejects(f.provider.complete([],{expectedModel:'previous'}),e=>{assert.equal(e.requestOutcome,'not_dispatched');assert.match(e.message,/model.*pin|pinned.*model/i);return true;});assert.equal(f.posts(),0);
 });
+test('per-request streaming override works on a provider initialized earlier in completed mode',async t=>{
+ const f=await fixture(t,(_req,res,body)=>{assert.equal(body.stream,true);success(res,'visible');},{streaming:false});const result=await f.provider.complete([],{streaming:true});assert.equal(result.content,'visible');assert.equal(f.provider.streaming,false);assert.equal(f.posts(),1);
+});

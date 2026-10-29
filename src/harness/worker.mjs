@@ -45,7 +45,7 @@ export class Worker {
    if(this.c.store.get('goal',task.goalId).manifest.environment!==(this.config.environment??'live'))throw Error('Approved environment differs from configured providers');
    this.provider??=new LocalProvider({baseUrl:this.config.deepseekBaseUrl,model:this.config.deepseekModelId,streaming:this.config.deepseekStreaming??false});
    const expectedModel=this.c.getTask(task.id).providerModel;
-   const result=await this.provider.complete(messages,{maxTokens,signal:AbortSignal.timeout(remaining),expectedModel,onModel:model=>{this.pinModel(task,owner,model);this.activity(task,'model.request.resolved',{operationId:reservation.id,requestId:reservation.id,model});},onContent:content=>{
+   const result=await this.provider.complete(messages,{maxTokens,streaming:this.config.deepseekStreaming??false,signal:AbortSignal.timeout(remaining),expectedModel,onModel:model=>{this.pinModel(task,owner,model);this.activity(task,'model.request.resolved',{operationId:reservation.id,requestId:reservation.id,model});},onContent:content=>{
     if(typeof content!=='string'||captured>=128*1024)return;
     const bytes=Buffer.from(content),take=Math.min(bytes.length,128*1024-captured);captured+=take;
     // Fixed-size captured fragments; UI sinks are not awaited and cannot execute actions.
