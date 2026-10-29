@@ -26,6 +26,21 @@ try{
  const page=await browser.newPage({viewport:{width:1280,height:900},reducedMotion:'reduce'}),errors=[];page.on('pageerror',error=>errors.push(error.message));page.setDefaultTimeout(5000);
  await page.goto(api.url);await page.getByLabel('Connection key').fill(token);await Promise.all([page.waitForURL(api.url+'/'),page.getByRole('button',{name:'Connect',exact:true}).click()]);
  await page.getByRole('heading',{name:g.manifest.objective,exact:true}).waitFor();
+ // Opening and drafting an assignment must survive the three-second polling cycle.
+ await page.getByText('Add an assignment',{exact:true}).click();
+ await page.waitForTimeout(3400);
+ assert.equal(await page.getByLabel('Assignment outcome',{exact:true}).isVisible(),true,'Auto-refresh closed the open assignment form');
+ await page.getByLabel('Assignment outcome',{exact:true}).fill('Keep an owner-entered assignment draft');
+ await page.getByLabel('Assignment capability',{exact:true}).selectOption('consult');
+ await page.getByLabel('Assignment actor',{exact:true}).selectOption('codex');
+ await page.getByLabel('Assignment acceptance',{exact:true}).fill('Preserve the draft through automatic refresh and submit it once');
+ await page.getByRole('heading',{name:g.manifest.objective,exact:true}).click();
+ await page.waitForTimeout(3400);
+ assert.equal(await page.getByLabel('Assignment outcome',{exact:true}).inputValue(),'Keep an owner-entered assignment draft','Auto-refresh discarded a blurred draft');
+ await page.getByRole('button',{name:'Queue assignment',exact:true}).click();
+ await page.getByRole('heading',{name:'Keep an owner-entered assignment draft',exact:true}).waitFor();
+ const drafted=c.store.all('task').filter(t=>t.spec.objective==='Keep an owner-entered assignment draft');
+ assert.equal(drafted.length,1);assert.equal(drafted[0].spec.kind,'consult');assert.equal(drafted[0].spec.actor,'codex');
  const uncertainRow=page.locator(`[data-task-id="${uncertain.id}"]`);await uncertainRow.getByRole('button',{name:'Reconcile research',exact:true}).click();await page.waitForFunction(id=>document.querySelector(`[data-task-id="${id}"]`)?.textContent.includes('paused'),uncertain.id);assert.equal(c.getTask(uncertain.id).status,'paused');
  await page.locator('#goal-select').selectOption(releaseGoal.id);const releaseRow=page.locator(`[data-task-id="${releaseTask.id}"]`);await releaseRow.getByLabel('Partial release reason').fill('Editing has stopped; preserve this partial checkout');await releaseRow.getByRole('button',{name:'Preserve partial and release',exact:true}).click();await page.waitForFunction(id=>document.querySelector(`[data-task-id="${id}"] .meta .pill`)?.textContent==='partial',releaseTask.id);assert.equal(c.getTask(releaseTask.id).status,'partial');assert.equal(c.getGoal(releaseGoal.id).integrationOwner,null);await page.locator('#goal-select').selectOption(g.id);
  await page.getByLabel('Answer supervisor question').fill('Prevent repeated side effects first.');await page.getByRole('button',{name:'Send answer',exact:true}).click();
