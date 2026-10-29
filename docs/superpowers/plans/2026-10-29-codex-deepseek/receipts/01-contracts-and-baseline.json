@@ -1,0 +1,55 @@
+{
+  "stage": "01",
+  "objective": "Versioned collaboration contracts and compatibility baseline",
+  "prerequisite": "367b450",
+  "commits": [
+    "ec6c26a",
+    "2067676"
+  ],
+  "acceptance": "passed",
+  "tests": {
+    "node": {
+      "passed": 203,
+      "failed": 0
+    },
+    "python_baseline": {
+      "passed": 90,
+      "failed": 0
+    },
+    "contract_tests": 10
+  },
+  "versions": {
+    "node": "24.22.0",
+    "codex_cli": "0.164.0",
+    "mcp_sdk": "1.32.2",
+    "playwright": "1.64.1",
+    "python_test_environment": "3.12"
+  },
+  "evidence": {
+    "baseline-node.log": "6d8893e957b7f37db1af38135be4764faf348392722a05a3352ccaa3b00b72d9",
+    "stage01-red.log": "6b078e77a0ffb009d9a5998f0f64dccee3d5221713f17cf902afdb511c0341c8",
+    "stage01-fix-red.log": "7e72554729c31640dbf34338b56eac01ee85d26ff3fec8027d76d89caa10321a",
+    "stage01-fix-green.log": "06103cb802490c3f0a04db296471c77ae0b052291931da180cdb8207e0b0daeb",
+    "stage01-node.log": "f0deb57e60afdfe6574adc7e961beb87acd908cabc8072531278e3ee5bf12890",
+    "stage01-review.md": "72f92859309a4ca8577b034296120b9bf9634198c2c507f2ccea1cd2a6524acd",
+    "stage01-fix-review.md": "1c0bbdf1165ea6b3fba6e5eafb6bf48fde75f5ae7c9e285c810728a0239590fe"
+  },
+  "host_capabilities": {
+    "native_spawn": "verified through current host",
+    "native_model_override": "verified reviewer dispatch",
+    "managed_worktrees": "verified",
+    "native_read_only_role": "cooperative; no independent authenticated caller isolation established",
+    "installed_mcp_discovery": "Stage07 pending"
+  },
+  "compatibility": "Existing approval manifests and native ownership unchanged; additive generic records only; unknown SQLschema rejected. Restart retains real saved request and spending.",
+  "spending": {
+    "stage_deepseek_requests": 0,
+    "automated_codex_cli_calls": 0,
+    "native_host_tokens": null
+  },
+  "limitations": [
+    "execution-base resolver implementation belongs to Stage02",
+    "Whole package and installation incomplete",
+    "Native metadata is not execution authorization"
+  ]
+}
