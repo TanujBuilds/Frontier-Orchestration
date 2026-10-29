@@ -5,14 +5,15 @@
   "commits": [
     "107cb23",
     "91d6c06",
-    "49e1dd2"
+    "49e1dd2",
+    "f32bd3341f81b1a791a9fc041626bfd0b6a51bfa"
   ],
   "acceptance": "incomplete",
   "fixtureImplementation": "passed",
   "tests": {
     "focused": {
       "command": "node --test test/harness-provider.test.mjs test/harness-context.test.mjs test/harness-working-set.test.mjs test/harness-crash.test.mjs",
-      "passed": 39,
+      "passed": 41,
       "failed": 0
     },
     "fullNode": {
@@ -20,9 +21,15 @@
       "passed": 221,
       "failed": 18,
       "total": 239,
-      "dependency": "Stage02 Integration.executionBase absent; exact failed tests in private report"
+      "dependency": "Stage02 Integration.executionBase absent; exact failed tests in private report",
+      "scope": "Pre-wire-budget-review full run; combined Stage02 suite remains required"
     },
-    "diffCheck": "passed"
+    "diffCheck": "passed",
+    "wireBudgetRegression": {
+      "redPassed": 0,
+      "redFailed": 2,
+      "greenIncludedInFocused": true
+    }
   },
   "liveEvidence": {
     "deepseekRequests": 0,
@@ -44,10 +51,11 @@
     "editedFiles": 2,
     "editBytes": 24576,
     "exchangesPerAttempt": 10,
-    "providerResultAndSseWireBytes": 524288,
     "capturedVisibleBytesPerRequest": 131072,
     "visibleChunkBytes": 4096,
-    "presentationEventBytes": 32768
+    "presentationEventBytes": 32768,
+    "providerResultBytes": 524288,
+    "sseWireBytes": 8388608
   },
   "compatibility": "Paths-only checkpoints seed working set. Existing default completed transport, budgets, deadlines, permissions, ownership and request keys preserved. Streaming does not retry/probe automatically. Saved wrong-model results remain spent/inert.",
   "limitations": [
@@ -66,6 +74,11 @@
     "stage03-stream-config-red.log": "ab8127a0dfc25b5843d69acef1a3016c479e552a98860901724cbf01c6326521",
     "stage03-focused-green.log": "b5fbf444143e3f7285d9b5c5e2918fe893928c6b8d0fd87773965af8efc3af74",
     "stage03-full-suite.log": "08d7d97c84b14d68dad2e35acceb14db3be4c348efe332e6c3edfc02767fd9e0",
-    "stage03-dependencies.log": "e25b1bc4a0c25dd0f039309e318c5fd2eeb1c645f1efc6ad26485329b16c931a"
-  }
+    "stage03-dependencies.log": "e25b1bc4a0c25dd0f039309e318c5fd2eeb1c645f1efc6ad26485329b16c931a",
+    "stage03-wire-budget-red.log": "d07d5f5a3c5962d0abb0caf0d89c44fa79fe3f280ef54fb279d0fa5ea263a7f0",
+    "stage03-wire-budget-green.log": "5a0db6e556ac1634ac24b060117eadcdeafb1d1bb3e79993c41eb6493b84c761"
+  },
+  "reviewCorrections": [
+    "Separate8MiB SSE wire envelope from512KiB completed-result/content policy; legitimate24KiB output with6000deltas passes; >8MiB wire fails unknown without retry"
+  ]
 }
