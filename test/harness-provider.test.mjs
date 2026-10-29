@@ -43,3 +43,14 @@ test('resolved pin mismatch refuses POST; reported response mismatch cannot be e
 test('per-request streaming override works on a provider initialized earlier in completed mode',async t=>{
  const f=await fixture(t,(_req,res,body)=>{assert.equal(body.stream,true);success(res,'visible');},{streaming:false});const result=await f.provider.complete([],{streaming:true});assert.equal(result.content,'visible');assert.equal(f.provider.streaming,false);assert.equal(f.posts(),1);
 });
+test('bounded SSE framing overhead above512KiB accepts a small valid completed result',async t=>{
+ const content='code'.repeat(6000),wire=frame(part('code')).repeat(6000)+frame({model:'fixture',choices:[{delta:{},finish_reason:'stop'}]})+'data: [DONE]\n\n';
+ assert.ok(Buffer.byteLength(wire)>512*1024);assert.ok(Buffer.byteLength(wire)<8*1024*1024);
+ const f=await fixture(t,(_req,res)=>{res.writeHead(200,{'content-type':'text/event-stream'});res.end(wire);});let captured=0;
+ const result=await f.provider.complete([],{onContent:chunk=>{captured+=Buffer.byteLength(chunk);}});assert.equal(result.content,content);assert.equal(captured,Buffer.byteLength(content));assert.ok(Buffer.byteLength(JSON.stringify(result))<512*1024);assert.equal(f.posts(),1);
+});
+test('SSE wire above8MiB fails unknown without retry even when visible content is small',async t=>{
+ const wire=(': '+ 'x'.repeat(65530)+'\n\n').repeat(129);assert.ok(Buffer.byteLength(wire)>8*1024*1024);
+ const f=await fixture(t,(_req,res)=>{res.writeHead(200,{'content-type':'text/event-stream'});res.end(wire);});
+ await assert.rejects(f.provider.complete([]),error=>{assert.equal(error.requestOutcome,'unknown');assert.match(error.message,/wire.*8 MiB/);return true;});assert.equal(f.posts(),1);
+});

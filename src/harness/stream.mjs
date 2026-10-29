@@ -2,7 +2,8 @@ import http from 'node:http';
 import https from 'node:https';
 import { StringDecoder } from 'node:string_decoder';
 
-const MAX_RESPONSE=512*1024,MAX_CAPTURE=128*1024;
+// SSE framing repeats metadata per delta; bound the wire separately from model output.
+const MAX_WIRE=8*1024*1024,MAX_RESPONSE=512*1024,MAX_CAPTURE=128*1024;
 function failure(message,outcome='unknown',status){const e=new Error(message);e.requestOutcome=outcome;if(status!==undefined)e.httpStatus=status;return e;}
 // No retry or probe is performed here: one reservation permits exactly one POST.
 export function streamCompletion(url,body,{signal,timeoutMs,onContent,model}){
@@ -40,7 +41,7 @@ export function streamCompletion(url,body,{signal,timeoutMs,onContent,model}){
    const consume=text=>{pending+=text;let match;while((match=/\r?\n\r?\n/.exec(pending))){const raw=pending.slice(0,match.index);pending=pending.slice(match.index+match[0].length);event(raw);}};
    response.on('data',chunk=>{
     if(settled)return;
-    wireBytes+=chunk.length;if(wireBytes>MAX_RESPONSE){fail(failure('DeepSeek stream response exceeds512KiB bound'));return;}
+    wireBytes+=chunk.length;if(wireBytes>MAX_WIRE){fail(failure('DeepSeek SSE wire response exceeds 8 MiB bound'));return;}
     try{consume(decoder.write(chunk));}catch(e){fail(e);}
    });
    response.on('end',()=>{
