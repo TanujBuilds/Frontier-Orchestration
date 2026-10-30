@@ -88,7 +88,13 @@ def remote(config,request):
     if any(not isinstance(x,str) or '\x00' in x for x in argv):raise ValueError('invalid remote configuration')
     result=subprocess.run(['ssh','-o','BatchMode=yes','-o','ConnectTimeout=10',host,shlex.join(argv)],input=json.dumps(request).encode(),stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=120)
     if len(result.stdout)>MAX_PACKET:raise ValueError('remote packet exceeds limit')
-    if result.returncode:raise RuntimeError('SSH operation failed: '+result.stderr.decode(errors='replace')[-1500:])
+    if result.returncode:
+        detail=result.stderr.decode(errors='replace')
+        try:
+            failure=json.loads(result.stdout)
+            if isinstance(failure,dict) and isinstance(failure.get('error'),str):detail=failure['error']
+        except (ValueError,UnicodeError):pass
+        raise RuntimeError('SSH operation failed: '+detail[-1500:])
     answer=json.loads(result.stdout)
     if isinstance(answer,dict) and 'error' in answer:raise RuntimeError(answer['error'])
     return answer
