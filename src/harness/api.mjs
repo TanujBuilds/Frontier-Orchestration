@@ -54,7 +54,7 @@ export async function startApi({dispatcher,token,viewerToken, trustedOrigins=[],
     if(role==='viewer'&&packet.name==='tools_list')return send(200,dispatcher.tools().filter(t=>OBSERVER_TOOLS.has(t.name)));
     return send(200,await dispatcher.invoke(packet.name,packet.input??{}));
    }
-   const assets={'/':'index.html','/app.js':'app.js','/style.css':'style.css'};
+   const assets={'/observer':'observer.html','/observer.js':'observer.js','/observer.css':'observer.css','/':'index.html','/app.js':'app.js','/style.css':'style.css'};
    if(request.method==='GET'&&assets[pathname]){const data=await readFile(new URL('dashboard/'+assets[pathname],import.meta.url),'utf8');return send(200,data,pathname.endsWith('.js')?'text/javascript; charset=utf-8':pathname.endsWith('.css')?'text/css; charset=utf-8':'text/html; charset=utf-8');}
    throw problem(404,'Unknown route');
   }catch(error){if(!response.headersSent)send(error.status??400,{error:error.message});else response.end();}

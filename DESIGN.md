@@ -27,3 +27,13 @@ Dynamic source/model text uses DOM text nodes. Controls call the same authentica
 API as MCP. A rendered state is never treated as authorization or a completed test.
 
 Nunito's SIL Open Font License is shipped beside the font in the dashboard assets.
+
+## Codex-first observer (owner-approved 2026-10-29)
+
+`/observer` uses two desktop actor columns and a shared chronological timeline.
+At700px the columns stack. Captured worker actions and reported native progress
+are explicitly distinguished. Expanded evidence and filters survive refresh;
+readable current work remains visible with verbose evidence collapsed. Controls
+only filter, refresh and read. Instructions, approvals and execution stay in Codex.
+Viewer login lands here; the legacy operator console remains separately available
+for compatibility and is not the observer's authority boundary.

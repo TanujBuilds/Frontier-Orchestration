@@ -11,7 +11,8 @@
     "dashboard": "node src/dashboard.mjs",
     "test": "node --test",
     "pilot": "node src/pilot.mjs",
-    "queue": "node src/task-queue-cli.mjs"
+    "queue": "node src/task-queue-cli.mjs",
+    "test:observer": "node checks/observer-ui.mjs"
   },
   "engines": {
     "node": ">=20"
