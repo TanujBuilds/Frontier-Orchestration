@@ -105,6 +105,35 @@ class WorkerTests(unittest.TestCase):
 
         self.assertIn('https://www.sqlite.org/valid',self.store.get(job['id'])['checkpoint']['known_urls'])
 
+    def test_finalization_envelope_repair_is_explicit_and_stays_within_budget(self):
+        job=self.submit(limits={'model_calls':4})
+        class ObservedModel:
+            calls=0
+            def complete(inner,messages,timeout):
+                inner.calls+=1
+                context=json.loads(messages[-1]['content'])
+                if inner.calls==1:return {'content':json.dumps({'action':'read','url':URL})}
+                if inner.calls==2:return {'content':'', 'finish_reason':'length',
+                    'usage':{'total_tokens':8192}, 'raw_response':{'id':'blank-fixture'},
+                    'error':{'code':'empty_content','message':'No answer content'}}
+                if inner.calls==3:return {'content':json.dumps(report())}
+                envelope=context['finalization']['finish_action_example']
+                from research_protocol import parse_action,validate_report
+                self.assertEqual(parse_action(envelope)['action'],'finish')
+                self.assertEqual(validate_report(envelope['report'],{}),[])
+                self.assertLessEqual(context['finalization']['suggested_max_claims'],8)
+                self.assertTrue(any('only search, read and finish' in e for e in context['validation_errors']))
+                return {'content':json.dumps({**envelope,'report':report()})}
+        model=ObservedModel();self.worker(model).drain()
+        final=self.store.get(job['id'])
+        self.assertEqual(final['status'],'partial')  # budget-triggered finalization remains partial
+        self.assertEqual(final['counters']['model'],4)
+        self.assertEqual(json.loads((self.store.job_dir(job['id'])/'claims.json').read_text())['claims'][0]['id'],'C1')
+        blank=self.store.operations(job['id'])[2]['result']
+        self.assertEqual(blank['finish_reason'],'length')
+        self.assertEqual(blank['usage']['total_tokens'],8192)
+        self.worker(model).drain();self.assertEqual(model.calls,4)
+
     def test_exhausted_counter_does_not_prevent_replaying_a_saved_final_report(self):
         job=self.submit(limits={'downloads':1})
         self.store.claim_next()

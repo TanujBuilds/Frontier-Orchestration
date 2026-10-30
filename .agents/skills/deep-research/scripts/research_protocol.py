@@ -12,6 +12,13 @@ REPORT_SHAPE = {
  'contradictions':[], 'unanswered':[]}
 
 
+# A valid incomplete finish example needs no invented sources or quotations.
+FINISH_ACTION_EXAMPLE = {'action':'finish','report':{
+ 'title':'Incomplete research', 'complete':False, 'claims':[], 'summary':[],
+ 'comparisons':[], 'recommendations':[], 'contradictions':[],
+ 'unanswered':['The available saved evidence does not yet answer the approved question.']}}
+
+
 def parse_action(raw):
     if isinstance(raw, str):
         if len(raw) > 150000:

@@ -39,10 +39,19 @@ class DeepSeek:
             self.verified=True
         remaining=timeout-(time.monotonic()-start)
         if remaining<=0:raise TimeoutError('model request deadline expired')
-        obj=self.request('POST','/chat/completions',{'model':self.model_id,'messages':messages,'stream':False,'temperature':0.2,'max_tokens':8192},remaining)
-        content=obj['choices'][0]['message']['content']
-        if not isinstance(content,str) or not content.strip():raise ValueError('DeepSeek returned no answer content')
-        return {'content':content,'model':obj.get('model',self.model_id),'usage':obj.get('usage',{})}
+        obj=self.request('POST','/chat/completions',{'model':self.model_id,'messages':messages,'stream':False,'temperature':0.2,'max_tokens':8192,
+            'chat_template_kwargs':{'enable_thinking':False}},remaining)
+        choice=obj['choices'][0]
+        content=choice['message'].get('content')
+        # Persist transport evidence even when the model produced no usable action.
+        # request() caps the HTTP response; do not retry or discard its spent call.
+        result={'content':content,'model':obj.get('model',self.model_id),'usage':obj.get('usage',{}),
+                'finish_reason':choice.get('finish_reason'),'raw_response':obj}
+        if not isinstance(content,str) or not content.strip():
+            result['error']={'code':'empty_content','message':'DeepSeek returned no answer content'}
+        elif choice.get('finish_reason')=='length':
+            result['error']={'code':'truncated_content','message':'DeepSeek output reached its token limit; action rejected'}
+        return result
 
 class Fixture:
     model_id='fixture-no-model'

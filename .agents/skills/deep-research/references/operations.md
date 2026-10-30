@@ -104,3 +104,22 @@ submission session disconnects. Self-checks and excerpt matching establish
 provenance, not independent factual certification. PDF/OCR/headless browsing
 are outside v1. Darwin parser memory bounds are weaker than Linux; Spark has a
 hard process address-space limit plus service/container memory limits.
+
+
+## Model protocol diagnostics (source repair, 2026-10-30)
+
+The Python model adapter requests `chat_template_kwargs.enable_thinking=false`
+per completion. This does not change server runtime settings. Each saved model
+operation retains content, model, usage, finish reason and the bounded raw HTTP
+response. Blank/non-string content and output stopped by the token limit produce
+an explicit error alongside that evidence; the reservation stays spent and the
+worker uses only its existing bounded finalization/repair attempts.
+
+Finalization requires one `{"action":"finish","report":{...}}` envelope. The
+prompt supplies a validator-compatible incomplete example, encourages at most
+eight focused claims, and repeats saved-passage and source-window bounds. Bare
+reports and text appended as fabricated tool results remain protocol errors;
+unsupported quotations and citations still fail report validation. Prompt
+changes and offline fixtures do not prove live model reliability. Preserve
+terminal historical jobs and their counters; a new live pilot requires a
+separate user decision, not automatic replacement or resubmission.
