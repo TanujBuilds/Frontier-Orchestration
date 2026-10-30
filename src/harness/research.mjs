@@ -6,9 +6,9 @@ const bridge=fileURLToPath(new URL('../../.agents/skills/deep-research/scripts/h
 export class ResearchClient {
  constructor(config){this.config=config;}
  async call(request,collectOutput){
-  const cfg=this.config,args=[bridge,...(collectOutput?['--collect-output',collectOutput]:cfg.remoteConfig?['--remote-config',cfg.remoteConfig]:['--data-dir',cfg.dataDir,...(cfg.providerConfig?['--provider-config',cfg.providerConfig]:[])])];
+  const cfg=this.config,args=['-B',bridge,...(collectOutput?['--collect-output',collectOutput]:cfg.remoteConfig?['--remote-config',cfg.remoteConfig]:['--data-dir',cfg.dataDir,...(cfg.providerConfig?['--provider-config',cfg.providerConfig]:[])])];
   return new Promise((resolve,reject)=>{
-   const child=spawn(cfg.python??'python3',args,{stdio:['pipe','pipe','pipe']});let out='',err='',oversize=false;
+   const child=spawn(cfg.python??'python3',args,{env:{...process.env,PYTHONDONTWRITEBYTECODE:'1'},stdio:['pipe','pipe','pipe']});let out='',err='',oversize=false;
    const timer=setTimeout(()=>child.kill('SIGKILL'),130000);
    child.stdout.on('data',b=>{out+=b;if(Buffer.byteLength(out)>34*1024*1024){oversize=true;child.kill('SIGKILL');}});
    child.stderr.on('data',b=>{err=(err+b).slice(-4000);});child.stdin.on('error',()=>{});child.stdin.end(JSON.stringify(request));

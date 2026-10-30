@@ -3,6 +3,8 @@
 import argparse
 import json
 import sys
+# Supported script entrypoints must not mutate the checksummed runtime on import.
+sys.dont_write_bytecode = True
 from pathlib import Path
 from research_cli import rpc, remote, collect, MAX_PACKET
 from research_state import Store

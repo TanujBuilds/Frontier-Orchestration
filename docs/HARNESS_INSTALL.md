@@ -58,6 +58,31 @@ saved project sources and personal skills are excluded. Existing personal
 compatibility reference preserves historical backend routing; old approvals/IDs
 must never become fresh harness tasks.
 
+## Python cache policy
+
+The research bridge runs Python with `-B` and `PYTHONDONTWRITEBYTECODE=1`.
+The supported `harness_rpc.py` and `research_cli.py` script entrypoints also
+suppress bytecode before importing adjacent runtime modules; SSH research CLI
+invocations pass `-B` to the configured interpreter. Keep research state,
+configuration, sources and collected reports outside the package.
+
+For direct diagnostic commands, use the pinned interpreter with `-B`:
+
+```sh
+/ABS/PINNED_PYTHON -B /ABS/VERSION/runtime/.agents/skills/deep-research/scripts/research_cli.py --data-dir /ABS/PRIVATE_RESEARCH_STATE status
+```
+
+An ad hoc Python driver that imports packaged modules must itself start with
+`-B` (or set `PYTHONDONTWRITEBYTECODE=1` before starting Python). Imported modules
+cannot prevent Python from caching their own code before their bodies run; the
+runtime does not govern arbitrary external importers. Do not run `compileall` or
+install dependencies into a published version.
+
+Package verification still rejects every unlisted file/directory, including
+`__pycache__` and `.pyc` files. Existing caches are failure evidence, not an
+inventory exception: preserve the damaged version and build a new candidate;
+do not remove caches or rewrite its manifest to claim that version stayed valid.
+
 ## Private bindings and native roles
 
 Private provider config, auth, state and logs stay outside immutable versions.

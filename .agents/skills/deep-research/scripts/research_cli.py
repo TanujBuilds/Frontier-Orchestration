@@ -8,6 +8,8 @@ import re
 import shlex
 import subprocess
 import sys
+# Supported script entrypoints must not mutate the checksummed runtime on import.
+sys.dont_write_bytecode = True
 import time
 from pathlib import Path
 from research_state import Store, normalize_manifest, manifest_hash
@@ -82,7 +84,7 @@ def rpc(store,request,config=None):
 def remote(config,request):
     host=config['ssh_host']
     if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.@:-]{0,250}',host):raise ValueError('invalid SSH host')
-    argv=[config['python'],config['script'],'--data-dir',config['data_dir']]
+    argv=[config['python'],'-B',config['script'],'--data-dir',config['data_dir']]
     if config.get('provider_config'):argv+=['--provider-config',config['provider_config']]
     argv+=['rpc']
     if any(not isinstance(x,str) or '\x00' in x for x in argv):raise ValueError('invalid remote configuration')
