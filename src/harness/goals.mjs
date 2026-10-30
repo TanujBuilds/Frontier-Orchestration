@@ -24,10 +24,10 @@ export class Goals {
  });}
  rebind(input,key){return this.c.store.command(key,{op:'task.rebind',...input},()=>{
   const t=this.c.getTask(input.taskId),g=this.c.store.get('goal',t.goalId);this.c.liveGoal(g);
-  if(t.owner||t.native?.writerActive||g.integrationPending?.taskId===t.id||['codex_active','legacy_reviewing','accepted','partial'].includes(t.status))throw Error('Task must be quiescent and unfinished');
+  if(t.owner||t.native?.writerActive||g.integrationPending?.taskId===t.id||['codex_active','legacy_reviewing','accepted'].includes(t.status)||(t.status==='partial'&&!(t.native?.layout==='candidate_v1'&&t.goalVersion<g.version)))throw Error('Task must be quiescent and unfinished');
   const spec=normalizeTask(input.spec??t.spec,g.manifest,this.c.registry);if(spec.submissionId!==t.spec.submissionId||spec.kind!==t.spec.kind)throw Error('Task identity/kind cannot change');
   if(t.startedAt&&spec.actor!==t.spec.actor)throw Error('Started actor changes require explicit takeover');
-  if(t.native?.layout==='candidate_v1'){const permissions={readPaths:spec.permissions.readPaths,writePaths:spec.permissions.writePaths,checks:g.manifest.project.checks.filter(x=>spec.permissions.checks.includes(x.id))};if(digest(permissions)!==digest(t.native.manifest.permissions))throw Error('Changed native scope/checks require an explicit new candidate generation; this rebind preserves the pinned manifest');}
+  let nextNativePermissions=null;if(t.native?.layout==='candidate_v1'){const permissions={readPaths:spec.permissions.readPaths,writePaths:spec.permissions.writePaths,checks:g.manifest.project.checks.filter(x=>spec.permissions.checks.includes(x.id))};if(digest(permissions)!==digest(t.native.manifest.permissions)){if(t.goalVersion>=g.version)throw Error('Changed native scope/checks require an explicitly approved goal version');nextNativePermissions=permissions;}}
   for(const [name,limit] of Object.entries(spec.limits))if(limit>t.spec.limits[name])throw Error('Rebind cannot refresh assignment limits');
   const tasks=this.c.store.all('task').filter(x=>x.goalId===g.id),links=this.c.store.all('help_link').filter(l=>l.goalId===g.id&&l.status==='waiting'),graph=new Map(tasks.map(x=>[x.id,[...(x.id===t.id?spec.dependsOn:x.spec.dependsOn),...links.filter(l=>l.taskId===x.id).map(l=>l.helperTaskId)]]));
   const visited=new Set(),visiting=new Set(),visit=id=>{if(visiting.has(id))throw Error('Dependency cycle');if(visited.has(id))return;if(!graph.has(id))throw Error('Dependency outside goal');visiting.add(id);graph.get(id).forEach(visit);visiting.delete(id);visited.add(id);};visit(t.id);
@@ -37,8 +37,14 @@ export class Goals {
    if(spec.kind!=='coding')throw Error('Started non-coding scope changes require a separately versioned backend handoff');
    if(digest(unchanged(spec))!==digest(unchanged(t.spec)))throw Error('Started rebind keeps the exact assignment objective and limits; use bounded review feedback for corrections');
   }
+  if(nextNativePermissions){
+   const frozen={native:structuredClone(t.native),result:t.result,goalVersion:t.goalVersion,hash:t.hash,at:this.c.now()};t.nativeGenerations??=[];t.nativeGenerations.push(frozen);
+   t.native={...t.native,status:'generation_pending',writerActive:false,needsGeneration:{id:randomUUID(),number:(t.native.generation??1)+1,goalVersion:g.version,permissions:nextNativePermissions,baseCommit:null,from:frozen,at:this.c.now()}};
+   t.result=null;t.reviewed=false;t.feedback.push({kind:'approved_generation',text:'Explicit approved rebind requires a new native candidate generation and fresh checks/review.',goalVersion:g.version,at:this.c.now()});
+  }
   t.history??=[];t.history.push({goalVersion:t.goalVersion,spec:t.spec,hash:t.hash,at:this.c.now()});t.spec=spec;t.hash=digest(spec);t.goalVersion=g.version;t.deadline=t.deadline?Math.min(t.deadline,g.deadline):null;
   if(!['awaiting_review','ready_to_integrate','awaiting_supervisor','awaiting_user','awaiting_legacy_review'].includes(t.status))t.status=t.executionActor==='codex'||spec.actor==='codex'?'codex_ready':'queued';t.stopRequested=t.pauseRequested=false;
+  if(nextNativePermissions){const exhausted=t.reviews>=t.spec.limits.reviews||t.attempts>=t.spec.limits.attempts||(this.c.store.spent(t.id).model??0)>=t.spec.limits.modelCalls;t.status=exhausted?'blocked':'codex_ready';if(exhausted)t.reason='Approved generation retains exhausted original task limits';}
   this.c.store.put('task',t);this.c.emit('task.rebound',g.id,t.id,{goalVersion:t.goalVersion,hash:t.hash});return this.c.getTask(t.id);
  });}
  finalize(input,key){return this.c.store.command(key,{op:'goal.finalize',...input},()=>{

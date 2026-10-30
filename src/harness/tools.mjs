@@ -52,6 +52,7 @@ export class Dispatcher {
   add('agents_list','List managed registrations and last reported progress, not unrelated chats.',{goalId:str},[],false,i=>this.agents.list(i));
   add('help_link','Link an existing ordinary helper assignment to a live supervisor question; helper must be accepted before the answer resumes its parent.',{version:{...number,enum:[1]},taskId:str,questionId:str,helperTaskId:str,reason:str},['version','taskId','questionId','helperTaskId','reason'],true,(i,k)=>this.agents.linkHelp(i,k));
   for(const [name,method,description,extra,required]of [
+   ['task_integration_repair','repair','Supervised inverse of a saved failed import; preserve evidence and return the same task to its remaining correction budget.',{reason:str},['reason']],
    ['task_integrate','accept','Main operator integrates a reviewed, checked candidate.',{feedback:str},['feedback']],
    ['task_takeover','takeover','Transfer verified quiescent worker edits; candidate_v1 keeps the worker checkout frozen.',{reason:str,layout:{...str,enum:['candidate_v1']},registration:registrationSchema},['reason']],
    ['native_start','startNative','Reserve native ownership. Explicit candidate_v1 isolates this task; omitted layout preserves legacy behavior.',{layout:{...str,enum:['candidate_v1']},registration:registrationSchema},[]],
@@ -83,7 +84,7 @@ export class Dispatcher {
  tools(){return [...this.definitions.values()].map(({fn,mutating,...tool})=>tool);}
  async recoverOperations(owner){
   const lease=this.c.store.get('lease','coordinator');if(lease.token!==owner||lease.pid!==process.pid)throw Error('Current worker lease required for operation recovery');
-  const allowed=new Set(['task_integrate','task_takeover','native_start','native_finish','native_release','research_start','research_action','research_reconcile']);
+  const allowed=new Set(['task_integration_repair','task_integrate','task_takeover','native_start','native_finish','native_release','research_start','research_action','research_reconcile']);
   for(const operation of this.c.store.all('operation').filter(o=>['pending','retryable'].includes(o.status))){
    const command=this.c.store.db.prepare('SELECT hash,result FROM commands WHERE key=?').get(operation.key);
    if(!allowed.has(operation.name)||!command||command.hash!==digest({op:'operation.launch',name:operation.name,input:operation.input})||JSON.parse(command.result).id!==operation.id)throw Error('Saved operation authority could not be verified');

@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { repairIntegration } from './integration-repair.mjs';
 import { NativeCandidates } from './native-candidates.mjs';
 import { Journal } from '../project/journal.mjs';
 import { Workspace,inspectRepository } from '../project/workspace.mjs';
@@ -59,6 +60,11 @@ export class Integration {
   return edits;
  }
  async applyChanges(workspace,changes,key,writePaths){await workspace.apply(key,{writePaths},await this.prepareChanges(workspace,changes));}
+ currentCandidate(t){
+  const current=this.c.liveTask(t),identity=x=>({goalVersion:x.goalVersion,hash:x.hash,result:x.result,native:x.native?{generationId:x.native.generationId??x.id,round:x.native.round,commit:x.native.commit??null,baseCommit:x.native.baseCommit??null}:null});
+  if(!['awaiting_review','ready_to_integrate'].includes(current.status)||current.owner||current.native?.writerActive||digest(identity(current))!==digest(identity(t)))throw Error('Candidate state or approved generation changed before integration');
+  return current;
+ }
  async accept(input,key){return this.effect(key,{op:'integration.accept',...input},async()=>{
   let t=this.c.getTask(input.taskId),g=this.c.store.get('goal',t.goalId);
   if(t.status==='accepted'&&t.integration)return t;
@@ -69,27 +75,35 @@ export class Integration {
   if(g.integrationOwner&&g.integrationOwner!==t.id)throw Error('Native Codex task owns integration workspace');
   const candidate=await this.candidate(t),releaseCandidate=await candidate.journal.lock();
   try{
-   await candidate.workspace.recover();const checks=this.checks(candidate.workspace);await checks.verify();const candidateChecks=await checks.run(candidate.manifest.permissions.checks,`accept-${t.id}`);
+   t=this.currentCandidate(t);await candidate.workspace.recover();const checks=this.checks(candidate.workspace);await checks.verify();const candidateChecks=await checks.run(candidate.manifest.permissions.checks,`accept-${t.id}`);
    if(!candidateChecks.every(x=>x.passed))throw Error('Candidate checks no longer pass');
-   const checkpoint=t.native?.layout==='candidate_v1'?{commit:t.native.commit,snapshot:await candidate.workspace.snapshot()}:await candidate.journal.memo('candidate/checkpoint',()=>candidate.workspace.checkpoint({id:'candidate',writePaths:t.spec.permissions.writePaths}));
-   if(!candidate.journal.last('stage.accepted'))await candidate.journal.append('stage.accepted',{stageId:'candidate',...checkpoint});
+   t=this.currentCandidate(t);const candidateStage=t.integrationFailures?.length?`candidate-repair-${t.integrationFailures.length}`:'candidate';
+   const checkpoint=t.native?.layout==='candidate_v1'?{commit:t.native.commit,snapshot:await candidate.workspace.snapshot()}:await candidate.journal.memo(`${candidateStage}/checkpoint`,()=>candidate.workspace.checkpoint({id:candidateStage,writePaths:t.spec.permissions.writePaths}));
+   if(!candidate.journal.events.some(e=>e.type==='stage.accepted'&&e.data.commit===checkpoint.commit))await candidate.journal.append('stage.accepted',{stageId:candidateStage,...checkpoint});
    const target=await this.lockedGoal(g.id,{refuseLegacy:true,integrationTaskId:t.id}),release=target.release;
    try{
-    this.c.liveTask(t);await target.workspace.recover();const changes=await this.changes(candidate.workspace,candidate.manifest.baseCommit,t.spec.permissions.writePaths);
+    t=this.currentCandidate(t);await target.workspace.recover();const changes=await this.changes(candidate.workspace,candidate.manifest.baseCommit,t.spec.permissions.writePaths);
     await this.prepareChanges(target.workspace,changes);
     if(t.status==='awaiting_review'){this.c.review({taskId:t.id,decision:'accept',feedback:text(input.feedback,'review feedback')},`review-${key}`);t=this.c.getTask(t.id);}
-    this.c.store.tx(()=>{const goal=this.c.store.get('goal',g.id);if(goal.integrationPending&&goal.integrationPending.taskId!==t.id)throw Error('Another pending integration owns target');goal.integrationPending??={taskId:t.id,candidateCommit:checkpoint.commit,at:this.c.now()};if(goal.integrationPending.candidateCommit!==checkpoint.commit)throw Error('Pending integration candidate changed');this.c.store.put('goal',goal);});
-    await this.applyChanges(target.workspace,changes,`import-${t.id}`,t.spec.permissions.writePaths);
+    const importKey=this.c.store.get('goal',g.id).integrationPending?.importKey??`import-${t.id}-${checkpoint.commit}`;
+    this.c.store.tx(()=>{const goal=this.c.store.get('goal',g.id);if(goal.integrationPending&&goal.integrationPending.taskId!==t.id)throw Error('Another pending integration owns target');goal.integrationPending??={taskId:t.id,candidateCommit:checkpoint.commit,importKey,at:this.c.now()};if(goal.integrationPending.candidateCommit!==checkpoint.commit)throw Error('Pending integration candidate changed');this.c.store.put('goal',goal);});
+    if(!target.journal.events.some(e=>e.type==='integration.import.intent'&&e.data.key===importKey)){
+     const edits=await this.prepareChanges(target.workspace,changes),captured=[];for(const edit of edits)captured.push({path:edit.path,before:await target.workspace.content(edit.path),afterHash:edit.action==='delete'?null:fileDigest(edit.content)});
+     await target.journal.append('integration.import.intent',{key:importKey,taskId:t.id,candidateCommit:checkpoint.commit,baseCommit:await git(target.workspace.root,'rev-parse','HEAD'),snapshotBefore:await target.workspace.snapshot(),changes:captured});
+    }
+    await this.applyChanges(target.workspace,changes,importKey,t.spec.permissions.writePaths);
     const runner=this.checks(target.workspace);await runner.verify();const results=await runner.run(g.manifest.project.checks,`integrate-${t.id}`);
+    await target.journal.append('integration.checks',{key:importKey,checks:results,snapshot:await target.workspace.snapshot()});
     if(!results.every(x=>x.passed))throw Error('Integrated checks failed');
-    this.c.liveTask(t);
-    const stage=`task-${t.id}`,imported=await target.journal.memo(`${stage}/checkpoint`,()=>target.workspace.checkpoint({id:stage,writePaths:t.spec.permissions.writePaths}));
+    t=this.currentCandidate(t);
+    const stage=`task-${t.id}-${checkpoint.commit}`,imported=await target.journal.memo(`${stage}/checkpoint`,()=>target.workspace.checkpoint({id:stage,writePaths:t.spec.permissions.writePaths}));
     if(!target.journal.events.some(e=>e.type==='stage.accepted'&&e.data.stageId===stage))await target.journal.append('stage.accepted',{stageId:stage,...imported});
-    this.c.store.tx(()=>{const current=this.c.liveTask(t);current.status='accepted';if(current.native?.layout==='candidate_v1')current.native.status='integrated';current.integration={commit:imported.commit,candidateCommit:checkpoint.commit,worktree:target.workspace.root,checks:results,review:g.manifest.mode.review==='checks'?'none':g.manifest.mode.review==='legacy'?'codex_legacy':'codex_operator'};this.c.store.put('task',current);const goal=this.c.store.get('goal',g.id);goal.integrationPending=null;this.c.store.put('goal',goal);this.c.emit('task.integrated',g.id,t.id,current.integration);});
+    this.c.store.tx(()=>{const current=this.currentCandidate(t);current.status='accepted';if(current.native?.layout==='candidate_v1')current.native.status='integrated';current.integration={commit:imported.commit,candidateCommit:checkpoint.commit,worktree:target.workspace.root,checks:results,review:g.manifest.mode.review==='checks'?'none':g.manifest.mode.review==='legacy'?'codex_legacy':'codex_operator'};this.c.store.put('task',current);const goal=this.c.store.get('goal',g.id);goal.integrationPending=null;this.c.store.put('goal',goal);this.c.emit('task.integrated',g.id,t.id,current.integration);});
     return this.c.getTask(t.id);
    }finally{await release();}
   }finally{await releaseCandidate();}
  });}
+ async repair(input,key){return this.effect(key,{op:'integration.repair',...input},()=>repairIntegration(this,input,key));}
  async startNative(input,key){return this.effect(key,{op:'native.start',...input},()=>input.layout==='candidate_v1'?this.nativeCandidates.start(input.taskId,{},input.registration):this.beginNative(input.taskId));}
  async beginNative(taskId,extra={}){
   const t=this.c.getTask(taskId),g=this.c.store.get('goal',t.goalId);this.c.liveGoal(g);
@@ -111,7 +125,7 @@ export class Integration {
   const g=this.c.store.get('goal',t.goalId);if(!g.manifest.mode.actors.includes('codex'))throw Error('Mode prohibits takeover');
   const source=await this.candidate(t,{original:true}),release=await source.journal.lock();try{
    await source.workspace.recover();const frozen=await source.workspace.snapshot(),changes=await this.changes(source.workspace,source.manifest.baseCommit,t.spec.permissions.writePaths);
-   const extra={workerWorktree:source.workspace.root,workerSnapshot:frozen,takeoverReason:input.reason};
+   const extra={workerWorktree:source.workspace.root,workerSnapshot:frozen,workerManifest:source.manifest,workerJournalRoot:source.journal.root,takeoverReason:input.reason};
    const native=input.layout==='candidate_v1'?await this.nativeCandidates.start(t.id,extra,input.registration):await this.beginNative(t.id,extra);
    const target=input.layout==='candidate_v1'?await this.candidate(native):await this.goalWorkspace(g.id,{native:true}),unlock=await target.journal.lock();try{await this.applyChanges(target.workspace,changes,`takeover-${t.id}`,t.spec.permissions.writePaths);}finally{await unlock();}
    this.c.emit('task.taken_over',g.id,t.id,{reason:input.reason,workerSnapshot:frozen});return this.c.getTask(native.id);
