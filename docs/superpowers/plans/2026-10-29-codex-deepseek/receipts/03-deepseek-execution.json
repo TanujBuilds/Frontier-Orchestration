@@ -6,14 +6,15 @@
     "107cb23",
     "91d6c06",
     "49e1dd2",
-    "f32bd3341f81b1a791a9fc041626bfd0b6a51bfa"
+    "f32bd3341f81b1a791a9fc041626bfd0b6a51bfa",
+    "5dd8fc95ca70874adf8b234b7e803544d65107a6"
   ],
   "acceptance": "incomplete",
   "fixtureImplementation": "passed",
   "tests": {
     "focused": {
       "command": "node --test test/harness-provider.test.mjs test/harness-context.test.mjs test/harness-working-set.test.mjs test/harness-crash.test.mjs",
-      "passed": 41,
+      "passed": 49,
       "failed": 0
     },
     "fullNode": {
@@ -22,13 +23,20 @@
       "failed": 18,
       "total": 239,
       "dependency": "Stage02 Integration.executionBase absent; exact failed tests in private report",
-      "scope": "Pre-wire-budget-review full run; combined Stage02 suite remains required"
+      "scope": "Historical pre-wire/activity-review full run; combined Stage02 suite remains required"
     },
     "diffCheck": "passed",
     "wireBudgetRegression": {
       "redPassed": 0,
       "redFailed": 2,
       "greenIncludedInFocused": true
+    },
+    "activityIsolationRegression": {
+      "redPassed": 0,
+      "redFailed": 7,
+      "greenPassed": 7,
+      "greenFailed": 0,
+      "mandatoryFailureGuardIncludedInFocused": true
     }
   },
   "liveEvidence": {
@@ -62,7 +70,8 @@
     "Combined Stage02 suite pending; isolated18 resolver dependency failures",
     "Actual streaming support/capability probe and live pilot pending parent coordination",
     "Observer normalization and public/evidence API Stage05",
-    "No final installation or promotion"
+    "No final installation or promotion",
+    "Independent rereview of activity isolation fix pending"
   ],
   "artifacts": {
     "stage03-context-red.log": "5af2199e49581e47f9684c685c1ab8fc2dba2aec4058b602b00145516199820f",
@@ -76,9 +85,14 @@
     "stage03-full-suite.log": "08d7d97c84b14d68dad2e35acceb14db3be4c348efe332e6c3edfc02767fd9e0",
     "stage03-dependencies.log": "e25b1bc4a0c25dd0f039309e318c5fd2eeb1c645f1efc6ad26485329b16c931a",
     "stage03-wire-budget-red.log": "d07d5f5a3c5962d0abb0caf0d89c44fa79fe3f280ef54fb279d0fa5ea263a7f0",
-    "stage03-wire-budget-green.log": "5a0db6e556ac1634ac24b060117eadcdeafb1d1bb3e79993c41eb6493b84c761"
+    "stage03-wire-budget-green.log": "5a0db6e556ac1634ac24b060117eadcdeafb1d1bb3e79993c41eb6493b84c761",
+    "stage03-activity-isolation-red.log": "4831c2e64ac6d94a630433b1559bbb199c123857c252d2fd233d0f7dbba90cde",
+    "stage03-activity-isolation-green.log": "90dfd9058d3c6e1ccc2ec324d7c9020ceba4df98387ceb49f33547550b5a1e0d",
+    "stage03-activity-focused-green.log": "ea7ff39edc51a553f50cc155d15947445a6504746dcd1a1f350c369a66a20221",
+    "stage03-activity-fix.diff": "67c6fdd7490e9c9b979b5fe5c66f91eda0bd294d1e699ac5c4620d2320e04d0e"
   },
   "reviewCorrections": [
-    "Separate8MiB SSE wire envelope from512KiB completed-result/content policy; legitimate24KiB output with6000deltas passes; >8MiB wire fails unknown without retry"
+    "Separate8MiB SSE wire envelope from512KiB completed-result/content policy; legitimate24KiB output with6000deltas passes; >8MiB wire fails unknown without retry",
+    "Optional activity is best effort after committed authoritative operations, never joins active authoritative transactions; failure persistence/uncertainty precede failed capture. Injected optional SQL/capture failures cannot roll back state; mandatory receipt failures stay strict."
   ]
 }
