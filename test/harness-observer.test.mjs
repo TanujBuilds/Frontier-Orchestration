@@ -75,3 +75,8 @@ test('viewer discovers saved artifact IDs without operator registration',async t
 test('worker overview never relabels supervisor activity as captured worker activity',t=>{
  const f=fixture(t);f.c.emit('coding.files.read',f.g.id,f.ds.id,{actor:'deepseek',provenance:'captured'});f.c.emit('task.reviewed',f.g.id,f.ds.id,{actor:'codex',summary:'Supervisor review'});const row=f.observer.snapshot({}).tasks.find(t=>t.id===f.ds.id);assert.equal(row.lastActivity,'Read approved files');
 });
+
+test('the product home opens the read-only observer; legacy controls require operator authority',async t=>{
+ const f=await apiFixture(t);for(const token of [f.viewerToken,f.token]){const r=await fetch(f.api.url+'/',{headers:{authorization:'Bearer '+token},redirect:'manual'});assert.equal(r.status,303);assert.equal(r.headers.get('location'),'/observer');}
+ assert.equal((await fetch(f.api.url+'/legacy-console',{headers:{authorization:'Bearer '+f.viewerToken}})).status,403);const legacy=await fetch(f.api.url+'/legacy-console',{headers:{authorization:'Bearer '+f.token}});assert.equal(legacy.status,200);assert.match(await legacy.text(),/new-goal/);
+});

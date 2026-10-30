@@ -24,7 +24,8 @@ const browser=await chromium.launch({headless:true,args:['--disable-gpu'],execut
 const output=process.env.HARNESS_SCREENSHOTS??path.join(root,'screenshots');await mkdir(output,{recursive:true});
 try{
  const page=await browser.newPage({viewport:{width:1280,height:900},reducedMotion:'reduce'}),errors=[];page.on('pageerror',error=>errors.push(error.message));page.setDefaultTimeout(5000);
- await page.goto(api.url);await page.getByLabel('Connection key').fill(token);await Promise.all([page.waitForURL(api.url+'/'),page.getByRole('button',{name:'Connect',exact:true}).click()]);
+ await page.goto(api.url);await page.getByLabel('Connection key').fill(token);await Promise.all([page.waitForURL(api.url+'/observer'),page.getByRole('button',{name:'Connect',exact:true}).click()]);
+ await page.goto(api.url+'/legacy-console');
  await page.getByRole('heading',{name:g.manifest.objective,exact:true}).waitFor();
  // Opening and drafting an assignment must survive the three-second polling cycle.
  await page.getByText('Add an assignment',{exact:true}).click();

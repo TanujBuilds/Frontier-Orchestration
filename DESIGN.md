@@ -37,3 +37,7 @@ readable current work remains visible with verbose evidence collapsed. Controls
 only filter, refresh and read. Instructions, approvals and execution stay in Codex.
 Viewer login lands here; the legacy operator console remains separately available
 for compatibility and is not the observer's authority boundary.
+
+The authenticated home and all logins open `/observer`. Historical mutable UI is
+only at the explicitly named `/legacy-console` and requires operator authority;
+viewer credentials cannot open it. No observer navigation links to that surface.

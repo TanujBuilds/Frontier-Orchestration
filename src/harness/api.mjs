@@ -43,6 +43,8 @@ export async function startApi({dispatcher,token,viewerToken, trustedOrigins=[],
    const suppliedBearer=request.headers.authorization?.startsWith('Bearer ')?request.headers.authorization.slice(7):null,bearerRole=suppliedBearer&&equal(suppliedBearer,token)?'operator':suppliedBearer&&viewerToken&&equal(suppliedBearer,viewerToken)?'viewer':null,bearer=!!bearerRole,cookie=request.headers.cookie?.split(';').map(s=>s.trim()).find(s=>s.startsWith('frontier_session='))?.slice(17),session=cookie?sessions.get(cookie):null;
    if(!bearer&&(!session||session.expires<Date.now())){if(pathname==='/'&&request.method==='GET'){response.writeHead(303,{location:'/login'});response.end();return;}throw problem(401,'Authentication required');}
    const role=bearerRole??session.role;
+   if(pathname==='/'&&request.method==='GET'){response.writeHead(303,{location:'/observer'});response.end();return;}
+   if(pathname==='/legacy-console'&&role!=='operator')throw problem(403,'Legacy console requires operator authority');
    if(pathname==='/api/session'&&request.method==='GET')return send(200,{authenticated:true,role,csrf:session?.csrf??null});
    if(pathname.startsWith('/api/artifacts/')&&request.method==='GET'){const artifact=await dispatcher.artifacts.read(pathname.slice('/api/artifacts/'.length));return send(200,artifact.data,artifact.type);}
    if(pathname==='/api/invoke'&&request.method==='POST'){
@@ -54,7 +56,7 @@ export async function startApi({dispatcher,token,viewerToken, trustedOrigins=[],
     if(role==='viewer'&&packet.name==='tools_list')return send(200,dispatcher.tools().filter(t=>OBSERVER_TOOLS.has(t.name)));
     return send(200,await dispatcher.invoke(packet.name,packet.input??{}));
    }
-   const assets={'/observer':'observer.html','/observer.js':'observer.js','/observer.css':'observer.css','/':'index.html','/app.js':'app.js','/style.css':'style.css'};
+   const assets={'/observer':'observer.html','/observer.js':'observer.js','/observer.css':'observer.css','/legacy-console':'index.html','/app.js':'app.js','/style.css':'style.css'};
    if(request.method==='GET'&&assets[pathname]){const data=await readFile(new URL('dashboard/'+assets[pathname],import.meta.url),'utf8');return send(200,data,pathname.endsWith('.js')?'text/javascript; charset=utf-8':pathname.endsWith('.css')?'text/css; charset=utf-8':'text/html; charset=utf-8');}
    throw problem(404,'Unknown route');
   }catch(error){if(!response.headersSent)send(error.status??400,{error:error.message});else response.end();}
