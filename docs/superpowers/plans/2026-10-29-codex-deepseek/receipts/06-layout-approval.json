@@ -1,0 +1,15 @@
+{
+  "stage": "06",
+  "kind": "visual_concept_approval",
+  "recorded_at": "2026-10-29T22:18:17.387960+00:00",
+  "user_answer": "Use this layout",
+  "concept": "Two actor overviews, attention notice, shared chronological expandable timeline; Carbon/Nunito; stacked phone view",
+  "fixture_only": true,
+  "viewport_sizes": [
+    1280,
+    390
+  ],
+  "remaining": "Actual backend integration, browser functional/accessibility checks, independent review and installed validation",
+  "artifact_hashes_recorded_privately": true,
+  "acceptance": "visual concept approved; implementation pending"
+}

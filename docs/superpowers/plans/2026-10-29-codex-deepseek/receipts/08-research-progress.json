@@ -1,0 +1,53 @@
+{
+  "stage": "08",
+  "acceptance": "incomplete",
+  "search_gate": {
+    "pass1_qualified": 9,
+    "pass2_qualified": 10,
+    "gap_seconds": 1906.613798,
+    "relevance": "native Codex assessment; registrable domains deduplicated; primary repository sources accepted where relevant",
+    "upstream_limitations": [
+      "Brave rate-limited; DuckDuckGo continued",
+      "Startpage unavailable"
+    ]
+  },
+  "reader_gate": {
+    "useful": 8,
+    "total": 10,
+    "preserved_gaps": [
+      "Redis page exceeds download bound",
+      "Old vLLM URL is an HTML redirect placeholder"
+    ]
+  },
+  "research_pilot": {
+    "status": "partial",
+    "quiescent": true,
+    "spending": {
+      "model": 20,
+      "search": 4,
+      "download": 6
+    },
+    "accepted_claims": 0,
+    "accepted_recommendations": 0,
+    "five_claim_gate": "incomplete",
+    "disconnected_completion": "verified original job finalized after submission SSH closed",
+    "collection": "two identical checksummed collections; six source hashes verified",
+    "repair_proposals": [
+      "Align research request thinking option with tested coding transport",
+      "Preserve bounded metadata on blank responses",
+      "Reinforce exact finish envelope in finalization prompt"
+    ],
+    "additional_budget_or_replacement_job": "not authorized or dispatched"
+  },
+  "evidence": {
+    "continuation-receipt.json": "fc3ab8b914e2d6fc7e06ce475c890eab019ef72e36e81b0e01cd29282509830f",
+    "independent-review.json": "aff65b0095d98b32dea8591aaa5b36f72b0e244b7f517346c02ed59a0a3e03ab",
+    "protocol-diagnostics.json": "5fbfdbf649f6aba30e44c546f81af76984f62ab7510d030a9185fdfbe49029d1"
+  },
+  "final_personal_activation": false,
+  "limitations": [
+    "Detached completion is proven; useful accepted research report is not",
+    "Rejected candidate claims are not substituted into official results",
+    "Final release requires remaining local and live gates"
+  ]
+}

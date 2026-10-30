@@ -9,13 +9,13 @@ Read [CONTEXT.md](CONTEXT.md), then only the assigned stage. Copy prompts from [
 | Stage | Assignment | Depends on | Status |
 |---|---|---|---|
 | 01 | [Contracts and baseline](01-contracts-and-baseline.md) | none | passed; [receipt](receipts/01-contracts-and-baseline.json) |
-| 02 | [Native collaboration](02-native-collaboration.md) | 01 | ready to dispatch |
-| 03 | [DeepSeek execution](03-deepseek-execution.md) | 01 | ready to dispatch |
+| 02 | [Native collaboration](02-native-collaboration.md) | 01 | implementation ready; review/corrections in progress |
+| 03 | [DeepSeek execution](03-deepseek-execution.md) | 01 | implementation ready; review/corrections in progress |
 | 04 | [Skills and MCP package](04-skills-and-mcp-package.md) | 02, 03 | waiting for 02/03 |
 | 05 | [Observer API](05-observer-api.md) | 02, 03 | waiting for 02/03 |
-| 06 | [Observer dashboard](06-observer-dashboard.md) | 05 | waiting for 05 |
+| 06 | [Observer dashboard](06-observer-dashboard.md) | 05 | visual concept approved; implementation waits for 05 |
 | 07 | [Installed validation](07-installed-validation.md) | 04, 06 | waiting for 04/06 |
-| 08 | [Research and release](08-research-and-release.md) | 07 for promotion | waiting for 07; evidence inspection may proceed |
+| 08 | [Research and release](08-research-and-release.md) | 07 for promotion | search/reader gates pass; research partial; [evidence](receipts/08-research-progress.json) |
 
 Order: `01 → (02 ∥ 03) → (04 ∥ 05 → 06) → 07 → 08`.
 
