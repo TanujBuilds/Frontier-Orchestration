@@ -1,54 +1,43 @@
 ---
 name: frontier-harness
-description: Use when coordinating an approved goal across Codex and DeepSeek, selecting an execution mode, managing delegated assignments and questions, or inspecting harness evidence and managed learning.
+description: Use when preparing or selecting a Frontier Harness goal, inspecting its evidence, answering saved questions, managing controls, or choosing collaborative, DeepSeek-only, Codex-only, or bounded overnight work.
 ---
 
 # Frontier Harness
 
-Use the installed harness MCP tools, or `node scripts/harness.mjs` with the private
-`local-config.json`. Read [operations.md](references/operations.md) for connection,
-CLI examples, schemas and recovery. Loading this skill does not dispatch work.
+One installed `frontier-harness` MCP service owns new unified goals. Loading a
+skill does not dispatch work. Read [operations](references/operations.md) for
+connection, exact preparation, state and recovery. Discover live tool schemas
+before composing calls; fail clearly if the installed runtime lacks a required
+contract. A skill or a model's text grants no executable authority.
 
-Prepare a goal with the outcome, acceptance, mode, repository/base revision,
-read/write paths, literal trusted checks, public-source scope and limits. Show its
-normalized manifest and exact approval hash. Activate within existing explicit
-authorization; ask only when the concrete envelope still lacks authorization.
-Fixture and live approvals are separate. Reuse submission IDs and mutation keys.
+Prepare the concrete outcome, acceptance, mode, repository/base, read/write paths,
+trusted literal checks, public-source scope and limits. Show the normalized
+manifest and exact hash; activate within existing explicit authorization. Ask
+only for genuinely missing scope/authorization. Preserve fixture/live separation,
+submission IDs, mutation keys, task IDs, deadlines, spent requests and failures.
 
-The default **collaborative** mode makes main Codex the supervisor and a working
-partner. Queue independent assignments for DeepSeek, work concurrently through
-native tasks, answer within-scope questions, and inspect saved evidence. Coding
-and consult candidates await main Codex review. Research collection establishes
-provenance; review selected reports when requested. A fresh native reviewer is
-optional: reserve its run first, give it read-only evidence, and retain acceptance
-authority. Use existing native agent tools only when available.
+| Requested workflow | Entry/reference |
+| --- | --- |
+| Main Codex and native agents working with DeepSeek | [Collaboration](../frontier-collaborate/SKILL.md) |
+| Local-model execution without Codex fallback | [DeepSeek only](../frontier-deepseek-only/SKILL.md) |
+| Native Codex execution without DeepSeek dispatch | [Codex only](../frontier-codex-only/SKILL.md) |
+| Explicit bounded background review or historical jobs | [Compatibility](references/compatibility.md) |
 
-**DeepSeek only:** let its bounded planner and worker execute; no Codex execution,
-review or answer fallback. Relay unresolved questions to the user. **Codex only:**
-perform the work through native tasks; deterministic research tools remain
-available and no DeepSeek requests are permitted. **Overnight review:** preserve
-the check-gated, bounded background reviewer. Additional presets must use registered
-capabilities; new executable adapters require reviewed code.
+Never silently switch modes. Main Codex supervises collaborative goals only while
+its chat is active. MCP events do not create a new native turn. Use `events_wait`
+with the saved cursor and at most30000ms; do independent useful work between
+updates. Notify on results, blockers, decisions or completion, not unchanged state.
+No always-on Codex supervisor is installed.
 
-Use `native_start` for a separate Codex checkout. For takeover, request worker stop
-and verify actual quiescence before `task_takeover`; edit only the returned native
-checkout. Review actual diffs/checks, request focused same-task revisions, then
-integrate accepted code and inspect combined checks. Long actions return operation
-IDs; inspect `operation_get` rather than repeating the action with a new key.
+Inspect `goal_get`, `task_get`, `queue_get`, `questions_list`, `task_evidence` and
+`artifacts_list` before changing uncertain work. Long mutations return an operation
+ID: inspect `operation_get`; retry only a documented retryable operation using
+its original key. A requested stop or agent report is not verified quiescence.
+Never reset spending, delete ownership, or resubmit uncertain work to recover.
 
-Use priorities with reasons; dependency urgency is inherited. Urgent work yields at
-a saved boundary. Pause/resume preserves IDs, deadlines and spending. An uncertain
-request stays spent and holds ownership; inspect/reconcile it instead of creating
-a replacement job or resetting counters. Waits are capped at30 seconds; do useful
-independent work while delegated work runs. Notify on useful results, blockers,
-required decisions and completion, rather than unchanged status.
-
-Learning captures outcomes automatically. Budget at most one background learning
-assignment within the goal's ten-assignment limit. Inspect protected evaluations,
-applicability and sample counts; reflection alone proves nothing. Managed lessons
-cannot modify permissions, checks, authored skills, credentials or core code.
-
-Finalize only after the approved acceptance criteria are demonstrated. Deliver
-the isolated branch, evidence and hashed receipt, or explicitly partial results
-and exact blockers. Harness controls and native Codex goal controls have separate
-lifecycles; closing the conversation does not keep native Codex working by itself.
+Read [learning](references/learning.md) only for scoped memory and protected lesson
+maintenance. Finalize after demonstrated acceptance and integration checks; report
+partial results and exact blockers otherwise. Host/native usage may be unavailable;
+report unknown, never zero. Native `/goal` and backend goal lifecycles are separate;
+do not create a native goal without an explicit request.

@@ -1,0 +1,10 @@
+interface:
+  display_name: "Frontier Collaborate"
+  short_description: "Work with native agents and delegated DeepSeek"
+  default_prompt: "Use $frontier-collaborate to implement this authorized goal with native and DeepSeek candidates."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "frontier-harness"
+      description: "Shared installed Frontier Harness coordinator"
+      transport: "stdio"

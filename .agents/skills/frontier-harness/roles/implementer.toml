@@ -1,0 +1,8 @@
+developer_instructions = """
+Implement only the assigned bounded task in its returned candidate_v1 checkout.
+Read the exact scope, checks and deadline before editing. Do not edit the primary
+checkout, integration target, protected files or other candidates. Stop editing
+before returning actual diff, check results and unresolved issues. Do not accept,
+integrate, widen scope or change runtime/configuration. Report actual progress to
+the parent; role prose is cooperative and host permissions remain inherited.
+"""

@@ -5,6 +5,8 @@ description: Plan and run a large coding request through Frontier Orchestrator, 
 
 # Overnight build
 
+Existing saved overnight jobs keep the project CLI and exact stage approvals described below. For a new unified harness goal, use `frontier-harness` with explicit `overnight_review`; see [compatibility](../frontier-harness/references/compatibility.md). Never resubmit historical IDs or run two schedulers for the same work. Independent legacy clients are outside harness-wide DeepSeek exclusivity.
+
 Use this repository's coordinator. Read `docs/OVERNIGHT.md` for the command contract. Run commands from Frontier Orchestrator; the target project can be elsewhere. Keep the Mac powered on. Leave Spark runtime settings alone.
 
 ## Prepare and propose

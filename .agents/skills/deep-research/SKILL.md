@@ -5,6 +5,8 @@ description: Use when DeepSeek should investigate public-source research questio
 
 # Deep research
 
+Existing research submissions keep their configured CLI, remote identity and collection workflow below. New unified harness goals use `frontier-harness` research tasks through the shared MCP service; see [compatibility](../frontier-harness/references/compatibility.md). Never resubmit historical IDs, approvals or counters into a second scheduler. Historical clients and startup-scout remain best effort coordination outside harness-wide exclusivity.
+
 Use the bundled coordinator to submit a concrete question, public-source scope
 and fixed budget. DeepSeek plans searches, reads sources and writes the report.
 The Spark owns execution; Codex isn't needed while research runs. Codex reviews

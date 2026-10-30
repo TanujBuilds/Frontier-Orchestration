@@ -2,3 +2,9 @@ interface:
   display_name: "Frontier Harness"
   short_description: "Coordinate bounded Codex and DeepSeek goals"
   default_prompt: "Use $frontier-harness to coordinate this goal with scoped assignments and auditable evidence."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "frontier-harness"
+      description: "Shared installed Frontier Harness coordinator"
+      transport: "stdio"

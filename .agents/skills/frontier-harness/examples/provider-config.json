@@ -1,0 +1,1 @@
+{"environment":"live","deepseekBaseUrl":"http://YOUR-EXISTING-SERVICE/v1","deepseekModelId":"YOUR-VERIFIED-MODEL","nativeModels":["YOUR-HOST-SUPPORTED-MODEL"],"nativeRoleModels":{"explorer":"YOUR-HOST-SUPPORTED-MODEL"}}

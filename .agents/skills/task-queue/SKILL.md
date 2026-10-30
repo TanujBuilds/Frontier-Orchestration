@@ -5,6 +5,8 @@ description: Use when approved Frontier Orchestrator coding jobs need a prioriti
 
 # Task queue
 
+Existing saved queue entries retain the queue CLI and job approvals below. New unified harness goals use `frontier-harness` task priorities/dependencies through one MCP service; see [compatibility](../frontier-harness/references/compatibility.md). Do not import old IDs or approvals as fresh tasks, reset counters, or run competing schedulers. Legacy clients share capacity outside harness-wide exclusivity.
+
 Use the existing Frontier Orchestrator coordinator. This queue selects work; the coordinator retains authority over approvals, file scopes, checks, attempts, deadlines and independent Codex review.
 
 ## Configure and enqueue
