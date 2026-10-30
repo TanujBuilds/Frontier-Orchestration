@@ -71,3 +71,7 @@ test('snapshot filters before limiting and prioritizes actionable work over hist
 test('viewer discovers saved artifact IDs without operator registration',async t=>{
  const f=await apiFixture(t),directory=path.join(f.root,'research',f.ds.id);await mkdir(directory,{recursive:true});await writeFile(path.join(directory,'report.md'),'# Available report');const task=f.c.store.get('task',f.ds.id);task.result={checksumsVerified:true,directory};f.c.store.put('task',task);const response=await f.call('observer_artifacts',{taskId:task.id});assert.equal(response.status,200);const [item]=await response.json();assert.equal(item.file,undefined);assert.equal(item.reference.startsWith('artifact-'),true);assert.match((await f.observer.evidence({reference:item.reference})).text,/Available report/);
 });
+
+test('worker overview never relabels supervisor activity as captured worker activity',t=>{
+ const f=fixture(t);f.c.emit('coding.files.read',f.g.id,f.ds.id,{actor:'deepseek',provenance:'captured'});f.c.emit('task.reviewed',f.g.id,f.ds.id,{actor:'codex',summary:'Supervisor review'});const row=f.observer.snapshot({}).tasks.find(t=>t.id===f.ds.id);assert.equal(row.lastActivity,'Read approved files');
+});
