@@ -289,3 +289,31 @@ test('stale integration cannot accept a newer active native generation',async t=
  const original=f.integration.candidate.bind(f.integration);let reached,resume,first=true;const ready=new Promise(r=>reached=r),gate=new Promise(r=>resume=r);f.integration.candidate=async task=>{const opened=await original(task);if(first){first=false;reached();await gate;}return opened;};const slow=f.integration.accept({taskId:a.id,feedback:'Old accept'},'slow-accept').then(value=>({value}),error=>({error}));await ready;
  approvedNativeRebind(f,a.id,f.g.manifest.project,{readPaths:['src/','checks/'],writePaths:['src/'],checks:['verify']},'wide');const next=await f.integration.startNative({taskId:a.id,layout:'candidate_v1'},'new-start');resume();assert.match((await slow).error?.message??'',/changed|generation|ready/);assert.deepEqual(f.c.getTask(a.id),next);
 });
+
+test('approved rebind during integration preparation cannot reserve or import the stale candidate',async t=>{
+ const f=await fixture(t,'codex_only'),a=f.c.submitTask({goalId:f.g.id,...task,permissions:{readPaths:['src/answer.mjs','checks/'],writePaths:['src/answer.mjs'],checks:['verify']}},'s'),n=await f.integration.startNative({taskId:a.id,layout:'candidate_v1'},'start');
+ await writeFile(path.join(n.native.worktree,'src/answer.mjs'),'export const answer=42;\n');await f.integration.finishNative({taskId:a.id,summary:'Finished'},'finish');f.c.review({taskId:a.id,decision:'accept',feedback:'Reviewed'},'review');
+ const original=f.integration.prepareChanges.bind(f.integration);let reached,resume,first=true;const ready=new Promise(r=>reached=r),gate=new Promise(r=>resume=r);
+ f.integration.prepareChanges=async (workspace,changes)=>{const edits=await original(workspace,changes);if(first&&workspace.root.includes('/integration/')){first=false;reached();await gate;}return edits;};
+ const slow=f.integration.accept({taskId:a.id,feedback:'Old accept'},'slow-accept').then(value=>({value}),error=>({error}));await ready;
+ const rebound=approvedNativeRebind(f,a.id,f.g.manifest.project,{readPaths:['src/','checks/'],writePaths:['src/'],checks:['verify']},'wide');resume();const result=await slow,goal=f.c.getGoal(f.g.id);
+ assert.match(result.error?.message??'',/changed|generation|ready/);assert.equal(goal.integrationPending??null,null);assert.deepEqual(f.c.getTask(a.id),rebound);
+ assert.equal(await readFile(path.join(goal.integration.worktree,'src/answer.mjs'),'utf8'),'export const answer=0;\n');assert.equal(await f.integration.executionBase(goal.id),n.native.baseCommit);
+ const next=await f.integration.startNative({taskId:a.id,layout:'candidate_v1'},'new-start');assert.equal(next.native.generation,2);
+});
+
+test('pending import serializes approved revision and rebind through idempotent acceptance',async t=>{
+ const f=await fixture(t,'codex_only'),a=f.c.submitTask({goalId:f.g.id,...task},'s'),n=await f.integration.startNative({taskId:a.id,layout:'candidate_v1'},'start');
+ await writeFile(path.join(n.native.worktree,'src/answer.mjs'),'export const answer=42;\n');const done=await f.integration.finishNative({taskId:a.id,summary:'Finished'},'finish');
+ const goals=new Goals(f.c),g=f.c.getGoal(f.g.id),revision=goals.prepareRevision({goalId:g.id,expectedHash:g.hash,manifest:{submissionId:g.manifest.submissionId,objective:g.manifest.objective,acceptance:g.manifest.acceptance,mode:g.manifest.mode.id,environment:'fixture',project:g.manifest.project}},'prepare');
+ const original=f.integration.prepareChanges.bind(f.integration);let reached,resume,reads=0;const ready=new Promise(r=>reached=r),gate=new Promise(r=>resume=r);
+ f.integration.prepareChanges=async (workspace,changes)=>{const edits=await original(workspace,changes);if(workspace.root.includes('/integration/')&&++reads===2){reached();await gate;}return edits;};
+ const input={taskId:a.id,feedback:'Reviewed'},slow=f.integration.accept(input,'accept');await ready;
+ try{
+  assert.equal(f.c.getGoal(g.id).integrationPending.taskId,a.id);assert.equal(f.c.getTask(a.id).status,'ready_to_integrate');assert.equal(f.c.getTask(a.id).reviews,1);
+  assert.throws(()=>goals.activateRevision({revisionId:revision.id,hash:revision.hash},'activate'),/quiescent/);
+  assert.throws(()=>goals.rebind({taskId:a.id},'rebind'),/quiescent/);
+ }finally{resume();}
+ const accepted=await slow;assert.equal(accepted.status,'accepted');assert.equal(accepted.integration.candidateCommit,done.native.commit);assert.equal(accepted.reviews,1);assert.equal(f.c.getGoal(g.id).integrationPending,null);
+ assert.deepEqual(await f.integration.accept(input,'accept'),accepted);assert.equal(await readFile(path.join(accepted.integration.worktree,'src/answer.mjs'),'utf8'),'export const answer=42;\n');
+});

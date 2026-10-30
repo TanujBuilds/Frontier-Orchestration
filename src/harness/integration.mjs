@@ -84,9 +84,17 @@ export class Integration {
    try{
     t=this.currentCandidate(t);await target.workspace.recover();const changes=await this.changes(candidate.workspace,candidate.manifest.baseCommit,t.spec.permissions.writePaths);
     await this.prepareChanges(target.workspace,changes);
-    if(t.status==='awaiting_review'){this.c.review({taskId:t.id,decision:'accept',feedback:text(input.feedback,'review feedback')},`review-${key}`);t=this.c.getTask(t.id);}
-    const importKey=this.c.store.get('goal',g.id).integrationPending?.importKey??`import-${t.id}-${checkpoint.commit}`;
-    this.c.store.tx(()=>{const goal=this.c.store.get('goal',g.id);if(goal.integrationPending&&goal.integrationPending.taskId!==t.id)throw Error('Another pending integration owns target');goal.integrationPending??={taskId:t.id,candidateCommit:checkpoint.commit,importKey,at:this.c.now()};if(goal.integrationPending.candidateCommit!==checkpoint.commit)throw Error('Pending integration candidate changed');this.c.store.put('goal',goal);});
+    // Fence the async preparation against approval/rebind before reserving the
+    // target. The persisted reservation then prevents either change during import.
+    const importKey=this.c.store.tx(()=>{
+     t=this.currentCandidate(t);
+     if(t.status==='awaiting_review'){this.c.review({taskId:t.id,decision:'accept',feedback:text(input.feedback,'review feedback')},`review-${key}`);t=this.c.getTask(t.id);}
+     const goal=this.c.store.get('goal',g.id),importKey=goal.integrationPending?.importKey??`import-${t.id}-${checkpoint.commit}`;
+     if(goal.integrationPending&&goal.integrationPending.taskId!==t.id)throw Error('Another pending integration owns target');
+     goal.integrationPending??={taskId:t.id,candidateCommit:checkpoint.commit,importKey,at:this.c.now()};
+     if(goal.integrationPending.candidateCommit!==checkpoint.commit)throw Error('Pending integration candidate changed');
+     this.c.store.put('goal',goal);return importKey;
+    });
     if(!target.journal.events.some(e=>e.type==='integration.import.intent'&&e.data.key===importKey)){
      const edits=await this.prepareChanges(target.workspace,changes),captured=[];for(const edit of edits)captured.push({path:edit.path,before:await target.workspace.content(edit.path),afterHash:edit.action==='delete'?null:fileDigest(edit.content)});
      await target.journal.append('integration.import.intent',{key:importKey,taskId:t.id,candidateCommit:checkpoint.commit,baseCommit:await git(target.workspace.root,'rev-parse','HEAD'),snapshotBefore:await target.workspace.snapshot(),changes:captured});
