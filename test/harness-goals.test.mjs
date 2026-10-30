@@ -6,7 +6,7 @@ import os from 'node:os';
 import {Coordinator} from '../src/harness/coordinator.mjs';
 import {Goals} from '../src/harness/goals.mjs';
 
-function fixture(t){const root=mkdtempSync(path.join(os.tmpdir(),'harness-goals-')),c=new Coordinator({root});t.after(()=>{c.close();rmSync(root,{recursive:true,force:true});});const raw={submissionId:'g',objective:'Explain a queue',acceptance:['Useful answer']},g=c.prepareGoal(raw,'prepare');c.activateGoal({goalId:g.id,hash:g.hash},'activate');return {c,g,raw,goals:new Goals(c)};}
+function fixture(t,extra={}){const root=mkdtempSync(path.join(os.tmpdir(),'harness-goals-')),c=new Coordinator({root});t.after(()=>{c.close();rmSync(root,{recursive:true,force:true});});const raw={submissionId:'g',objective:'Explain a queue',acceptance:['Useful answer'],...extra},g=c.prepareGoal(raw,'prepare');c.activateGoal({goalId:g.id,hash:g.hash},'activate');return {c,g,raw,goals:new Goals(c)};}
 test('approved goal revision keeps original spending, identity and deadline',t=>{
  const f=fixture(t),a=f.c.submitTask({goalId:f.g.id,submissionId:'a',kind:'consult',objective:'Explain WAL',acceptance:['Answer']},'a');f.c.claimNext('o');const deadline=f.c.getTask(a.id).deadline,goalDeadline=f.c.getGoal(f.g.id).deadline;
  const r=f.c.reserve(a.id,{key:'model-1',kind:'model'},'o');f.c.saveRequest(r.id,{content:'Saved'});f.c.control({taskId:a.id,action:'stop'},'stop');f.c.boundary(a.id,{phase:'saved'},'o');
@@ -25,4 +25,17 @@ test('finalization requires accepted work and produces an immutable idempotent r
  f.c.claimNext('o');const reservation=f.c.reserve(a.id,{key:'r',kind:'model'},'o');f.c.saveRequest(reservation.id,{content:'Answer'});f.c.completeTask(a.id,{content:'Answer'},'o');
  const done=f.goals.finalize({goalId:f.g.id,summary:'Evidence reviewed'},'finish');assert.equal(done.status,'completed');assert.equal(done.receipt.spending.model,1);assert.ok(done.receiptHash);assert.deepEqual(f.goals.finalize({goalId:f.g.id,summary:'Evidence reviewed'},'finish'),done);
  assert.throws(()=>f.c.control({goalId:f.g.id,action:'resume'},'restart'),/terminal/);
+});
+
+test('approved ceiling revisions cannot refresh bound task limits spending or deadlines',t=>{
+ const f=fixture(t,{limits:{taskLimits:{consult:{seconds:60,reviews:1}}}}),a=f.c.submitTask({goalId:f.g.id,submissionId:'bounded',kind:'consult',objective:'Explain WAL',acceptance:['Answer']},'submit');
+ assert.equal(a.spec.limits.seconds,60);f.c.claimNext('o');const reservation=f.c.reserve(a.id,{key:'original-request',kind:'model'},'o');f.c.saveRequest(reservation.id,{content:'Saved answer'});f.c.control({taskId:a.id,action:'stop'},'stop');f.c.boundary(a.id,{phase:'saved'},'o');const stopped=f.c.getTask(a.id),goalDeadline=f.c.getGoal(f.g.id).deadline;
+ const revision=f.goals.prepareRevision({goalId:f.g.id,expectedHash:f.g.hash,manifest:{...f.raw,limits:{taskLimits:{consult:{seconds:120,reviews:2}}}}},'prepare-larger-goal-ceiling');assert.notEqual(revision.hash,f.g.hash);f.goals.activateRevision({revisionId:revision.id,hash:revision.hash},'activate-exact-ceiling');
+ assert.throws(()=>f.goals.rebind({taskId:a.id,spec:{...stopped.spec,limits:{...stopped.spec.limits,seconds:120}}},'forbidden-refresh'),/refresh|limits/);assert.deepEqual(f.c.getTask(a.id),stopped);
+ const rebound=f.goals.rebind({taskId:a.id},'preserve-bound-task');assert.equal(rebound.id,a.id);assert.deepEqual(rebound.spec.limits,stopped.spec.limits);assert.deepEqual(rebound.spent,stopped.spent);assert.equal(rebound.deadline,stopped.deadline);assert.equal(rebound.attempts,stopped.attempts);assert.equal(rebound.reviews,stopped.reviews);assert.equal(f.c.getGoal(f.g.id).deadline,goalDeadline);
+ assert.equal(f.c.submitTask({goalId:f.g.id,submissionId:'new',kind:'consult',objective:'Explain another detail',acceptance:['Answer']},'new-submission').spec.limits.seconds,120);
+});
+test('manual task expansion beyond approved ceilings creates neither task nor request',t=>{
+ const f=fixture(t,{limits:{taskLimits:{consult:{seconds:60,reviews:0}}}});
+ assert.throws(()=>f.c.submitTask({goalId:f.g.id,submissionId:'too-large',kind:'consult',objective:'Explain',acceptance:['Answer'],limits:{seconds:61}},'forbidden'),/seconds/);assert.equal(f.c.getGoal(f.g.id).tasks.length,0);assert.equal(f.c.store.db.prepare('SELECT COUNT(*) AS n FROM requests').get().n,0);
 });

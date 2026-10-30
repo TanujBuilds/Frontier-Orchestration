@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Registry, normalizeGoal, normalizeTask, digest } from '../src/harness/contracts.mjs';
+import { Registry, normalizeGoal, normalizeTask, digest, goalInputSchema } from '../src/harness/contracts.mjs';
 
 export const project = {repo:'/tmp/approved-project',baseCommit:'a'.repeat(40),readPaths:['src/'],writePaths:['src/'],checks:[{id:'verify',argv:['node','checks/verify.mjs']}]};
 export const brief = (extra={}) => ({submissionId:'goal-a',objective:'Build and verify a bounded task queue',acceptance:['Queue survives restart'],project,...extra});
@@ -56,4 +56,38 @@ test('workflow registration rejects cycles, duplicates and forbidden capabilitie
 });
 test('capability discovery describes schemas, permissions and limits as pinned data',()=>{
  const g=normalizeGoal(brief());for(const capability of g.capabilities){assert.equal(capability.inputSchema.type,'object');assert.equal(capability.outputSchema.type,'object');assert.ok(capability.permissions);assert.ok(capability.limits);}
+});
+
+const codingCeilings={seconds:1800,attempts:3,modelCalls:6,reviews:1,questions:0};
+test('omitted goal task ceilings preserve the exact legacy approval hash and defaults',()=>{
+ const g=normalizeGoal({submissionId:'legacy-ceilings-hash',objective:'Verify unchanged legacy budgets',acceptance:['Original hash remains stable'],environment:'fixture'});
+ assert.equal(digest(g),'9dde3e3e2a96247381bf8ba5e2d0ab5216aad8b76b9509264c68246d9ae8fdd7');
+ assert.equal(Object.hasOwn(g.limits,'taskLimits'),false);
+ assert.deepEqual(normalizeTask({submissionId:'legacy',kind:'consult',objective:'Explain',acceptance:['Answer']},g).limits,{seconds:600,attempts:1,modelCalls:1,reviews:2,questions:0});
+});
+test('approved per-kind ceilings supply omitted task limits and bind the exact goal hash',()=>{
+ const taskLimits={coding:{...codingCeilings},research:{seconds:900,modelCalls:1,searches:2,downloads:3},consult:{seconds:120,reviews:0},learning:{seconds:60,attempts:1,modelCalls:2}};
+ const g=normalizeGoal(brief({limits:{taskLimits}}));
+ assert.deepEqual(g.limits.taskLimits,taskLimits);assert.equal(g.limits.reviewAgentRuns,2);
+ const defaults={coding:codingCeilings,research:{seconds:900,attempts:20,modelCalls:1,reviews:2,questions:3,searches:2,downloads:3},consult:{seconds:120,attempts:1,modelCalls:1,reviews:0,questions:0},learning:{seconds:60,attempts:1,modelCalls:2,reviews:0,questions:0}};
+ for(const kind of Object.keys(defaults))assert.deepEqual(normalizeTask({submissionId:kind,kind,objective:'Bounded work',acceptance:['Recorded evidence']},g).limits,defaults[kind]);
+ assert.notEqual(digest(g),digest(normalizeGoal(brief({limits:{taskLimits:{...taskLimits,coding:{...codingCeilings,modelCalls:5}}}}))));
+ taskLimits.coding.modelCalls=50;assert.equal(g.limits.taskLimits.coding.modelCalls,6);
+});
+test('task limits may narrow approved ceilings but every explicit expansion is rejected',()=>{
+ const g=normalizeGoal(brief({limits:{taskLimits:{coding:codingCeilings}}})),task={submissionId:'bounded',kind:'coding',objective:'Implement',acceptance:['Checks pass']};
+ assert.deepEqual(normalizeTask({...task,limits:{seconds:600,modelCalls:2}},g).limits,{seconds:600,attempts:3,modelCalls:2,reviews:1,questions:0});
+ for(const [name,value]of Object.entries(codingCeilings))assert.throws(()=>normalizeTask({...task,limits:{[name]:value+1}},g),new RegExp(name));
+});
+test('goal task ceilings reject open maps, unsupported fields and unsafe numeric bounds',()=>{
+ const invalid=[null,[],true,{shell:{}},{coding:null},{coding:[]},{coding:true},{coding:{searches:1}},{consult:{downloads:1}},{learning:{reviews:1}},{coding:{modelCalls:51}},{coding:{seconds:28801}},{research:{downloads:51}},{consult:{attempts:2}}];
+ for(const value of [true,false,NaN,Infinity,-Infinity,1.5,'1',0,-1,Number.MAX_SAFE_INTEGER])invalid.push({coding:{modelCalls:value}});
+ for(const value of [-1,4,true,NaN])invalid.push({coding:{questions:value}});
+ for(const taskLimits of invalid)assert.throws(()=>normalizeGoal(brief({limits:{taskLimits}})),/task|limits|field|seconds|modelCalls|attempts|reviews|questions|downloads|object/i);
+ assert.deepEqual(normalizeGoal(brief({limits:{taskLimits:{}}})).limits.taskLimits,{});
+});
+test('goal input discovery exposes closed per-kind numeric ceiling schemas',()=>{
+ const map=goalInputSchema.properties.limits.properties.taskLimits;assert.ok(map,'Discoverable structured ceiling schema required');assert.equal(map.additionalProperties,false);assert.deepEqual(Object.keys(map.properties),['coding','research','consult','learning']);
+ const coding=map.properties.coding;assert.equal(coding.additionalProperties,false);assert.deepEqual(coding.required,[]);assert.deepEqual(coding.properties.modelCalls,{type:'integer',minimum:1,maximum:50});assert.deepEqual(coding.properties.questions,{type:'integer',minimum:0,maximum:3});
+ assert.equal(map.properties.consult.properties.searches,undefined);assert.equal(map.properties.learning.properties.reviews.maximum,0);
 });

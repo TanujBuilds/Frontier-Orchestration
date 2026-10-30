@@ -58,7 +58,10 @@ commands or approve placeholder scope.
       "writePaths":["src/parser.mjs"],
       "checks":[{"id":"parser","argv":["node","checks/parser.mjs"]}]
     },
-    "limits":{"hours":8,"maxTasks":10}
+    "limits":{
+      "hours":8,"maxTasks":10,
+      "taskLimits":{"coding":{"seconds":1800,"attempts":3,"modelCalls":6,"reviews":1,"questions":0}}
+    }
   }
 }
 ```
@@ -73,6 +76,25 @@ model request; a revision can exhaust it. Defaults: goal8hours/10assignments
 (explicit supported max100); coding5attempts/50modelcalls/2reviews/3questions;
 research2hours/30searches/50downloads/20modelcalls including retries/finalization.
 Child deadlines cannot exceed the parent. Helpers and learning consume assignments.
+
+Set numerical assignment ceilings in `manifest.limits.taskLimits`, keyed by
+`coding`, `research`, `consult` or `learning`. Each entry is a partial map of that
+kind's existing limit fields; discover the closed schema and hard maxima. Omitted
+task fields inherit the approved ceilings, including planner-created tasks that
+omit `limits`. Explicit task values may only narrow them. Reviews/questions may
+be zero; other limits must be positive integers. A budget written only in the
+objective does not change executable limits; no natural-language parser enforces
+it. These structured ceilings are included in the exact goal approval hash.
+
+Omitting `taskLimits` entirely preserves legacy normalized manifests, hashes and
+defaults. A later exact goal revision does not refresh an existing task's bound
+limits, requests, attempts, reviews or deadline; rebind cannot increase them.
+`limits.reviewAgentRuns` is the separate optional native reviewer reservation
+budget, not a coding task review ceiling or an implementation-agent concurrency
+cap. Goal `hours` still caps every child's actual deadline.
+These are per-assignment ceilings, not a summed goal model-call budget. The
+DeepSeek planner retains its separate maximum of three reserved planning requests;
+a rejected over-budget plan never dispatches its child tasks.
 
 ## Observation, follow-ups and recovery
 
