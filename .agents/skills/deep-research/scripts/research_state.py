@@ -89,7 +89,9 @@ def normalize_manifest(raw):
     for name, value in normalized_limits.items():
         if type(value) is not int or value <= 0:
             raise StateError(f'limits.{name} must be a positive integer')
-    if normalized_limits['model_calls'] < 4:
+    # Autonomous research reserves draft/audit/repair calls; operator jobs never
+    # dispatch a model and retain the exact positive limit approved by the host.
+    if extension.get('executor','deepseek') != 'operator' and normalized_limits['model_calls'] < 4:
         raise StateError('limits.model_calls must allow at least four calls')
     return {'schema': schema, 'mode': mode, 'submission_id': submission, 'question': question,
             'scope': normalized_scope, 'limits': normalized_limits, **extension}
