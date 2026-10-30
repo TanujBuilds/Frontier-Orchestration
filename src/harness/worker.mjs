@@ -17,19 +17,23 @@ export class Worker {
   this.adapters={coding:new CodingAdapter(this),learning:new MaintenanceAdapter(this),...(config.research?{research:new ResearchAdapter(this)}:{}),...adapters};
  }
  activity(task,type,data={}){
-  return this.c.store.tx(()=>{
+  try{
+   // Optional capture must never join (or roll back) an authoritative transaction.
+   if(this.c.store.depth)return false;
+   return this.c.store.tx(()=>{
    if(data.operationId&&this.c.store.db.prepare("SELECT seq FROM events WHERE task_id=? AND type=? AND json_extract(data,'$.operationId')=?").get(task.id,type,data.operationId))return;
    // Bounded presentation metadata cannot prevent the authoritative checkpoint.
    data={...data};for(const field of ['files','paths','checks'])if(Array.isArray(data[field])&&data[field].length>20){data[`${field}Omitted`]=data[field].length-20;data[field]=data[field].slice(0,20);}
    if(Buffer.byteLength(JSON.stringify(data))>32*1024)data={operationId:data.operationId??null,requestId:data.requestId??null,truncated:true};
    this.c.emit(type,task.goalId,task.id,{version:1,actor:'deepseek',provenance:'captured',...data});
-  });
+   });
+  }catch{return false;}
  }
  checkpoint(task,checkpoint,owner,options){
-  return this.c.store.tx(()=>{const state=this.c.boundary(task.id,checkpoint,owner,options);const operationId=`${checkpoint.attempt??0}-${checkpoint.exchange??0}-${checkpoint.phase??'start'}-${state.status}-${checkpoint.requestId??'none'}-${options?.quiescent===false?'active':'safe'}`;this.activity(task,'execution.checkpoint',{operationId,requestId:checkpoint.requestId??null,phase:checkpoint.phase??null,status:state.status,quiescent:options?.quiescent!==false});if(state.status==='suspended')this.activity(task,'execution.yield',{operationId,requestId:checkpoint.requestId??null});return state;});
+  const state=this.c.boundary(task.id,checkpoint,owner,options);const operationId=`${checkpoint.attempt??0}-${checkpoint.exchange??0}-${checkpoint.phase??'start'}-${state.status}-${checkpoint.requestId??'none'}-${options?.quiescent===false?'active':'safe'}`;this.activity(task,'execution.checkpoint',{operationId,requestId:checkpoint.requestId??null,phase:checkpoint.phase??null,status:state.status,quiescent:options?.quiescent!==false});if(state.status==='suspended')this.activity(task,'execution.yield',{operationId,requestId:checkpoint.requestId??null});return state;
  }
  question(task,question,checkpoint,owner){
-  return this.c.store.tx(()=>{const state=this.c.ask(task.id,question,checkpoint,owner);this.activity(task,'coding.question',{operationId:state.questions.at(-1).id,requestId:checkpoint.requestId??null,questionId:state.questions.at(-1).id});return state;});
+  const state=this.c.ask(task.id,question,checkpoint,owner);this.activity(task,'coding.question',{operationId:state.questions.at(-1).id,requestId:checkpoint.requestId??null,questionId:state.questions.at(-1).id});return state;
  }
  pinModel(task,owner,model){
   if(model==null)return;
@@ -39,9 +43,9 @@ export class Worker {
  async model(task,owner,key,messages,{maxTokens=12000}={}){
   const reservation=this.c.reserve(task.id,{key,kind:'model'},owner);
   if(reservation.cached){this.pinModel(task,owner,reservation.result.model);this.activity(task,'model.request.completed',{operationId:reservation.id,requestId:reservation.id,model:reservation.result.model??null,finishReason:reservation.result.finishReason??null});return reservation.result;}
-  this.activity(task,'model.request.started',{requestId:reservation.id,key});
   const remaining=Math.max(1,Math.min(600000,task.deadline-this.c.now()));let captured=0,chunkIndex=0;
   try{
+   this.activity(task,'model.request.started',{requestId:reservation.id,key});
    if(this.c.store.get('goal',task.goalId).manifest.environment!==(this.config.environment??'live'))throw Error('Approved environment differs from configured providers');
    this.provider??=new LocalProvider({baseUrl:this.config.deepseekBaseUrl,model:this.config.deepseekModelId,streaming:this.config.deepseekStreaming??false});
    const expectedModel=this.c.getTask(task.id).providerModel;
@@ -57,10 +61,10 @@ export class Worker {
    this.activity(task,'model.request.completed',{operationId:reservation.id,requestId:reservation.id,model:result.model??null,finishReason:result.finishReason??null});
    this.pinModel(task,owner,result.model);return result;
   }catch(error){
-   this.activity(task,'model.request.failed',{requestId:reservation.id,outcome:error.requestOutcome??'unknown'});
    this.c.store.tx(()=>{const row=this.c.store.db.prepare('SELECT status,data FROM requests WHERE id=?').get(reservation.id);const data=JSON.parse(row.data);data.error=error.message.slice(0,500);this.c.store.db.prepare('UPDATE requests SET status=?,data=? WHERE id=?').run(row.status==='completed'?'completed':'failed',JSON.stringify(data),reservation.id);});
    // The HTTP client cannot certify that a failed connection stopped remote inference.
    if(error.requestOutcome==='unknown'||(!error.requestOutcome&&/timeout|timed out|ECONN|socket|interrupted|abort|fetch failed|connection failed|HTTP 5\d\d/i.test(error.message)))this.c.markUncertain(task.id,error.message,owner);
+   this.activity(task,'model.request.failed',{requestId:reservation.id,outcome:error.requestOutcome??'unknown'});
    throw error;
   }
  }

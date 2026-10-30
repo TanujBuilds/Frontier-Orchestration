@@ -88,7 +88,7 @@ export class CodingAdapter {
      return this.worker.checkpoint(task,{...cp,phase:'attempt'},owner);
     }
     const evidence=await workspace.evidence();
-    return c.store.tx(()=>{const state=c.completeTask(task.id,{...evidence,checks:results,sandbox:journal.last('harness.sandbox'),worktree:workspace.root,journalRoot:journal.root,workerSummary:cp.reply.summary,baseCommit:manifest.baseCommit},owner,{reviewRequired:true});this.worker.activity(task,'coding.candidate.saved',{operationId:`candidate-${cp.attempt}`,requestId:cp.requestId??null,attempt:cp.attempt});return state;});
+    const state=c.completeTask(task.id,{...evidence,checks:results,sandbox:journal.last('harness.sandbox'),worktree:workspace.root,journalRoot:journal.root,workerSummary:cp.reply.summary,baseCommit:manifest.baseCommit},owner,{reviewRequired:true});this.worker.activity(task,'coding.candidate.saved',{operationId:`candidate-${cp.attempt}`,requestId:cp.requestId??null,attempt:cp.attempt});return state;
    }
    throw Error('Unknown coding checkpoint phase');
   }catch(error){
