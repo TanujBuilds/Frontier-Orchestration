@@ -44,6 +44,14 @@ native task; it does not edit another writer's checkout.
 
 Multiple native writers can run in distinct candidate_v1 checkouts beside the
 single DeepSeek worker; the integration target is serialized by the runtime.
+Before dispatch, verify the exact task read scope also contains the dependencies
+imported by its protected checks. A check script being approved does not make
+unlisted source files appear in the scoped checkout. Establish a passing
+baseline where appropriate and distinguish baseline failures from intended
+feature failures. Do not spend repeated model attempts on missing check inputs.
+Stop, preserve counters/evidence and prepare an approved versioned correction
+when scope is wrong; never expand it from model output or refresh attempts.
+
 No worker writes to the integration target, primary checkout or another candidate.
 Overlapping changes may conflict and need a focused same-task correction.
 Never convert an existing omitted-layout legacy task to candidate_v1 implicitly.

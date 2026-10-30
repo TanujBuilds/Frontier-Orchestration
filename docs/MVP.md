@@ -1,5 +1,11 @@
 # First live milestone: Codex → DeepSeek → Codex
 
+Historical terminal milestone. The current opt-in collaboration package keeps
+Codex as the chat/control surface, adds independent native candidates and a
+read-only observer, and preserves this workflow and bounded overnight review.
+See [current product direction](PRODUCT_CONTEXT.md) and the dated collaboration
+execution package for current scope and incomplete release gates.
+
 This is the first real model handoff for Frontier Orchestrator. It is a terminal-based project-design task. The coding workflow and a read-only browser timeline have been built around it; the complete live model loop remains the verification gate.
 
 ## Demo story

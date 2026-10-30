@@ -1,5 +1,27 @@
 # Product context and decisions
 
+## Current opt-in collaboration direction — 2026-10-30
+
+The owner approved the Codex + DeepSeek Collaboration Package: Codex app/CLI is
+the conversation and control surface; one durable MCP coordinator supplies
+scoped delegation, native candidate worktrees, four pinned modes and bounded
+learning. In opt-in collaborative mode, main Codex and native implementers may
+write substantial work in separately owned candidates while DeepSeek executes
+sequentially. Main Codex reviews and serializes integration. The read-only
+observer shows reported native progress and captured worker activity.
+
+The review-only role rules below describe the preserved legacy overnight
+workflow. They do not prohibit native implementation in an explicitly approved
+collaborative or Codex-only goal. DeepSeek-only forbids Codex execution/review
+fallback; an inactive collaborative conversation waits for its host.
+
+Implementation and release verification are separate. The isolated package
+branch has reviewed local components and disposable installed pilots; final
+personal activation remains gated by host integration, remaining live pilots
+and the research report gate. See the execution package under
+`docs/superpowers/plans/2026-10-29-codex-deepseek/`.
+
+
 This is the public handoff for Frontier Orchestrator. It describes the current direction rather than every idea in the original October 2026 brief. The developer's local `PROJECT_MEMORY.md` may contain hardware-specific observations and is intentionally excluded from Git.
 
 ## Why this exists
