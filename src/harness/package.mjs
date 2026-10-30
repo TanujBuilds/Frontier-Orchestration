@@ -31,12 +31,16 @@ export async function packageHarness({sourceRoot,destination,dependencies=false,
 }
 export async function verifyPackage(destination){
  destination=path.resolve(destination);
+ const rootInfo=await lstat(destination),manifestInfo=await lstat(path.join(destination,'package-manifest.json'));if(!rootInfo.isDirectory()||rootInfo.isSymbolicLink()||!manifestInfo.isFile()||manifestInfo.isSymbolicLink())throw Error('Package and manifest must be regular entries, not symlinks');
  const manifest=JSON.parse(await readFile(path.join(destination,'package-manifest.json'),'utf8'));if(!manifest||manifest.schema!==1||!Array.isArray(manifest.files)||!manifest.files.length||typeof manifest.dependenciesInstalled!=='boolean')throw Error('Invalid package manifest');if(manifest.contentHash!==digest(manifest.files))throw Error('Package manifest checksum mismatch');
  const seen=new Set();
  for(const file of manifest.files){if(!file||typeof file.path!=='string'||path.isAbsolute(file.path)||file.path.includes('\\')||file.path.split('/').some(p=>p==='..'||p==='.'||!p)||!Number.isSafeInteger(file.bytes)||file.bytes<0||!/^[a-f0-9]{64}$/.test(file.sha256))throw Error('Invalid package path or file metadata');if(seen.has(file.path))throw Error('Duplicate package path');seen.add(file.path);
   let target=destination;for(const part of file.path.split('/')){const info=await lstat(target);if(!info.isDirectory()||info.isSymbolicLink())throw Error('Package parent must be a regular directory, not a symlink');target=path.join(target,part);}
   const info=await lstat(target);if(!info.isFile()||info.isSymbolicLink()||info.size!==file.bytes||hash(await readFile(target))!==file.sha256)throw Error('Package file checksum mismatch: '+file.path);
  }
+ const directories=new Set(['']);for(const file of seen){let parent=path.posix.dirname(file);while(parent!=='.'){directories.add(parent);parent=path.posix.dirname(parent);}}
+ const inspect=async(prefix='')=>{for(const entry of await readdir(path.join(destination,prefix),{withFileTypes:true})){const relative=prefix?prefix+'/'+entry.name:entry.name;if(entry.isSymbolicLink())throw Error('Unexpected package symlink: '+relative);if(entry.isDirectory()){if(!directories.has(relative))throw Error('Unlisted package directory: '+relative);await inspect(relative);}else if(!entry.isFile()||relative!=='package-manifest.json'&&!seen.has(relative))throw Error('Unlisted or nonregular package entry: '+relative);}};
+ await inspect();
  if(manifest.dependenciesInstalled){const lock=JSON.parse(await readFile(path.join(destination,'runtime/package-lock.json'),'utf8')),sdk=JSON.parse(await readFile(path.join(destination,'runtime/node_modules/@modelcontextprotocol/sdk/package.json'),'utf8'));if(sdk.version!==lock.packages['node_modules/@modelcontextprotocol/sdk'].version)throw Error('Pinned runtime dependency mismatch');}
  return true;
 }

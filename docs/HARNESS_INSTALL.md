@@ -44,7 +44,7 @@ available. Do not copy a runtime into each focused skill.
 `package-manifest.json` records source commit/dirty state, layout, four skill
 names and SHA256/size of reviewed skill data, source and installed dependency
 files. `contentHash` hashes that inventory. `verifyPackage()` rejects changed
-files, duplicate/traversing paths and symlink parents, and checks the installed
+files, unlisted files/directories, duplicate/traversing paths and every symlink, and checks the installed
 SDK against the lock. Checksums detect modification against the saved manifest;
 they are not a signature authenticating an untrusted replacement manifest.
 Keep a trusted source/package hash receipt outside the package. Role/skill/runtime

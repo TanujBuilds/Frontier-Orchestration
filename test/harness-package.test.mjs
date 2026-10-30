@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,readFile,rm,writeFile,mkdir,symlink,rename,cp} from 'node:fs/promises';
+import {mkdtemp,readFile,rm,writeFile,mkdir,symlink,rename,cp,realpath} from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import {spawn} from 'node:child_process';
+import {createRequire} from 'node:module';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {fileURLToPath} from 'node:url';
@@ -58,7 +59,7 @@ test('portable source inclusion omits adjacent secrets and fails closed when loc
 test('verification rejects missing or mismatched installed SDK and does not follow source symlinks',async t=>{
  const root=await mkdtemp(path.join(os.tmpdir(),'harness-deps-'));t.after(()=>rm(root,{recursive:true,force:true}));const destination=path.join(root,'version'),manifest=await packageHarness({sourceRoot,destination});
  await writeFile(path.join(destination,'package-manifest.json'),JSON.stringify({...manifest,dependenciesInstalled:true}));await assert.rejects(verifyPackage(destination),/ENOENT/);
- const sdk=path.join(destination,'runtime/node_modules/@modelcontextprotocol/sdk');await mkdir(sdk,{recursive:true});await writeFile(path.join(sdk,'package.json'),JSON.stringify({version:'0.0.0'}));await assert.rejects(verifyPackage(destination),/Pinned runtime dependency mismatch/);
+ const sdk=path.join(destination,'runtime/node_modules/@modelcontextprotocol/sdk');await mkdir(sdk,{recursive:true});await writeFile(path.join(sdk,'package.json'),JSON.stringify({version:'0.0.0'}));const {createHash}=await import('node:crypto'),{digest}=await import('../src/harness/contracts.mjs'),sdkBytes=await readFile(path.join(sdk,'package.json')),files=[...manifest.files,{path:'runtime/node_modules/@modelcontextprotocol/sdk/package.json',bytes:sdkBytes.length,sha256:createHash('sha256').update(sdkBytes).digest('hex')}];await writeFile(path.join(destination,'package-manifest.json'),JSON.stringify({...manifest,dependenciesInstalled:true,files,contentHash:digest(files)}));await assert.rejects(verifyPackage(destination),/Pinned runtime dependency mismatch/);
  const source=await portableSource(root),script=path.join(source,'.agents/skills/frontier-harness/scripts/harness.mjs');await rm(script);await symlink(path.join(sourceRoot,'.agents/skills/frontier-harness/scripts/harness.mjs'),script);await assert.rejects(packageHarness({sourceRoot:source,destination:path.join(root,'symlink-source')}),/symlink/);
 });
 
@@ -91,4 +92,12 @@ test('standalone snapshot serves installed MCP tools and verifies its checksumme
 });
 test('LaunchAgent uses literal escaped arguments and keeps private state outside the runtime',()=>{
  const plist=renderLaunchAgent({node:'/opt/node24/bin/node',entry:'/tmp/Frontier & Test/runtime/src/harness/cli.mjs',root:'/tmp/private state',config:'/tmp/private config.json',port:4332,logs:'/tmp/private logs'});assert.match(plist,/Frontier &amp; Test/);assert.match(plist,/<string>--root<\/string>/);assert.doesNotMatch(plist,/<string>(?:sh|bash|zsh)<\/string>/);assert.match(plist,/<key>KeepAlive<\/key><dict><key>SuccessfulExit<\/key><false\/><\/dict>/);
+});
+
+test('package verifier rejects added nested dependency shadows and unlisted symlinks',async t=>{
+ const root=await mkdtemp(path.join(os.tmpdir(),'harness-shadow-'));t.after(()=>rm(root,{recursive:true,force:true}));const destination=path.join(root,'version');await packageHarness({sourceRoot,destination,dependencies:true,offline:true});assert.equal(await verifyPackage(destination),true);
+ const nested=path.join(destination,'runtime/src/harness/node_modules'),sdk=path.join(nested,'@modelcontextprotocol/sdk');await mkdir(path.join(sdk,'server'),{recursive:true});await writeFile(path.join(sdk,'package.json'),JSON.stringify({name:'@modelcontextprotocol/sdk',version:'0.0.0',exports:{'./server/index.js':'./server/index.js'}}));await writeFile(path.join(sdk,'server/index.js'),'export const shadow=true;');
+ const require=createRequire(path.join(destination,'runtime/src/harness/mcp.mjs'));assert.equal(require.resolve('@modelcontextprotocol/sdk/server/index.js'),await realpath(path.join(sdk,'server/index.js')));await assert.rejects(verifyPackage(destination),/Unlisted|Unexpected|inventory/);
+ await rm(nested,{recursive:true});await symlink(path.join(destination,'runtime/node_modules'),nested);await assert.rejects(verifyPackage(destination),/symlink|regular|Unlisted|Unexpected/);
+ await rm(nested);await mkdir(path.join(destination,'runtime/src/unlisted-empty'));await assert.rejects(verifyPackage(destination),/Unlisted|Unexpected|inventory/);
 });
