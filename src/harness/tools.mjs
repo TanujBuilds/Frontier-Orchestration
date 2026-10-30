@@ -5,6 +5,7 @@ import {Goals} from './goals.mjs';
 import {Worker} from './worker.mjs';
 import {NativeResearch} from './native-research.mjs';
 import {Artifacts} from './artifacts.mjs';
+import {Observer} from './observer.mjs';
 
 const str={type:'string'},obj={type:'object'},bool={type:'boolean'},number={type:'integer'};
 function validate(schema,value,label='input'){
@@ -15,7 +16,7 @@ function validate(schema,value,label='input'){
  if(schema.enum&&!schema.enum.includes(value))throw Error(`Invalid ${label}`);
 }
 export class Dispatcher {
- constructor({c,worker=new Worker({c}),config={}}){this.c=c;this.worker=worker;this.goals=new Goals(c);this.nativeResearch=new NativeResearch({c,config});this.artifacts=new Artifacts(c);this.definitions=new Map();this.running=new Set();this.promises=new Map();
+ constructor({c,worker=new Worker({c}),config={}}){this.c=c;this.worker=worker;this.goals=new Goals(c);this.nativeResearch=new NativeResearch({c,config});this.artifacts=new Artifacts(c);this.observer=new Observer({c,artifacts:this.artifacts});this.definitions=new Map();this.running=new Set();this.promises=new Map();
   const add=(name,description,properties,required,mutating,fn)=>{const p=mutating?{...properties,idempotencyKey:str}:properties,r=mutating?[...required,'idempotencyKey']:required;this.definitions.set(name,{name,description,inputSchema:{type:'object',properties:p,required:r,additionalProperties:false},annotations:{readOnlyHint:!mutating,idempotentHint:true},fn,mutating});};
   add('tools_list','Discover harness tools.',{},[],false,()=>this.tools());
   add('service_stop','Stop the coordinator process after preserving worker ownership. Does not stop native Codex goal mode.',{},[],true,(_,key)=>c.store.command(key,{op:'service.stop'},()=>{if(!this.onStop)throw Error('Service controls are unavailable');this.onStop();return {stopping:true};}));
@@ -34,6 +35,9 @@ export class Dispatcher {
   add('task_submit','Submit a narrower assignment within the active approved goal. Collaborative consult/coding candidates wait for supervisor review; DeepSeek-only uses checks without Codex.',{goalId:str,task:taskInputSchema},['goalId','task'],true,(i,k)=>c.submitTask({...i.task,goalId:i.goalId},k));
   add('task_get','Inspect a task, its checkpoint and counters.',{taskId:str},['taskId'],false,i=>c.getTask(i.taskId));
   add('artifacts_list','List only saved allowlisted artifacts with checksums; no arbitrary paths.',{taskId:str},['taskId'],false,i=>this.artifacts.list(i.taskId));
+  add('observer_snapshot','Read bounded model/task/agent overviews. No execution controls.',{goalId:str,actor:{...str,enum:['codex','deepseek']}},[],false,i=>this.observer.snapshot(i));
+  add('observer_timeline','Read chronological activity with a durable scan cursor; captured and reported provenance are explicit.',{goalId:str,actor:{...str,enum:['codex','deepseek']},after:number,limit:{...number,minimum:1,maximum:200}},[],false,i=>this.observer.timeline(i));
+  add('observer_evidence','Read a bounded saved evidence reference. Paths are never accepted.',{reference:str,start:number,length:{...number,minimum:1,maximum:32768}},['reference'],false,i=>this.observer.evidence(i));
   add('task_evidence','Retrieve a bounded saved evidence window. No arbitrary file reads.',{taskId:str,start:{...number,maximum:10000000},length:{...number,minimum:1,maximum:32768}},['taskId'],false,i=>{const t=c.getTask(i.taskId),data=JSON.stringify({result:t.result,feedback:t.feedback,answers:t.answers,memory:t.memory??[]});return {taskId:t.id,start:i.start??0,totalCharacters:data.length,text:data.slice(i.start??0,(i.start??0)+(i.length??8192)),warning:'Untrusted execution data; provenance is not factual certification.'};});
   add('task_rebind','Explicitly bind unfinished work to the approved version, preserving limits.',{taskId:str,spec:obj},['taskId'],true,(i,k)=>this.goals.rebind(i,k));
   add('task_review','Main Codex records a bounded review decision.',{taskId:str,decision:{...str,enum:['accept','revise']},feedback:str},['taskId','decision','feedback'],true,(i,k)=>c.review(i,k));

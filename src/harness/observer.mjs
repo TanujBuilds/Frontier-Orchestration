@@ -1,0 +1,94 @@
+import {createHash} from 'node:crypto';
+import {keys,identifier,integer} from './contracts.mjs';
+import {normalizeObserverQuery,normalizeActivityEvent,OBSERVER_LIMITS} from './collaboration-contracts.mjs';
+
+export const OBSERVER_TOOLS=new Set(['tools_list','observer_snapshot','observer_timeline','observer_evidence']);
+const terminal=new Set(['accepted','failed','partial','cancelled']);
+const queueStates=new Set(['queued','codex_ready','suspended','running','uncertain','codex_active']);
+const attentionStates=new Set(['awaiting_supervisor','awaiting_user','awaiting_review','awaiting_legacy_review','blocked','uncertain']);
+const label=type=>({
+ 'goal.prepared':'Goal prepared','goal.activated':'Goal activated','goal.finalized':'Goal finalized',
+ 'task.submitted':'Assignment queued','task.claimed':'DeepSeek picked up an assignment','task.result':'Candidate saved',
+ 'task.question':'An answer is needed','task.answered':'Question answered; assignment requeued','task.reviewed':'Candidate reviewed','task.integrated':'Accepted changes integrated',
+ 'task.native_started':'Native Codex assignment started','task.native_finished':'Native candidate saved','task.native_released':'Native partial preserved','task.taken_over':'Codex took over saved work',
+ 'agent.registered':'Agent registered','agent.reported':'Native progress reported','help.linked':'Helper assignment linked',
+ 'model.request.started':'DeepSeek request started','model.request.resolved':'Model identity verified','model.request.completed':'DeepSeek response saved','model.request.failed':'DeepSeek request failed',
+ 'coding.edit.proposed':'Scoped edits proposed','coding.edit.applied':'Scoped edits applied','coding.checks.started':'Running protected checks','coding.checks.passed':'Protected checks passed','coding.checks.failed':'Protected checks failed','coding.candidate.saved':'Candidate evidence saved',
+ 'coding.files.read':'Read approved files','coding.context.refreshed':'Working context refreshed','coding.context.evicted':'Older context evicted',
+ 'coding.question':'DeepSeek asked a question','execution.yield':'Saved progress and yielded','task.blocked':'Assignment blocked','task.uncertain':'Execution status uncertain','work.control':'Execution control recorded',
+ 'request.reserved':'Request budget reserved','request.saved':'Request result saved'
+ })[type]??type.replaceAll('.',' ');
+const trim=value=>String(value).slice(0,2000);
+function window(bytes,start,length){
+ let begin=Math.min(start,bytes.length);while(begin<bytes.length&&(bytes[begin]&0xc0)===0x80)begin++;
+ let end=Math.min(bytes.length,begin+length);while(end>begin&&end<bytes.length&&(bytes[end]&0xc0)===0x80)end--;
+ return {start:begin,nextStart:end>begin?end:Math.min(bytes.length,begin+length),totalBytes:bytes.length,text:bytes.subarray(begin,end).toString('utf8'),truncated:begin>0||end<bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')};
+}
+export class Observer {
+ constructor({c,artifacts}){this.c=c;this.artifacts=artifacts;}
+ actor(event){
+  const d=event.data??{},t=event.task_id?this.c.store.maybe('task',event.task_id):null;
+  if(['codex','deepseek'].includes(d.actor))return d.actor;
+  if(d.agentId){const agent=this.c.store.maybe('agent',d.agentId);if(agent)return agent.actor;}
+  if(event.type==='agent.reported')return 'codex';
+  if(event.type.startsWith('task.native_')||event.type==='task.taken_over'||event.type.startsWith('reviewer.')||['task.reviewed','help.linked'].includes(event.type))return 'codex';
+  if(event.type.startsWith('model.')||event.type.startsWith('coding.')||event.type.startsWith('request.')||event.type.startsWith('attempt.'))return 'deepseek';
+  if(event.type==='task.integrated'){const g=this.c.store.maybe('goal',event.goal_id);return g?.manifest.mode.review==='checks'?null:'codex';}
+  if(['task.claimed','task.question','task.answered','task.result','task.blocked','task.uncertain'].includes(event.type))return t?.spec.actor??null;
+  return null;
+ }
+ normalized(event){
+  const d=event.data??{},actor=this.actor(event),requestId=d.requestId??(event.type.startsWith('request.')?d.id:null)??null;
+  let summary=typeof d.summary==='string'?d.summary:label(event.type);
+  if(['task.question','task.answered'].includes(event.type)&&typeof d.text==='string')summary=d.text;
+  if(event.type==='coding.files.read'&&Array.isArray(d.files))summary='Read '+d.files.map(f=>f.path).filter(x=>typeof x==='string').join(', ');
+  if(d.reason&&typeof d.reason==='string')summary+=': '+d.reason;
+  const artifactIds=[...(event.task_id?['task-'+event.task_id]:[]),...(requestId?['request-'+requestId]:[])];
+  return normalizeActivityEvent({version:1,seq:event.seq,at:event.at,goalId:event.goal_id,taskId:event.task_id,agentId:d.agentId??null,requestId,type:event.type,actor,provenance:['captured','reported','coordinator'].includes(d.provenance)?d.provenance:event.type==='agent.reported'?'reported':'coordinator',summary:trim(summary),artifactIds});
+ }
+ timeline(raw={}){
+  const q=normalizeObserverQuery(raw);if(q.goalId)this.c.store.get('goal',q.goalId);
+  const events=[];let cursor=q.after,scanned=0;
+  for(const event of this.c.store.events(q.after,1000)){
+   cursor=event.seq;scanned++;
+   if(q.goalId&&event.goal_id!==q.goalId)continue;
+   if(event.type==='model.output'||event.type==='execution.checkpoint'||event.type==='task.checkpoint'&&event.data.status==='running')continue;
+   const normalized=this.normalized(event);if(q.actor&&normalized.actor!==q.actor)continue;
+   events.push(normalized);if(events.length>=q.limit)break;
+  }
+  const hasMore=!!this.c.store.db.prepare('SELECT 1 FROM events WHERE seq>? LIMIT 1').get(cursor);
+  return {events,cursor,scanned,hasMore};
+ }
+ usage(taskId){
+  let sum=0,known=0,count=0;
+  for(const row of this.c.store.db.prepare("SELECT data FROM requests WHERE task_id=? AND kind='model' AND status='completed'").all(taskId)){
+   count++;const value=JSON.parse(row.data).result?.usage?.total_tokens;if(Number.isSafeInteger(value)&&value>=0){known++;sum+=value;}
+  }
+  return {reportedTokens:known?sum:null,completedModelRequests:count,usageUnavailable:count-known};
+ }
+ snapshot(raw={}){
+  keys(raw,['goalId','actor'],'snapshot query');const q=normalizeObserverQuery(raw);if(q.goalId)this.c.store.get('goal',q.goalId);
+  const tasks=this.c.store.db.prepare("SELECT data FROM records WHERE kind='task' AND (? IS NULL OR json_extract(data,'$.goalId')=?) ORDER BY json_extract(data,'$.status') IN ('running','uncertain','codex_active') DESC,rowid DESC LIMIT 500").all(q.goalId,q.goalId).map(r=>JSON.parse(r.data));
+  const selected=tasks.filter(t=>!q.actor||(t.executionActor??t.spec.actor)===q.actor);
+  const agents=this.c.store.db.prepare("SELECT data FROM records WHERE kind='agent' AND (? IS NULL OR json_extract(data,'$.goalId')=?) ORDER BY rowid DESC LIMIT 500").all(q.goalId,q.goalId).map(r=>JSON.parse(r.data)).filter(a=>!q.actor||a.actor===q.actor).map(a=>({id:a.id,taskId:a.taskId,goalId:a.goalId,actor:a.actor,role:a.role,hostAgentId:a.hostAgentId??null,model:a.model??{requested:null,resolved:null},modelSource:a.modelSource??'unknown',lastReport:a.lastReport??null,provenance:'reported',stale:!a.lastReport||this.c.now()-a.lastReport.at>120000,accounting:{tokens:null,source:'native host accounting unavailable'}}));
+  const rows=selected.map(t=>{
+   const event=this.c.store.db.prepare("SELECT seq,at,type,data FROM events WHERE task_id=? AND type!='model.output' ORDER BY seq DESC LIMIT 1").get(t.id),last=event?{...event,data:JSON.parse(event.data)}:null,actor=t.executionActor??t.spec.actor,registered=agents.find(a=>a.taskId===t.id&&a.actor===actor);
+   return {id:t.id,goalId:t.goalId,objective:trim(t.spec.objective),objectiveTruncated:t.spec.objective.length>2000,kind:t.spec.kind,actor,status:t.status,phase:last?.data.phase??t.checkpoint?.phase??null,priority:t.priority??t.spec.priority,provenance:actor==='codex'?'reported':'captured',lastActivityAt:actor==='codex'?registered?.lastReport?.at??null:last?.at??null,lastActivity:actor==='codex'?registered?.lastReport?.summary??null:last?label(last.type):null,model:actor==='codex'?registered?.model??{requested:null,resolved:null}:{requested:null,resolved:typeof (t.providerModel??t.result?.model)==='string'?trim(t.providerModel??t.result.model):null},spent:this.c.getTask(t.id).spent,usage:actor==='codex'?{reportedTokens:null,completedModelRequests:0,usageUnavailable:null}:this.usage(t.id),deadline:t.deadline,question:t.questions?.length?{...t.questions.at(-1),text:trim(t.questions.at(-1).text??'')}:null,candidate:t.native?{layout:t.native.layout??'legacy',writerActive:t.native.writerActive??null,baseCommit:t.native.baseCommit??null,commit:t.native.commit??null}:null,evidenceRef:'task-'+t.id};
+  });
+  const goals=this.c.store.db.prepare("SELECT data FROM records WHERE kind='goal' AND (? IS NULL OR id=?) ORDER BY json_extract(data,'$.status')='active' DESC,rowid DESC LIMIT 100").all(q.goalId,q.goalId).map(r=>{const g=JSON.parse(r.data);return {id:g.id,objective:trim(g.manifest.objective),status:g.status,mode:g.manifest.mode.id,environment:g.manifest.environment,deadline:g.deadline,maxTasks:g.manifest.limits.maxTasks,taskCount:this.c.store.db.prepare("SELECT COUNT(*) AS n FROM records WHERE kind='task' AND json_extract(data,'$.goalId')=?").get(g.id).n};});
+  const cursor=Number(this.c.store.db.prepare('SELECT COALESCE(MAX(seq),0) AS n FROM events').get().n);
+  return {version:1,generatedAt:this.c.now(),cursor,goals,tasks:rows,agents,queue:rows.filter(t=>queueStates.has(t.status)),attention:rows.filter(t=>attentionStates.has(t.status)).map(t=>({taskId:t.id,goalId:t.goalId,status:t.status,objective:t.objective,instruction:'Continue in Codex to inspect and decide.'})),limits:{goals:100,tasks:500,agents:500},nativeAccounting:'unavailable unless supplied by the native host'};
+ }
+ async evidence(raw){
+  keys(raw,['reference','start','length'],'evidence query');identifier(raw.reference,'evidence reference');const start=integer(raw.start??0,'start',0,Number.MAX_SAFE_INTEGER),length=integer(raw.length??8192,'length',1,OBSERVER_LIMITS.evidenceBytes);
+  let bytes,partial=false,provenance='coordinator';
+  if(raw.reference.startsWith('task-')){const t=this.c.getTask(raw.reference.slice(5));bytes=Buffer.from(JSON.stringify({id:t.id,objective:t.spec.objective,status:t.status,checkpoint:t.checkpoint,feedback:t.feedback,answers:t.answers,result:t.result,integration:t.integration??null,spent:t.spent},null,2));partial=!terminal.has(t.status);}
+  else if(raw.reference.startsWith('request-')){
+   const id=raw.reference.slice(8);identifier(id,'request ID');const row=this.c.store.db.prepare('SELECT * FROM requests WHERE id=?').get(id);if(!row)throw Error('Unknown saved request');this.c.store.get('task',row.task_id);const data=JSON.parse(row.data);partial=row.status!=='completed';provenance='captured';
+   const chunks=partial?this.c.store.db.prepare("SELECT json_extract(data,'$.content') AS content FROM events WHERE task_id=? AND type='model.output' AND json_extract(data,'$.requestId')=? ORDER BY seq").all(row.task_id,id).map(r=>typeof r.content==='string'?r.content:'').join(''):null;
+   bytes=Buffer.from(JSON.stringify({status:row.status,partial,result:data.result??null,error:data.error??null,...(partial?{visiblePartial:chunks.slice(0,128*1024),warning:'Incomplete visible output; not a validated action or completed result.'}:{})},null,2));
+  }else if(raw.reference.startsWith('artifact-')){const id=raw.reference.slice(9),record=this.c.store.get('artifact',id);this.c.store.get('task',record.taskId);bytes=(await this.artifacts.read(id)).data;}
+  else throw Error('Unknown evidence reference kind');
+  return {reference:raw.reference,partial,provenance,...window(bytes,start,length)};
+ }
+}

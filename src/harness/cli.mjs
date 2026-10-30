@@ -23,8 +23,8 @@ export async function serve({root,configFile,port}){
  for(const planning of c.store.all('planning').filter(p=>p.status==='uncertain')){try{c.recoverPlanning(planning.id,owner);}catch{/* Pending planner calls remain spent and exclusive. */}}
  const stop=()=>{quitting=true;};process.once('SIGTERM',stop);process.once('SIGINT',stop);dispatcher.onStop=stop;
  let old;try{old=await connection(root);}catch(error){if(error.code!=='ENOENT')throw error;}
- const token=old?.token??randomBytes(32).toString('hex'),api=await startApi({dispatcher,token,port});
- await atomic(path.join(root,'connection.json'),{url:api.url,token});await atomic(path.join(root,'service.json'),{pid:process.pid,owner,url:api.url,node:process.versions.node,startedAt:Date.now()});
+ const token=old?.token??randomBytes(32).toString('hex'),viewerToken=old?.viewerToken??randomBytes(32).toString('hex'),api=await startApi({dispatcher,token,viewerToken,port,trustedOrigins:config.observerOrigins??[]});
+ await atomic(path.join(root,'connection.json'),{url:api.url,token,viewerToken});await atomic(path.join(root,'viewer-connection.json'),{url:api.url,token:viewerToken,role:'viewer'});await atomic(path.join(root,'service.json'),{pid:process.pid,owner,url:api.url,node:process.versions.node,startedAt:Date.now()});
  process.stdout.write(JSON.stringify({status:'ready',url:api.url,root,node:process.versions.node})+'\n');
  try{
   await dispatcher.recoverOperations(owner);

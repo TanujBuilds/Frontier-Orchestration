@@ -1,0 +1,63 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtempSync,rmSync} from 'node:fs';
+import {mkdtemp,mkdir,writeFile,symlink,rm} from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import http from 'node:http';
+import {Coordinator} from '../src/harness/coordinator.mjs';
+import {Dispatcher} from '../src/harness/tools.mjs';
+import {Artifacts} from '../src/harness/artifacts.mjs';
+import {Observer} from '../src/harness/observer.mjs';
+import {startApi} from '../src/harness/api.mjs';
+function fixture(t){const root=mkdtempSync(path.join(os.tmpdir(),'harness-observer-')),c=new Coordinator({root});t.after(()=>{c.close();rmSync(root,{recursive:true,force:true});});const g=c.prepareGoal({submissionId:'observer',objective:'Observe useful work',acceptance:['Evidence'],environment:'fixture'},'prepare');c.activateGoal({goalId:g.id,hash:g.hash},'activate');const ds=c.submitTask({goalId:g.id,submissionId:'ds',kind:'consult',objective:'DeepSeek task',acceptance:['Useful']},'ds'),native=c.submitTask({goalId:g.id,submissionId:'native',kind:'consult',actor:'codex',objective:'Codex task',acceptance:['Useful']},'native');return {root,c,g,ds,native,observer:new Observer({c,artifacts:new Artifacts(c)})};}
+async function apiFixture(t,options={}){const f=fixture(t),dispatcher=new Dispatcher({c:f.c}),token='o'.repeat(64),viewerToken='v'.repeat(64),api=await startApi({dispatcher,token,viewerToken,...options});t.after(()=>api.close());const call=(name,input={},credential=viewerToken,extra={})=>fetch(api.url+'/api/invoke',{method:'POST',headers:{authorization:'Bearer '+credential,'content-type':'application/json',...extra},body:JSON.stringify({name,input})});return {...f,dispatcher,token,viewerToken,api,call};}
+test('observer snapshots distinguish captured execution and reported native work without fabricated accounting',t=>{
+ const f=fixture(t);f.c.claimNext('worker');f.c.emit('model.request.started',f.g.id,f.ds.id,{version:1,actor:'deepseek',provenance:'captured',requestId:'request-1'});f.c.store.put('agent',{id:'agent-1',goalId:f.g.id,taskId:f.native.id,actor:'codex',role:'implementer',model:{requested:null,resolved:null},modelSource:'inherited',registeredAt:0,lastReport:{summary:'Editing scoped file',status:'running',at:0}});
+ const x=f.observer.snapshot({goalId:f.g.id});assert.equal(x.goals[0].mode,'collaborative');assert.equal(x.tasks.find(t=>t.id===f.ds.id).provenance,'captured');assert.equal(x.agents[0].provenance,'reported');assert.equal(x.agents[0].stale,true);assert.equal(x.agents[0].accounting.tokens,null);assert.equal(x.tasks.find(t=>t.id===f.native.id).model.resolved,null);assert.equal(x.operatorToken,undefined);assert.equal(x.goals[0].manifest,undefined);
+});
+test('timeline uses global scan cursors through filters and excludes chunk/checkpoint noise',t=>{
+ const f=fixture(t),after=f.c.store.events(0,1000).at(-1).seq;
+ for(let i=0;i<240;i++)f.c.emit('model.output',f.g.id,f.ds.id,{actor:'deepseek',provenance:'captured',requestId:'stream',content:'sample'});
+ f.c.emit('agent.reported',f.g.id,f.native.id,{agentId:'a',summary:'Reported action'});f.c.emit('coding.files.read',f.g.id,f.ds.id,{actor:'deepseek',provenance:'captured',files:[{path:'src/a.mjs',hash:'saved'}]});
+ const first=f.observer.timeline({after,actor:'codex',limit:1});assert.equal(first.events.length,1);assert.equal(first.events[0].provenance,'reported');assert.equal(first.events[0].summary,'Reported action');
+ const second=f.observer.timeline({after:first.cursor,actor:'codex'});assert.equal(second.events.length,0);assert.ok(second.cursor>first.cursor);assert.equal(second.hasMore,false);
+ const all=f.observer.timeline({after});assert.equal(all.events.length,2);assert.deepEqual(all.events.map(e=>e.seq),[...all.events.map(e=>e.seq)].sort((a,b)=>a-b));
+ for(const q of [{limit:201},{after:-1},{actor:'invalid'},{path:'/etc/passwd'}])assert.throws(()=>f.observer.timeline(q));
+});
+test('saved request evidence and live visible chunks are bounded, provenance-labeled and cannot read private config',async t=>{
+ const f=fixture(t);f.c.claimNext('worker');const reserved=f.c.reserve(f.ds.id,{key:'model-1',kind:'model'},'worker');f.c.emit('model.output',f.g.id,f.ds.id,{actor:'deepseek',provenance:'captured',requestId:reserved.id,content:'Visible partial'});
+ const partial=await f.observer.evidence({reference:'request-'+reserved.id});assert.equal(partial.partial,true);assert.match(partial.text,/Visible partial/);assert.doesNotMatch(partial.text,/operatorToken/);
+ f.c.saveRequest(reserved.id,{content:'界'.repeat(14000),model:'fixture',usage:{total_tokens:12}});const complete=await f.observer.evidence({reference:'request-'+reserved.id,length:32768});assert.equal(complete.partial,false);assert.ok(Buffer.byteLength(complete.text)<=32768);assert.equal(complete.text.includes('\ufffd'),false);assert.ok(complete.totalBytes>32768);assert.equal(complete.sha256.length,64);
+ const snap=f.observer.snapshot({});assert.equal(snap.tasks.find(t=>t.id===f.ds.id).usage.reportedTokens,12);
+ for(const q of [{reference:'../../connection.json'},{reference:'task-no-such-task'},{reference:'request-no-such-request'},{reference:'request-'+reserved.id,length:32769},{reference:'request-'+reserved.id,path:'/etc/passwd'}])await assert.rejects(f.observer.evidence(q));
+});
+test('viewer can discover only observer reads and is denied every mutation before effects',async t=>{
+ const f=await apiFixture(t),before=f.c.store.events(0,1000).length;
+ const discovery=await f.call('tools_list');assert.equal(discovery.status,200);const list=await discovery.json();assert.ok(list.some(x=>x.name==='observer_snapshot'));assert.ok(list.every(x=>x.annotations.readOnlyHint));assert.ok(!list.some(x=>x.name==='goal_prepare'));
+ for(const tool of f.dispatcher.tools().filter(x=>!x.annotations.readOnlyHint)){assert.equal((await f.call(tool.name,{idempotencyKey:'viewer-'+tool.name})).status,403,tool.name);}
+ f.dispatcher.definitions.set('late_mutator',{name:'late_mutator',annotations:{readOnlyHint:false},inputSchema:{type:'object'},fn:()=>{throw Error('must not execute');},mutating:true});assert.equal((await f.call('late_mutator')).status,403);
+ assert.equal((await f.call('goal_get')).status,403);assert.equal(f.c.store.events(0,1000).length,before);assert.equal((await f.call('observer_snapshot')).status,200);
+ assert.equal((await f.call('goal_get',{},f.token)).status,200);
+});
+test('viewer login role is derived from its key, cannot be promoted, and sessions retain CSRF checks',async t=>{
+ const f=await apiFixture(t);const login=await fetch(f.api.url+'/login',{method:'POST',headers:{origin:f.api.url,'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({token:f.viewerToken,role:'operator'}),redirect:'manual'});assert.equal(login.status,303);const cookie=login.headers.get('set-cookie').split(';')[0];const session=await fetch(f.api.url+'/api/session',{headers:{cookie}}).then(r=>r.json());assert.equal(session.role,'viewer');assert.ok(session.csrf);
+ const send=(name,csrf)=>fetch(f.api.url+'/api/invoke',{method:'POST',headers:{cookie,origin:f.api.url,'content-type':'application/json',...(csrf?{'x-csrf-token':csrf}:{})},body:JSON.stringify({name,input:{}})});assert.equal((await send('observer_snapshot')).status,403);assert.equal((await send('observer_snapshot',session.csrf)).status,200);assert.equal((await send('service_stop',session.csrf)).status,403);
+ assert.equal((await f.call('observer_snapshot',{},f.viewerToken,{origin:'https://evil.invalid'})).status,403);
+});
+function rawRequest(api,headers,path='/api/session',body){return new Promise((resolve,reject)=>{const req=http.request(api.url+path,{method:body?'POST':'GET',headers},res=>{let data='';res.on('data',x=>data+=x);res.on('end',()=>resolve({status:res.statusCode,headers:res.headers,body:data}));});req.on('error',reject);req.end(body);});}
+test('configured private HTTPS proxy origins are explicit and forwarded headers cannot widen trust',async t=>{
+ const origin='https://fixture-mac.example.ts.net',f=await apiFixture(t,{trustedOrigins:[origin]}),auth={authorization:'Bearer '+f.viewerToken};
+ assert.equal((await rawRequest(f.api,{...auth,host:new URL(origin).host,origin})).status,200);
+ const valid={...auth,host:new URL(f.api.url).host,origin,'x-forwarded-host':new URL(origin).host,'x-forwarded-proto':'https'};assert.equal((await rawRequest(f.api,valid)).status,200);
+ for(const headers of [{...valid,'x-forwarded-host':'evil.invalid'},{...valid,'x-forwarded-proto':'http'},{...valid,'x-forwarded-host':[new URL(origin).host,new URL(origin).host]},{...valid,forwarded:'host=evil.invalid'},{...auth,host:'evil.invalid'},{...valid,origin:'https://evil.invalid'}])assert.equal((await rawRequest(f.api,headers)).status,403);
+ const login=await rawRequest(f.api,{...valid,'content-type':'application/x-www-form-urlencoded'},'/login',new URLSearchParams({token:f.viewerToken}).toString());assert.equal(login.status,303);assert.match(login.headers['set-cookie'][0],/Secure/);
+ await assert.rejects(startApi({dispatcher:f.dispatcher,token:f.token,viewerToken:f.token}),/distinct|different/);await assert.rejects(startApi({dispatcher:f.dispatcher,token:f.token,trustedOrigins:['http://public.invalid']}),/HTTPS|private/);
+});
+test('observer artifact windows verify membership and checksums',async t=>{
+ const f=fixture(t),directory=path.join(f.root,'research',f.ds.id);await mkdir(directory,{recursive:true});await writeFile(path.join(directory,'report.md'),'# Saved report\n<script>alert(1)</script>');const task=f.c.store.get('task',f.ds.id);task.result={checksumsVerified:true,directory};f.c.store.put('task',task);const artifacts=await f.observer.artifacts.list(task.id);const ref='artifact-'+artifacts[0].id;assert.match((await f.observer.evidence({reference:ref})).text,/<script>/);await writeFile(path.join(directory,'report.md'),'tampered');await assert.rejects(f.observer.evidence({reference:ref}),/checksum|changed/);
+});
+
+test('snapshot display text and observed model identity stay bounded',t=>{
+ const f=fixture(t),task=f.c.store.get('task',f.ds.id);task.spec.objective='x'.repeat(12000);task.questions=[{text:'y'.repeat(8000),id:'question'}];task.result={model:{untrusted:'shape'}};f.c.store.put('task',task);const row=f.observer.snapshot({}).tasks.find(t=>t.id===task.id);assert.ok(row.objective.length<=2000);assert.ok(row.question.text.length<=2000);assert.equal(row.model.resolved,null);assert.equal(row.objectiveTruncated,true);
+});
