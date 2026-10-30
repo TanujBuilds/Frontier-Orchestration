@@ -1,0 +1,51 @@
+{
+  "stage": "05",
+  "objective": "Read-only observer projections and viewer authority",
+  "prerequisite_commits": [
+    "dd7bc74"
+  ],
+  "delivered_commits": [
+    "60a9d97",
+    "60c8743"
+  ],
+  "acceptance": "incomplete",
+  "implementation": "candidate",
+  "tests": {
+    "node": {
+      "passed": 214,
+      "failed": 0
+    },
+    "observer_api_focused": {
+      "passed": 18,
+      "failed": 0
+    },
+    "browser": {
+      "passed": true,
+      "fixture": true,
+      "viewports": [
+        1280,
+        390
+      ],
+      "backend_events": true,
+      "mutation_denial": true,
+      "reconnect": true,
+      "evidence_and_focus_preserved": true
+    }
+  },
+  "evidence": {
+    "stage05-review.md": "12a67616833b7abdb22f4c9f162fe2890ea2a50c56ac7f9c169316bcad5e5fa6",
+    "stage05-fix-review.md": "e7b37f2cab09e081a506c5da248124b12d3c54d7c9a5ff3d76718b33795e4cb7",
+    "stage05-review-green.log": "56ae3afc3679c9c1e33d1274b6f03147b30ab13fac0205ce22e9ec93078041ed",
+    "stage05-06-node.log": "8f8aebf9a998ff7017bb4e2c100f3e4c7d5a50b3c41cb73d82ab73f6653e9530"
+  },
+  "requests": {
+    "deepseek": 0,
+    "automated_codex": 0
+  },
+  "preservation": "No approved goal/task state or spending changed; fixtures use separate temporary state. Viewer catalog writes only allowlisted artifact metadata.",
+  "rollback": "Revert software commits only after compatibility review; preserve coordinator database, event order and counters. Viewer sessions expire on service restart; operator/viewer keys persist privately.",
+  "limitations": [
+    "Combined Stage02/03 data-shape gate pending",
+    "Private phone reverse proxy not live verified"
+  ]
+}

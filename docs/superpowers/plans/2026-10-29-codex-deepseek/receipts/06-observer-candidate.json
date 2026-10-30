@@ -1,0 +1,48 @@
+{
+  "stage": "06",
+  "objective": "Approved split model overview and evidence timeline",
+  "prerequisite_commits": [
+    "dd7bc74"
+  ],
+  "delivered_commits": [
+    "25d44aa"
+  ],
+  "acceptance": "incomplete",
+  "implementation": "candidate",
+  "tests": {
+    "node": {
+      "passed": 214,
+      "failed": 0
+    },
+    "observer_api_focused": {
+      "passed": 18,
+      "failed": 0
+    },
+    "browser": {
+      "passed": true,
+      "fixture": true,
+      "viewports": [
+        1280,
+        390
+      ],
+      "backend_events": true,
+      "mutation_denial": true,
+      "reconnect": true,
+      "evidence_and_focus_preserved": true
+    }
+  },
+  "evidence": {
+    "stage06-browser-final.log": "ec08261073f10ac0ae213ab18d2475034b5095ecb4cc9e2d84fc90a583cc22cb",
+    "stage05-06-node.log": "8f8aebf9a998ff7017bb4e2c100f3e4c7d5a50b3c41cb73d82ab73f6653e9530"
+  },
+  "requests": {
+    "deepseek": 0,
+    "automated_codex": 0
+  },
+  "preservation": "No approved goal/task state or spending changed; fixtures use separate temporary state. Viewer catalog writes only allowlisted artifact metadata.",
+  "rollback": "Revert software commits only after compatibility review; preserve coordinator database, event order and counters. Viewer sessions expire on service restart; operator/viewer keys persist privately.",
+  "limitations": [
+    "Independent frontend review pending",
+    "Real combined native/DeepSeek pilot pending"
+  ]
+}
