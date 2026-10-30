@@ -12,10 +12,11 @@ export class Artifacts {
   const info=await lstat(target);if(!info.isFile()||info.size>MAX)throw Error('Unsafe or oversized artifact');return target;
  }
  public(record){const {file,...metadata}=record;return {...metadata,url:'/api/artifacts/'+record.id};}
- async list(taskId){
+ async list(taskId,{limit=1000}={}){
   const t=this.c.getTask(taskId),candidates=[];
   if(t.result?.checksumsVerified&&t.result.directory)for(const name of reports){const file=path.join(t.result.directory,name);try{await lstat(file);candidates.push({file,name,type:'text/plain; charset=utf-8'});}catch(e){if(e.code!=='ENOENT')throw e;}}
   for(const check of [...(t.result?.checks??[]),...(t.integration?.checks??[])])for(const file of check.screenshots??[])if(typeof file==='string'&&file.endsWith('.png'))candidates.push({file,name:path.basename(file),type:'image/png'});
+  if(candidates.length>limit)throw Error('Saved artifact catalog exceeds query limit');
   const output=[],seen=new Set();for(const item of candidates){
    const file=await this.safe(item.file),id=digest({taskId,file});if(seen.has(id))continue;seen.add(id);const data=await readFile(file),record={id,taskId,file,name:item.name,type:item.type,bytes:data.length,sha256:sha(data)};
    const old=this.c.store.maybe('artifact',id);if(old&&old.sha256!==record.sha256)throw Error('Saved artifact checksum changed');this.c.store.tx(()=>this.c.store.put('artifact',record));output.push(this.public(record));

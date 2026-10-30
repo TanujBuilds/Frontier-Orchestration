@@ -61,3 +61,13 @@ test('observer artifact windows verify membership and checksums',async t=>{
 test('snapshot display text and observed model identity stay bounded',t=>{
  const f=fixture(t),task=f.c.store.get('task',f.ds.id);task.spec.objective='x'.repeat(12000);task.questions=[{text:'y'.repeat(8000),id:'question'}];task.result={model:{untrusted:'shape'}};f.c.store.put('task',task);const row=f.observer.snapshot({}).tasks.find(t=>t.id===task.id);assert.ok(row.objective.length<=2000);assert.ok(row.question.text.length<=2000);assert.equal(row.model.resolved,null);assert.equal(row.objectiveTruncated,true);
 });
+
+test('evidence never skips a multibyte character with a small or misaligned window',async t=>{
+ const f=fixture(t),task=f.c.store.get('task',f.ds.id);task.result={text:'界a'};f.c.store.put('task',task);const ref='task-'+task.id,full=await f.observer.evidence({reference:ref}),at=Buffer.from(full.text).indexOf(Buffer.from('界'));for(const length of [1,2])await assert.rejects(f.observer.evidence({reference:ref,start:at,length}),/UTF-8|character/);await assert.rejects(f.observer.evidence({reference:ref,start:at+1,length:4}),/UTF-8|boundary/);assert.equal((await f.observer.evidence({reference:ref,start:at,length:4})).text,'界a');
+});
+test('snapshot filters before limiting and prioritizes actionable work over history',t=>{
+ const f=fixture(t);for(let i=0;i<501;i++)f.c.store.put('task',{...f.ds,id:'history-'+i,status:'accepted'});const filtered=f.observer.snapshot({actor:'codex'});assert.ok(filtered.tasks.some(t=>t.id===f.native.id));assert.ok(f.observer.snapshot({}).queue.some(t=>t.id===f.native.id));assert.equal(f.observer.snapshot({}).overflow.tasks,true);
+});
+test('viewer discovers saved artifact IDs without operator registration',async t=>{
+ const f=await apiFixture(t),directory=path.join(f.root,'research',f.ds.id);await mkdir(directory,{recursive:true});await writeFile(path.join(directory,'report.md'),'# Available report');const task=f.c.store.get('task',f.ds.id);task.result={checksumsVerified:true,directory};f.c.store.put('task',task);const response=await f.call('observer_artifacts',{taskId:task.id});assert.equal(response.status,200);const [item]=await response.json();assert.equal(item.file,undefined);assert.equal(item.reference.startsWith('artifact-'),true);assert.match((await f.observer.evidence({reference:item.reference})).text,/Available report/);
+});

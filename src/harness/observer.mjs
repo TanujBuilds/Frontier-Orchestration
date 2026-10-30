@@ -2,7 +2,7 @@ import {createHash} from 'node:crypto';
 import {keys,identifier,integer} from './contracts.mjs';
 import {normalizeObserverQuery,normalizeActivityEvent,OBSERVER_LIMITS} from './collaboration-contracts.mjs';
 
-export const OBSERVER_TOOLS=new Set(['tools_list','observer_snapshot','observer_timeline','observer_evidence']);
+export const OBSERVER_TOOLS=new Set(['tools_list','observer_snapshot','observer_timeline','observer_evidence','observer_artifacts']);
 const terminal=new Set(['accepted','failed','partial','cancelled']);
 const queueStates=new Set(['queued','codex_ready','suspended','running','uncertain','codex_active']);
 const attentionStates=new Set(['awaiting_supervisor','awaiting_user','awaiting_review','awaiting_legacy_review','blocked','uncertain']);
@@ -20,9 +20,10 @@ const label=type=>({
  })[type]??type.replaceAll('.',' ');
 const trim=value=>String(value).slice(0,2000);
 function window(bytes,start,length){
- let begin=Math.min(start,bytes.length);while(begin<bytes.length&&(bytes[begin]&0xc0)===0x80)begin++;
+ const begin=Math.min(start,bytes.length);if(begin<bytes.length&&(bytes[begin]&0xc0)===0x80)throw Error('Evidence start must be a UTF-8 character boundary');
  let end=Math.min(bytes.length,begin+length);while(end>begin&&end<bytes.length&&(bytes[end]&0xc0)===0x80)end--;
- return {start:begin,nextStart:end>begin?end:Math.min(bytes.length,begin+length),totalBytes:bytes.length,text:bytes.subarray(begin,end).toString('utf8'),truncated:begin>0||end<bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')};
+ if(end===begin&&begin<bytes.length)throw Error('Evidence window is too small for the next UTF-8 character');
+ return {start:begin,nextStart:end,totalBytes:bytes.length,text:bytes.subarray(begin,end).toString('utf8'),truncated:begin>0||end<bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')};
 }
 export class Observer {
  constructor({c,artifacts}){this.c=c;this.artifacts=artifacts;}
@@ -68,8 +69,8 @@ export class Observer {
  }
  snapshot(raw={}){
   keys(raw,['goalId','actor'],'snapshot query');const q=normalizeObserverQuery(raw);if(q.goalId)this.c.store.get('goal',q.goalId);
-  const tasks=this.c.store.db.prepare("SELECT data FROM records WHERE kind='task' AND (? IS NULL OR json_extract(data,'$.goalId')=?) ORDER BY json_extract(data,'$.status') IN ('running','uncertain','codex_active') DESC,rowid DESC LIMIT 500").all(q.goalId,q.goalId).map(r=>JSON.parse(r.data));
-  const selected=tasks.filter(t=>!q.actor||(t.executionActor??t.spec.actor)===q.actor);
+  const tasks=this.c.store.db.prepare("SELECT data FROM records WHERE kind='task' AND (? IS NULL OR json_extract(data,'$.goalId')=?) AND (? IS NULL OR COALESCE(json_extract(data,'$.executionActor'),json_extract(data,'$.spec.actor'))=?) ORDER BY json_extract(data,'$.status') NOT IN ('accepted','failed','partial','cancelled') DESC,rowid DESC LIMIT 501").all(q.goalId,q.goalId,q.actor,q.actor).map(r=>JSON.parse(r.data));
+  const selected=tasks.slice(0,500);
   const agents=this.c.store.db.prepare("SELECT data FROM records WHERE kind='agent' AND (? IS NULL OR json_extract(data,'$.goalId')=?) ORDER BY rowid DESC LIMIT 500").all(q.goalId,q.goalId).map(r=>JSON.parse(r.data)).filter(a=>!q.actor||a.actor===q.actor).map(a=>({id:a.id,taskId:a.taskId,goalId:a.goalId,actor:a.actor,role:a.role,hostAgentId:a.hostAgentId??null,model:a.model??{requested:null,resolved:null},modelSource:a.modelSource??'unknown',lastReport:a.lastReport??null,provenance:'reported',stale:!a.lastReport||this.c.now()-a.lastReport.at>120000,accounting:{tokens:null,source:'native host accounting unavailable'}}));
   const rows=selected.map(t=>{
    const event=this.c.store.db.prepare("SELECT seq,at,type,data FROM events WHERE task_id=? AND type!='model.output' ORDER BY seq DESC LIMIT 1").get(t.id),last=event?{...event,data:JSON.parse(event.data)}:null,actor=t.executionActor??t.spec.actor,registered=agents.find(a=>a.taskId===t.id&&a.actor===actor);
@@ -77,8 +78,9 @@ export class Observer {
   });
   const goals=this.c.store.db.prepare("SELECT data FROM records WHERE kind='goal' AND (? IS NULL OR id=?) ORDER BY json_extract(data,'$.status')='active' DESC,rowid DESC LIMIT 100").all(q.goalId,q.goalId).map(r=>{const g=JSON.parse(r.data);return {id:g.id,objective:trim(g.manifest.objective),status:g.status,mode:g.manifest.mode.id,environment:g.manifest.environment,deadline:g.deadline,maxTasks:g.manifest.limits.maxTasks,taskCount:this.c.store.db.prepare("SELECT COUNT(*) AS n FROM records WHERE kind='task' AND json_extract(data,'$.goalId')=?").get(g.id).n};});
   const cursor=Number(this.c.store.db.prepare('SELECT COALESCE(MAX(seq),0) AS n FROM events').get().n);
-  return {version:1,generatedAt:this.c.now(),cursor,goals,tasks:rows,agents,queue:rows.filter(t=>queueStates.has(t.status)),attention:rows.filter(t=>attentionStates.has(t.status)).map(t=>({taskId:t.id,goalId:t.goalId,status:t.status,objective:t.objective,instruction:'Continue in Codex to inspect and decide.'})),limits:{goals:100,tasks:500,agents:500},nativeAccounting:'unavailable unless supplied by the native host'};
+  return {version:1,generatedAt:this.c.now(),cursor,goals,tasks:rows,agents,queue:rows.filter(t=>queueStates.has(t.status)),attention:rows.filter(t=>attentionStates.has(t.status)).map(t=>({taskId:t.id,goalId:t.goalId,status:t.status,objective:t.objective,instruction:'Continue in Codex to inspect and decide.'})),overflow:{tasks:tasks.length>500},limits:{goals:100,tasks:500,agents:500},nativeAccounting:'unavailable unless supplied by the native host'};
  }
+ async artifactsList(raw){keys(raw,['taskId'],'artifact query');identifier(raw.taskId,'task ID');return (await this.artifacts.list(raw.taskId,{limit:100})).map(a=>({...a,reference:'artifact-'+a.id}));}
  async evidence(raw){
   keys(raw,['reference','start','length'],'evidence query');identifier(raw.reference,'evidence reference');const start=integer(raw.start??0,'start',0,Number.MAX_SAFE_INTEGER),length=integer(raw.length??8192,'length',1,OBSERVER_LIMITS.evidenceBytes);
   let bytes,partial=false,provenance='coordinator';
