@@ -1,0 +1,84 @@
+{
+  "stage": "02",
+  "objective": "Parallel native candidates, linked collaboration, durable generation and integration-failure recovery",
+  "prerequisite_commits": [
+    "dd7bc7477edbce7f535311b3bf590be67d3e6596"
+  ],
+  "delivered_commits": [
+    "2b7d01b25791142b49a271741ab035ab9830e867",
+    "d2d620f172a0823405e242fbe91caa0d3b182326"
+  ],
+  "files_subsystems": [
+    "native-candidates",
+    "integration and integration-repair",
+    "goals rebind",
+    "agents registry/help links",
+    "MCP tools",
+    "native candidate tests"
+  ],
+  "interfaces": [
+    "Integration.executionBase(goalId)",
+    "native_start layout=candidate_v1",
+    "agent_register/agent_report/agents_list/help_link",
+    "task_integration_repair(taskId,reason,idempotencyKey)",
+    "approved rebind native.needsGeneration"
+  ],
+  "tests": {
+    "baseline_node": 203,
+    "initial_implementation_node": 230,
+    "review_corrected_node": 246,
+    "failed": 0,
+    "skipped": 0,
+    "full_command": "npm test",
+    "full_log": "stage02-review-full-final.log",
+    "focused_final": {
+      "passed": 12,
+      "failed": 0,
+      "log": "stage02-review-race-all-green.log"
+    },
+    "syntax_and_diff_check": "git diff --check and node --check: exit0"
+  },
+  "evidence_kind": "Local fixtures with real Git/check subprocesses, actual concurrent native Node writers, in-flight fixture provider, and actual SIGKILL/restart. Not live native Codex or DeepSeek execution.",
+  "requests_usage": {
+    "live_deepseek_http_requests": 0,
+    "automated_codex_cli_calls": 0,
+    "native_host_tokens": null
+  },
+  "preservation": [
+    "Same task IDs, approval hashes, absolute deadlines, failed attempts, request spending and consumed reviews retained",
+    "Generation intents pin committed bases, isolate new checkouts, archive frozen old candidate/evidence",
+    "Failed combined checks retain target ownership until exact journaled inverse has restored the accepted base",
+    "Exhausted review/task limits block correction without refresh"
+  ],
+  "recovery_cases": [
+    "SIGKILL before/after workspace and checkpoint journal persistence",
+    "SIGKILL repair intent, inverse edits applied, restored receipt before SQLite transition",
+    "SIGKILL generation creation, scoped transfer, transfer receipt",
+    "Stale delayed native_start after acceptance",
+    "Stale finish/integration against a newer approved generation",
+    "Unknown external target edits and conflicting generation preimages fail closed"
+  ],
+  "artifact_sha256": {
+    "stage02-review-crash-generation.log": "1d35eb3f9d6526f82481e9d006b7289c0fa3afcb78042768c3fcad202007e384",
+    "stage02-review-full-final.log": "fa8e628eb94f513d9e8a3c263f42fc8d4437a80991e774797c872975bf231c7b",
+    "stage02-review-full-preaudit.log": "5256808e08ca76f248a585f05c9b5bbed22d998dacc97160a71c10c364c60529",
+    "stage02-review-generation-green.log": "6535ab63b395b6b2c3239a7164d9c590b307a42510557833f8ab15313cd67fb5",
+    "stage02-review-generation-race-red.log": "8bdeb2b22e4766047b2afddcb185460bdd2910566a9b9b81756f11350a50b242",
+    "stage02-review-generation-red.log": "2b85dceddad0b04010c16e84492334b900f20c41de300bfcbce35cb2bb455d16",
+    "stage02-review-intermediate.log": "ae5bbebfd608df25a4b3cddafda81142bd107e8cc53222f0f520138ace1daa19",
+    "stage02-review-race-all-green.log": "975a976569b18c85647bf8c6095bec7937f46e14abce6130be4749b2770bf77c",
+    "stage02-review-race-green.log": "f65e1262f719c0ef4f0c42b9d17388a429e945a76519d01a5e6834164251298f",
+    "stage02-review-race-red.log": "9c75afe52775c46a59b13da55a6ae5e85efea0f1cc422ae11d37e72d99f2029a",
+    "stage02-review-repair-green.log": "9548002fc40b571d1dd2729141fea4c58bc83d1079a6afe403acad3bc11cbd94",
+    "stage02-review-repair-red.log": "1f38f6e8f8840ba2a1a81f27c02b648a9a4843789b654abff2fe9312aaddc7c9"
+  },
+  "compatibility_rollback": "Generic records additive; legacy omitted-layout path retained. Preserve database/counters. Do not run older code over candidate_v1 or generation/recovery records it cannot understand; retain candidate package for recovery.",
+  "limitations": [
+    "Independent scoped fix review pending",
+    "Combined Stage03 suite pending",
+    "Actual installed native-host model/concurrency and Mac sandbox pilots belong to Stage07",
+    "Native role/model metadata is cooperative host correlation, not authenticated MCP caller isolation",
+    "Uninitialized preserved partial has no source checkout to transfer; it fails closed with evidence retained"
+  ],
+  "acceptance": "incomplete: implementation candidate tested; independent review and combined/live gates pending"
+}
