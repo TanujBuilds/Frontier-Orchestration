@@ -1,0 +1,82 @@
+{
+  "date": "2026-10-30",
+  "objective": "Enforce approved structured per-kind task ceilings without refreshing historical budgets",
+  "acceptance": "passed for this fix; overall release incomplete",
+  "prerequisiteCommit": "672955d",
+  "deliveredCommit": "4c15023",
+  "reviewedSourceCommit": "ac695410fd7c6f1201aabce0fc67de3a8c424128",
+  "interfaces": [
+    "Optional closed goal.limits.taskLimits binds per-kind numeric ceilings to exact approval",
+    "Omitted assignment limits inherit ceilings; expansions reject before insertion/dispatch",
+    "Omission preserves legacy approval hashes; rebind preserves original counters and deadlines"
+  ],
+  "verification": {
+    "node": {
+      "command": "npm test",
+      "passed": 323,
+      "failed": 0
+    },
+    "python": {
+      "command": "python -B -m unittest discover -s test/research -p 'test_*.py'",
+      "passed": 98,
+      "failed": 0,
+      "version": "3.12.14"
+    },
+    "observer": {
+      "command": "npm run test:observer",
+      "passed": true,
+      "fixture": true,
+      "actualBackendEvents": true,
+      "viewports": [
+        1280,
+        390
+      ]
+    },
+    "independentReview": {
+      "findings": 0,
+      "focusedTests": 24,
+      "adjacentTests": 65
+    },
+    "package": {
+      "sourceCommit": "4c15023",
+      "contentHash": "4f71e87ff429d023bf01540bf1235210e387c8a92f875ba8eadacb847bd7ffcd",
+      "files": 3763,
+      "strictInventoryVerified": true
+    }
+  },
+  "spending": {
+    "newLiveModelRequests": 0,
+    "automatedCodexReviews": 0
+  },
+  "preservation": "No live jobs, deadlines, counters or failed evidence changed. Blocked overnight pilot retains two spent reviews. No final personal installation.",
+  "rollback": "Additive normalization/schema change. Review downgrades against records using taskLimits. Never restore old databases or discard ceilings to refresh budgets.",
+  "artifacts": {
+    ".data/collaboration-evidence/budget-fix-combined-node.log": {
+      "sha256": "15d9fe044617b860d3ce400b8b29a7be17e0574ca528e805f65b061c7440f12a",
+      "bytes": 30225
+    },
+    ".data/collaboration-evidence/budget-fix-combined-python.log": {
+      "sha256": "07f4f7b6b87d68ddcd84c076da9e3f970ff3c50abbe90899313e779eaec76d51",
+      "bytes": 197
+    },
+    ".data/collaboration-evidence/budget-fix-combined-observer.log": {
+      "sha256": "ec08261073f10ac0ae213ab18d2475034b5095ecb4cc9e2d84fc90a583cc22cb",
+      "bytes": 667
+    },
+    ".data/collaboration-evidence/budget-fix-package-build.json": {
+      "sha256": "d4702206330706bf5ebd431d81ef254cd7434f1d1f8d9dcc370406859353d1f2",
+      "bytes": 179
+    },
+    ".data/collaboration-evidence/budget-fix-package-verify.json": {
+      "sha256": "94a2355b92e4f5b81613ad40c0772989d0ce39fae3be990172241ef617e2b952",
+      "bytes": 18
+    }
+  },
+  "remaining": [
+    "Fresh learning reuse",
+    "Actual native-host MCP discovery and calls",
+    "Private observer access and final installed restart verification",
+    "Valid overnight live evidence after separate explicit budget decision",
+    "Autonomous research quality and five-primary-claim gate"
+  ]
+}
