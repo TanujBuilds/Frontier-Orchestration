@@ -1,0 +1,222 @@
+{
+  "date": "2026-10-30",
+  "objective": "Finish retained fresh learning reuse, actual Codex CLI-host MCP fixture lifecycle, and latest disposable restart/replay validation",
+  "acceptance": "passed for these gates; Stage07 and overall release incomplete",
+  "prerequisiteCommit": "22844cb40b36c0644d6bd252a61c6e1539918f1e",
+  "productCodeCommit": "4c15023de3523cc63ceeb25ad06be57d00b3f044",
+  "productionCodeChanged": false,
+  "package": {
+    "contentHash": "4f71e87ff429d023bf01540bf1235210e387c8a92f875ba8eadacb847bd7ffcd",
+    "files": 3763,
+    "strictInventoryVerifiedBeforeAndAfter": true,
+    "oldFailedBundlesPreserved": true
+  },
+  "learning": {
+    "environment": "live",
+    "goalId": "29c252f2-e284-42f6-a6bf-2985443e1fc2",
+    "taskId": "fcfc9702-9bdd-47b1-aef2-65ab59f0c56b",
+    "approvalHash": "e9f12e2787968122e79b853af9c10bfe98bae320dac64919b11748de1054e1a0",
+    "goalDeadline": 1793424384245,
+    "taskDeadline": 1793422584457,
+    "lesson": {
+      "id": "bb798994-ed87-4363-87f8-6afe11dcc267",
+      "version": 1,
+      "recipeHash": "bdbe90e943da5fdc6c2cadceb6e17c1e25979040c866624126a83a9f31326bdf"
+    },
+    "privateProjectLessonExcluded": true,
+    "originalHistoricalFilesAndRowsUnchanged": true,
+    "status": "completed",
+    "attempts": 4,
+    "deepseekCalls": 5,
+    "mainCodexReviews": 1,
+    "automaticCodexReviews": 0,
+    "deepseekTokenUsage": "unavailable in saved streaming results",
+    "nativeMainUsage": "unavailable",
+    "protectedChecksPassedBeforeAndAfterIntegration": true,
+    "independentArithmeticCases": 891,
+    "hugeSafeAttemptTimingPassed": true,
+    "integrationCommit": "3a982272b5af368e516684512b3e98f665080a3f",
+    "receiptHash": "993b3082401798258be681ff6a91b805554dc7951e7ae8818b2c71f0c6e32915",
+    "failuresPreserved": [
+      "Initial unlisted-cache package integrity refusal; no inference",
+      "Failed subnormal arithmetic checks and invalid JSON remain spent",
+      "Main integration driver omitted required feedback; API rejected before operation; corrected using original key"
+    ],
+    "interpretation": "Demonstrates scoped pinned general lesson retrieval and checked reuse in a different disposable project, not causal or universal model improvement"
+  },
+  "nativeHost": {
+    "environment": "fixture",
+    "host": "Fresh actual Codex CLI 0.164.0 session",
+    "configuration": "Per-run MCP overrides only; no global registration change",
+    "modelSelection": "Inherited user host settings; no explicit model override test in this run",
+    "goalId": "b11f2d18-03b4-41d4-b562-4fa086db31e5",
+    "taskId": "1f15f2fe-48ac-4200-8a79-ccfa51cb6182",
+    "approvalHash": "ea818ce41ab0e561c6b9231430cad64f166c8ed7ab620e02a18546118eae4883",
+    "receiptHash": "4faea38bcf0abe00078fd8c980a217c2a0e2bb451a63ec2a7d9dbbe30fc4a1f3",
+    "status": "completed",
+    "calls": [
+      "tools_list",
+      "goal_prepare",
+      "goal_activate",
+      "task_submit",
+      "native_text_start",
+      "native_text_finish",
+      "goal_finalize",
+      "goal_get"
+    ],
+    "discovered": [
+      "agent_register",
+      "native_start layout candidate_v1"
+    ],
+    "coordinatorSpending": {
+      "codexReview": 0,
+      "download": 0,
+      "model": 0,
+      "search": 0
+    },
+    "actualHostUsage": {
+      "input_tokens": 318889,
+      "cached_input_tokens": 291456,
+      "cache_write_input_tokens": 0,
+      "output_tokens": 1109,
+      "reasoning_output_tokens": 30
+    },
+    "exitCode": 0,
+    "timedOut": false,
+    "desktopChatHotRefresh": "not tested"
+  },
+  "restart": {
+    "environment": "latest disposable installed runtime against same completed live learning state",
+    "newProcessAndOwner": true,
+    "approvalIdsDeadlinesCountersReceiptAndIntegrationPreserved": true,
+    "authenticationKeysPreserved": true,
+    "identicalFinalizeReplay": true,
+    "requestCountBefore": 21,
+    "requestCountAfter": 21,
+    "eventCursorBefore": 881,
+    "eventCursorAfter": 881,
+    "newInference": 0,
+    "allDisposableServicesStopped": true,
+    "finalPersonalRestartGate": "still pending after final promotion"
+  },
+  "verification": {
+    "command": "node --test test/harness-learning.test.mjs test/harness-package.test.mjs test/harness-mcp.test.mjs test/harness-crash.test.mjs",
+    "passed": 27,
+    "failed": 0,
+    "note": "No product changes; prior full323Node/98Python/browser result remains historical, not rerun here"
+  },
+  "artifacts": {
+    ".data/collaboration-evidence/continuation-20261030/learning/STATUS.md": {
+      "sha256": "fab775f7ff70b06d924dbdca4d926b5834a9fe20d199c8b8e5d0a9e2535ccb45",
+      "bytes": 2283
+    },
+    ".data/collaboration-evidence/continuation-20261030/learning/dispatch.mjs": {
+      "sha256": "f82cc03eae0674d73579b455e3990e64f442e2f5ca2c5eae07733f132e8ab1cc",
+      "bytes": 3113
+    },
+    ".data/collaboration-evidence/continuation-20261030/learning/dispatch-4c15023.mjs": {
+      "sha256": "a8a9b1f5d2cea8769d2cc8f78d5aee52f8a1676eb7bb19f7cf516b945f61d465",
+      "bytes": 3403
+    },
+    ".data/collaboration-evidence/continuation-20261030/learning/collect-4c15023.mjs": {
+      "sha256": "15e38c48a2a5d81b3028c37939171768fe418e5927859ab145f7e090c5fad975",
+      "bytes": 2862
+    },
+    ".data/collaboration-evidence/continuation-20261030/learning/fresh-draft.private.json": {
+      "sha256": "f842d83b8354d1ffbe32a3494caf5d0501705b3f15d9e699196b980948021ff8",
+      "bytes": 4117
+    },
+    ".data/collaboration-evidence/continuation-20261030/learning/fresh-dispatch.private.json": {
+      "sha256": "a4a772c509f26b9571b89bdc9b610f105c3e8442fa97a6fbcfe6bfa09c1b1678",
+      "bytes": 938
+    },
+    ".data/collaboration-evidence/continuation-20261030/learning/fresh-final.private.json": {
+      "sha256": "57b783ba659dafbfef7455cd1beedd1268b7da06248420c923e5cfe6ae939fe0",
+      "bytes": 73459
+    },
+    ".data/collaboration-evidence/continuation-20261030/learning/fresh-progress.private.json": {
+      "sha256": "d3d18cf4beca73e09dd1f087a16417422c782561ba8e3790f4a8eb426d50c287",
+      "bytes": 19415
+    },
+    ".data/collaboration-evidence/continuation-20261030/learning/fresh-candidate.diff": {
+      "sha256": "8e45553ee31225bc7c086b53c7491acecda933d374f3858b492de49e5d48252d",
+      "bytes": 1692
+    },
+    ".data/collaboration-evidence/continuation-20261030/learning/generalization.json": {
+      "sha256": "6fbebc24ae99bbc78fac9804b5a4dab11a19a099667dc442ba9a1f49a458a430",
+      "bytes": 17427
+    },
+    ".data/collaboration-evidence/continuation-20261030/learning/historical-integrity-before.json": {
+      "sha256": "c917f92e2ddc06c7c87ac3f5b472f8aa6182fb75d3fd2ca31bdf20c2b9b960e2",
+      "bytes": 42989
+    },
+    ".data/collaboration-evidence/continuation-20261030/learning/historical-integrity-current.json": {
+      "sha256": "710bee87dd22ea7b2a838c35d7e7ea8e63dbb73d5cad11e3268f14d70da22daa",
+      "bytes": 534
+    },
+    ".data/collaboration-evidence/continuation-20261030/learning/restart-verification-4c15023.private.json": {
+      "sha256": "7c58a64f1fcf89f81ddb7ee7d72ee71037c6306f7667ba54b175496563f4ff85",
+      "bytes": 943
+    },
+    ".data/collaboration-evidence/continuation-20261030/learning/service-launch.json": {
+      "sha256": "ab2c615668745faa9b49484cc15468505f2ad5d2d5f4fcee176bd93726451752",
+      "bytes": 284
+    },
+    ".data/collaboration-evidence/continuation-20261030/learning/service.log": {
+      "sha256": "c172813f23a85525d29f7696598cd9c44b2c067c68110d214927ad21c43875f8",
+      "bytes": 193
+    },
+    ".data/collaboration-evidence/continuation-20261030/learning/restart-4c15023.log": {
+      "sha256": "897e5c0a04a058747f62c50cef51b82894a2334f49d55f70c4c0fa53d51fab1f",
+      "bytes": 193
+    },
+    ".data/collaboration-evidence/continuation-20261030/native-host/host.jsonl": {
+      "sha256": "3d5eae164c1fce166fcc053d972fdac082a8e0dcbb9f48ff301a24aabede5463",
+      "bytes": 76778
+    },
+    ".data/collaboration-evidence/continuation-20261030/native-host/host.stderr": {
+      "sha256": "65b983d87b00bf7e9f92da2ef2d87b2663e8c57657ff52c717a791a9f856812e",
+      "bytes": 1533
+    },
+    ".data/collaboration-evidence/continuation-20261030/native-host/last-message.txt": {
+      "sha256": "12ec2171127d5d4e1ecd2f347c4f1440fac98aeb5612308936025c16b2496eaf",
+      "bytes": 1136
+    },
+    ".data/collaboration-evidence/continuation-20261030/native-host/invocation.private.json": {
+      "sha256": "81997f00dabfd3297e89dfcd10a54d55f000e977090a0fc51067ab8883db6752",
+      "bytes": 3609
+    },
+    ".data/collaboration-evidence/continuation-20261030/native-host/result.private.json": {
+      "sha256": "c0539bc99e70f9300cc4a1615429416d0f2ad91a45728861efd89587e5d78f6d",
+      "bytes": 40013
+    },
+    ".data/collaboration-evidence/continuation-20261030/native-host/service.log": {
+      "sha256": "c5e4585f8bf214da4013738d44a460aa2f67dd89be82ba0a725b456b76a6f45e",
+      "bytes": 194
+    },
+    ".data/collaboration-evidence/continuation-20261030/drivers/accept-learning.mjs": {
+      "sha256": "169c7e28d938c6a93333be264d178a0fd23367b259b2b96444e9921c5390434c",
+      "bytes": 2946
+    },
+    ".data/collaboration-evidence/continuation-20261030/drivers/native-host.mjs": {
+      "sha256": "0cafb5d2d27f9f8e035bfc6d74da57344b1f4ed2f8ee42056749ee1ea99d200a",
+      "bytes": 5521
+    },
+    ".data/collaboration-evidence/continuation-20261030/drivers/restart-learning.mjs": {
+      "sha256": "d4d8ba6ae741452302b359a455363358c31f254c570cbd317e8addf190f9e359",
+      "bytes": 4205
+    },
+    ".data/collaboration-evidence/continuation-20261030/focused-tests.log": {
+      "sha256": "c90565260c6225cc3f9e7a8202bb7045711edbf9cf16295cc8b7e23cf7e643d1",
+      "bytes": 2818
+    }
+  },
+  "remaining": [
+    "Research-quality repair design and reviewed implementation before a separately approved fresh research pilot",
+    "Five original-source claims and supported recommendation; both exhausted report jobs remain PARTIAL",
+    "Separately approved bounded overnight validation; old blocked job retains two automatic Codex reviews",
+    "Private phone access and final personal installation/restart/rollback gates",
+    "Reconcile any remaining Stage07 native model-selection and installation-specific checks before stage acceptance"
+  ],
+  "compatibility": "Original draft hash retained on activation; original historical source state was never restored or changed. No budget extension, old-job recreation, primary merge, push, final service/skills/MCP promotion, provider/runtime/authentication-policy changes."
+}
