@@ -1,3 +1,15 @@
+# Resume after bounded live validation — 2026-10-31 Pacific
+
+Read [receipt12](receipts/12-live-release-validation.json) and current ENGINEERING_STATUS first. Runtime remains284eb85/package8fb675896247e82a27703240f1b2662bc7d3dec653d96ef0795350ab8c04c18c. Owner ignored .data/live-release-20261031 contains exact authorization, final receipt, independent audit,101checksummed artifacts and executable probes. No product source/protected check changed; no personal installation.
+
+Research goal5471f70a-5df4-4d32-bc2d-42f6195d148d/task20e668dd-4e8f-4081-a798-46bf3a77b549/remote f895a4c8-90ab-4e95-b430-f1c14ac1fc4b is terminal PARTIAL:20model/1search/7download/0officialclaims. Disconnected completion/collections passed; researchquality FAILED. Do not resubmit/replace/resume/renew this or historical failed jobs. Proposed offline fix direction is deterministic source-hash/range quote selection and clearer bounded report-section examples, keeping exact provenance. Another live research budget needs a new explicit decision.
+
+Overnight goal97114d08-9529-4fc5-af93-4d4bbf8d3940/task495581d9-6f1b-4978-aa02-8002fbc50182 completed checked integration5d170c02c10f81388208a8917705bb70282e2de2:1planner/1coding/1review/1attempt,65,565independentcases. No native rescue. Explicit native parameter test also executed ONCE, no retry; resolved model and host usage unknown. Keep these completed proofs; do not rerun them. Both disposable Mac processes and Spark one-shot are stopped/quiescent; current-state backup is evidence, never spare budget.
+
+FULL RELEASE remains incomplete. Final personal promotion/installed-host/phone/persistence/recovery gates were not attempted because research failed. Keep native full-release goal incomplete. Independent review found no material authority/accounting issue; report preserves semantic/provenance failures. No primary merge/push/publication/model-runtime/auth-policy changes.
+
+---
+
 # Resume after authorized engineering — 2026-10-31
 
 Read owner AGENTS.md, PRODUCT_CONTEXT/MVP, private memory and the current

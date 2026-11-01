@@ -1,3 +1,13 @@
+# Live release validation — 2026-10-31 Pacific
+
+**FULL RELEASE INCOMPLETE.** [Live receipt12](receipts/12-live-release-validation.json) supersedes earlier pending-live status. The one approved research pilot exhausted20calls/1search/7downloads with0officialclaims/recommendations and remains PARTIAL. Five final inexact quotation failures were reproduced; eight rejected candidate claims were assessed diagnostically, not accepted. Actual SSH disconnection, same-job quiescent completion and identical collections passed.
+
+The separately approved overnight pilot PASSED with1planner/1coding/1attempt/1read-onlyCodexreview, protected checked integration and65,565independentcases. Explicit native gpt-6.1-sol/low/fork-none invocation matched the manifest; resolved model/usage remain unexposed. New live disposable current-state restart/receipt replay preserved IDs/deadlines/requests/events/keys/spending. Both Mac candidate processes and the Spark one-shot stopped cleanly. Strict3763file package,12remote source files and131historical evidence hashes verified; runtime source unchanged.
+
+No personal promotion occurred. Final skills/MCP/MacLaunchAgent/persistentSparkWatcher/privatephone/installedrecovery remain gated by failed research quality.22newDeepSeekrequests/1automaticreview; unknown usage stays unknown. A further research pilot requires a separate new explicit decision after reviewed offline repair. Do not recreate exhausted identities or rerun completed learning/inheritedCLI/overnight pilots merely to obtain another result.
+
+---
+
 # Engineering candidate — 2026-10-31
 
 The current engineering objective is a reviewed local candidate and concrete gated

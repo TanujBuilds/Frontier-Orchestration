@@ -1,0 +1,141 @@
+{
+  "stage": "12-live-release-validation",
+  "date": "2026-10-31",
+  "timezone": "America/Los_Angeles",
+  "status": "incomplete",
+  "fullReleaseAccepted": false,
+  "engineeringBaseline": "371605a900769dc393eab7472733ed2609ebab8d",
+  "runtimeSource": "284eb85b221fe9380675420452a81bfb5e5cc25f",
+  "runtimeSourceChanged": false,
+  "package": {
+    "contentHash": "8fb675896247e82a27703240f1b2662bc7d3dec653d96ef0795350ab8c04c18c",
+    "strictFiles": 3763,
+    "remoteSourcesMatch": 12,
+    "pinnedPythonDistributions": 18,
+    "personalPromoted": false
+  },
+  "authorization": {
+    "newResearchPilots": 1,
+    "newOvernightPilots": 1,
+    "explicitHostModelInvocations": 1,
+    "maximumDeepSeekRequests": 29,
+    "replacementPilotsAuthorized": 0
+  },
+  "research": {
+    "goalId": "5471f70a-5df4-4d32-bc2d-42f6195d148d",
+    "taskId": "20e668dd-4e8f-4081-a798-46bf3a77b549",
+    "remoteId": "f895a4c8-90ab-4e95-b430-f1c14ac1fc4b",
+    "approvalHash": "397c62db6d8b6f355777d8745d416be6c261413af3da762d2ec87f1f94c3d373",
+    "remoteHash": "2e346d2c3b9e67f8849a6d5af8ce62af7c40d5535b5959158fec61414be6d15a",
+    "status": "partial",
+    "officialClaims": 0,
+    "officialRecommendations": 0,
+    "modelCalls": 20,
+    "searches": 1,
+    "downloads": 7,
+    "automaticCodexReviews": 0,
+    "lastThreePhases": [
+      "draft",
+      "audit",
+      "repair"
+    ],
+    "reason": "No report passed exact saved-passage validation. Five final RQ/Celery quotations collapsed line breaks.",
+    "qualityGate": "failed",
+    "diagnosticRejectedClaimsReviewed": 8,
+    "diagnosticChecksDoNotReplaceOfficialAcceptance": true,
+    "submissionSessionActuallyDisconnected": true,
+    "sameIdentityFinishedQuiescent": true,
+    "pendingRequests": 0,
+    "independentCollectionsIdentical": 2,
+    "adapterCollectionsVerified": 1,
+    "finalReceiptHash": "80bccd2c86b4486cc83c5abb5f859d5742fc81bdc1d74d7978e1dc6e2651c883"
+  },
+  "overnight": {
+    "goalId": "97114d08-9529-4fc5-af93-4d4bbf8d3940",
+    "taskId": "495581d9-6f1b-4978-aa02-8002fbc50182",
+    "approvalHash": "8e9c4ef83f7468aa3add5d1a3fe4f75275a0357ee85e0078cb3505a8e241e865",
+    "status": "completed",
+    "plannerCalls": 1,
+    "codingCalls": 1,
+    "automaticReadOnlyCodexReviews": 1,
+    "attempts": 1,
+    "limits": {
+      "goalHours": 1,
+      "maxTasks": 1,
+      "plannerRequests": 3,
+      "taskSeconds": 1800,
+      "taskAttempts": 3,
+      "taskModelCalls": 6,
+      "taskReviews": 1,
+      "questions": 0
+    },
+    "nativeImplementationFallback": false,
+    "candidateCommit": "fb598868c3114fef180ac0778f686181a8a11c98",
+    "integrationCommit": "5d170c02c10f81388208a8917705bb70282e2de2",
+    "protectedIntegrationChecksPassed": true,
+    "independentCasesPassed": 65565,
+    "finalReceiptHash": "ce2a7d78e4526be21b6633b422ee83f3abaf30f4beb94aa118181b2fb01e2e31"
+  },
+  "nativeExplicit": {
+    "requestedModel": "gpt-6.1-sol",
+    "reasoningEffort": "low",
+    "forkTurns": "none",
+    "invocations": 1,
+    "retries": 0,
+    "returnedManifestMatched": true,
+    "resolvedModel": null,
+    "usage": "unexposed",
+    "receiptProvenance": "Actual conversation tool call/result captured; not exported host trace"
+  },
+  "spending": {
+    "newDeepSeekRequests": 22,
+    "automaticCodexReviews": 1,
+    "independentPrimaryDownloads": 6,
+    "knownProviderReportedDeepSeekTokens": 390552,
+    "unknown": "Coding SSE usage and automatic/native/main/reviewer usage not exposed; never zeroed",
+    "independentNativeEvidenceReviewRuns": 1
+  },
+  "verification": {
+    "strictPackageAfter": true,
+    "remoteSourcesAfter": true,
+    "historicalArtifactsUnchanged": 131,
+    "exhaustedArtifactsUnchanged": 8,
+    "historicalDatabaseBytesUnchanged": true,
+    "liveDisposableStateRestart": {
+      "passed": true,
+      "newPidAndOwner": true,
+      "requests": 3,
+      "events": 199,
+      "idsDeadlinesSpendingKeysReceiptsPreserved": true,
+      "replayNewRequests": 0,
+      "replayNewEvents": 0
+    },
+    "consistentCurrentStateBackupIntegrityChecked": true,
+    "databaseRestored": false,
+    "bothDisposableMacProcessesExited": 0,
+    "sparkOneShotInactive": true,
+    "personalInstalledRecovery": "not performed; gated",
+    "fullHistoricalSuites": "Prior accepted326Node/112Python/browser retained; not rerun absent source changes"
+  },
+  "independentReview": {
+    "materialAuthorityAccountingFindings": 0,
+    "receiptHashesRecomputed": true,
+    "qualityFailurePreserved": true
+  },
+  "evidence": {
+    "localIgnoredRoot": ".data/live-release-20261031",
+    "indexedArtifacts": 101,
+    "indexSha256": "e1cd18dd5f76d51e103824853f7adca9f91e46cc1c3088e0bfcce1161650fe17",
+    "executableProbesRetained": true,
+    "privateConfigAndConnectionKeysExcluded": true
+  },
+  "promotion": {
+    "performed": false,
+    "skillsMcpMacLaunchAgentSparkWatcherPhone": "not promoted",
+    "actualPhoneAcceptance": false,
+    "finalInstalledHostAndRecovery": false,
+    "reason": "Research quality and five-official-claim gates failed"
+  },
+  "next": "Reviewed offline citation-generation repair proposal, then separate explicit new research pilot authorization. Do not rerun terminal pilots or renew budgets. Final promotion remains gated.",
+  "boundaries": "No primary merge, push, public publication, new provider, authentication-policy or model-runtime change."
+}
