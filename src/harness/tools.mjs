@@ -1,6 +1,6 @@
 import {randomUUID} from 'node:crypto';
 import {setTimeout as delay} from 'node:timers/promises';
-import {keys,integer,text,digest,goalInputSchema,taskInputSchema} from './contracts.mjs';
+import {keys,integer,text,digest,goalDispatchInputSchema,taskDispatchInputSchema} from './contracts.mjs';
 import {Goals} from './goals.mjs';
 import {Worker} from './worker.mjs';
 import {NativeResearch} from './native-research.mjs';
@@ -30,13 +30,13 @@ export class Dispatcher {
   add('mode_register','Register a versioned policy composed only from reviewed capabilities. Existing goals stay pinned.',{definition:obj},['definition'],true,(i,k)=>c.store.command(k,{op:'mode.register',...i},()=>{const definition=c.registry.registerMode(i.definition);c.store.put('mode',{id:`${definition.id}-${definition.version}`,definition});return definition;}));
   add('workflow_register','Register a validated dependency template using supported capabilities.',{definition:obj},['definition'],true,(i,k)=>c.store.command(k,{op:'workflow.register',...i},()=>{const definition=c.registry.registerWorkflow(i.definition);c.store.put('workflow',{id:`${definition.id}-${definition.version}`,definition});return definition;}));
   add('workflow_submit','Instantiate an exact registered workflow within the approved goal. Dependency mapping and submission are atomic.',{goalId:str,workflowId:str,version:{...number,minimum:1},submissionId:str},['goalId','workflowId','version','submissionId'],true,(i,k)=>c.submitWorkflow(i,k));
-  add('goal_prepare','Prepare an exact reviewable goal manifest. Does not activate.',{manifest:goalInputSchema},['manifest'],true,(i,k)=>c.prepareGoal(i.manifest,k));
+  add('goal_prepare','Prepare an exact reviewable goal manifest. Does not activate.',{manifest:goalDispatchInputSchema},['manifest'],true,(i,k)=>c.prepareGoal(i.manifest,k));
   add('goal_activate','Approve the exact prepared hash and activate within its limits.',{goalId:str,hash:str},['goalId','hash'],true,(i,k)=>c.activateGoal(i,k));
   add('goal_get','Inspect one goal or all goal summaries.',{goalId:str},[],false,i=>i.goalId?c.getGoal(i.goalId):c.snapshot());
-  add('goal_revision_prepare','Prepare a changed goal version without resetting spending.',{goalId:str,expectedHash:str,manifest:goalInputSchema},['goalId','expectedHash','manifest'],true,(i,k)=>this.goals.prepareRevision(i,k));
+  add('goal_revision_prepare','Prepare a changed goal version without resetting spending.',{goalId:str,expectedHash:str,manifest:goalDispatchInputSchema},['goalId','expectedHash','manifest'],true,(i,k)=>this.goals.prepareRevision(i,k));
   add('goal_revision_activate','Activate the exact changed version after quiescence.',{revisionId:str,hash:str},['revisionId','hash'],true,(i,k)=>this.goals.activateRevision(i,k));
   add('goal_finalize','Finalize accepted work, or explicitly partial stopped work, with a hashed receipt.',{goalId:str,summary:str,partial:bool},['goalId','summary'],true,(i,k)=>this.goals.finalize(i,k));
-  add('task_submit','Submit a narrower assignment within the active approved goal. Collaborative consult/coding candidates wait for supervisor review; DeepSeek-only uses checks without Codex.',{goalId:str,task:taskInputSchema},['goalId','task'],true,(i,k)=>c.submitTask({...i.task,goalId:i.goalId},k));
+  add('task_submit','Submit a narrower assignment within the active approved goal. Collaborative consult/coding candidates wait for supervisor review; DeepSeek-only uses checks without Codex.',{goalId:str,task:taskDispatchInputSchema},['goalId','task'],true,(i,k)=>c.submitTask({...i.task,goalId:i.goalId},k));
   add('task_get','Inspect a task, its checkpoint and counters.',{taskId:str},['taskId'],false,i=>c.getTask(i.taskId));
   add('artifacts_list','List only saved allowlisted artifacts with checksums; no arbitrary paths.',{taskId:str},['taskId'],false,i=>this.artifacts.list(i.taskId));
   add('observer_snapshot','Read bounded model/task/agent overviews. No execution controls.',{goalId:str,actor:{...str,enum:['codex','deepseek']}},[],false,i=>this.observer.snapshot(i));
