@@ -1,0 +1,421 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:frontier:offline-readiness-receipt:1",
+  "title": "Offline advisory receipt (not installation authority)",
+  "$ref": "#/$defs/receipt",
+  "$defs": {
+    "candidate": {
+      "type": "object",
+      "properties": {
+        "contentHash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "manifestSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "sourceCommit": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        }
+      },
+      "required": [
+        "contentHash",
+        "manifestSha256",
+        "sourceCommit"
+      ],
+      "additionalProperties": false
+    },
+    "policy": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "const": 2
+        },
+        "finish": {
+          "const": "selectors_only"
+        },
+        "discovery": {
+          "const": "search_required"
+        }
+      },
+      "required": [
+        "version",
+        "finish",
+        "discovery"
+      ],
+      "additionalProperties": false
+    },
+    "file": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 400,
+          "description": "Relative regular file within receipt/index directory. No absolute, dot/empty segments, backslash, control characters, symlinks; maximum16segments."
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 8388608
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "bytes"
+      ],
+      "additionalProperties": false
+    },
+    "artifact": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 400,
+          "description": "Relative regular file within receipt/index directory. No absolute, dot/empty segments, backslash, control characters, symlinks; maximum16segments."
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 8388608
+        },
+        "role": {
+          "enum": [
+            "proof",
+            "report",
+            "source",
+            "assessment",
+            "receipt",
+            "review"
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "bytes",
+        "role"
+      ],
+      "additionalProperties": false
+    },
+    "gate": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "enum": [
+            "implementation",
+            "live_research_quality",
+            "personal_activation",
+            "installed_host_discovery",
+            "persistent_research_worker",
+            "physical_phone",
+            "installed_restart",
+            "active_policy_rollback"
+          ]
+        },
+        "status": {
+          "enum": [
+            "passed",
+            "failed",
+            "pending",
+            "unknown",
+            "not_applicable"
+          ]
+        },
+        "applicability": {
+          "enum": [
+            "current",
+            "historical",
+            "not_applicable"
+          ]
+        },
+        "scope": {
+          "enum": [
+            "offline",
+            "fixture",
+            "live",
+            "installed"
+          ]
+        },
+        "authority": {
+          "enum": [
+            "independent_native",
+            "operator",
+            "coordinator",
+            "model"
+          ]
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/artifact"
+          },
+          "maxItems": 32
+        }
+      },
+      "required": [
+        "name",
+        "status",
+        "applicability",
+        "scope",
+        "authority",
+        "artifacts"
+      ],
+      "additionalProperties": false
+    },
+    "receipt": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": 1
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]{1,100}$"
+        },
+        "candidate": {
+          "$ref": "#/$defs/candidate"
+        },
+        "policy": {
+          "$ref": "#/$defs/policy"
+        },
+        "gates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/gate"
+          },
+          "maxItems": 8
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "candidate",
+        "policy",
+        "gates"
+      ],
+      "additionalProperties": false
+    },
+    "assessment": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": 1
+        },
+        "kind": {
+          "const": "independent-semantic-assessment"
+        },
+        "candidate": {
+          "$ref": "#/$defs/candidate"
+        },
+        "policy": {
+          "$ref": "#/$defs/policy"
+        },
+        "status": {
+          "enum": [
+            "passed",
+            "failed",
+            "pending"
+          ]
+        },
+        "reportSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "sourceSha256s": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "reviewSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "criteria": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-zA-Z0-9_-]{1,100}$"
+              },
+              "status": {
+                "enum": [
+                  "passed",
+                  "failed",
+                  "pending"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "status"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 32,
+          "minItems": 1
+        }
+      },
+      "required": [
+        "schema",
+        "kind",
+        "candidate",
+        "policy",
+        "status",
+        "reportSha256",
+        "sourceSha256s",
+        "reviewSha256",
+        "criteria"
+      ],
+      "additionalProperties": false
+    },
+    "index": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": 1
+        },
+        "receipts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/file"
+          },
+          "maxItems": 32
+        },
+        "seal": {
+          "type": "object",
+          "properties": {
+            "done": {
+              "$ref": "#/$defs/file"
+            },
+            "result": {
+              "$ref": "#/$defs/file"
+            },
+            "resultSha256": {
+              "$ref": "#/$defs/file"
+            },
+            "index": {
+              "$ref": "#/$defs/file"
+            }
+          },
+          "required": [
+            "done",
+            "result",
+            "resultSha256",
+            "index"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schema",
+        "receipts"
+      ],
+      "additionalProperties": false
+    },
+    "sealedIndex": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": 1
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/file"
+          },
+          "maxItems": 256
+        }
+      },
+      "required": [
+        "schema",
+        "artifacts"
+      ],
+      "additionalProperties": false
+    },
+    "sealedResult": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": 1
+        },
+        "candidateContentHash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "indexSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "status": {
+          "enum": [
+            "complete",
+            "failed",
+            "incomplete"
+          ]
+        }
+      },
+      "required": [
+        "schema",
+        "candidateContentHash",
+        "indexSha256",
+        "status"
+      ],
+      "additionalProperties": false
+    },
+    "done": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": 1
+        },
+        "resultSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "indexSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "candidateContentHash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "status": {
+          "enum": [
+            "complete",
+            "failed",
+            "incomplete"
+          ]
+        }
+      },
+      "required": [
+        "schema",
+        "resultSha256",
+        "indexSha256",
+        "candidateContentHash",
+        "status"
+      ],
+      "additionalProperties": false
+    }
+  }
+}
