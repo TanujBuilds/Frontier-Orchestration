@@ -78,8 +78,9 @@ def normalize_manifest(raw):
     if 'research_policy' in raw:
         policy = raw['research_policy']
         _keys(policy, tuple(RESEARCH_POLICY), 'research_policy')
-        if type(policy.get('version')) is not int or policy != RESEARCH_POLICY:
-            raise StateError('unsupported research_policy; require closed version1 selector-only/search-required contract')
+        if (type(policy.get('version')) is not int or policy.get('version') not in (1,2)
+                or policy != {**RESEARCH_POLICY,'version':policy['version']}):
+            raise StateError('unsupported research_policy; require closed version1 or version2 selector-only/search-required contract')
         if extension.get('executor') == 'operator':
             raise StateError('operator research cannot select autonomous research_policy')
         extension['research_policy'] = dict(policy)

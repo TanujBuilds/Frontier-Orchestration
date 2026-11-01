@@ -26,7 +26,7 @@ const TASK_LIMITS={coding:{seconds:28800,attempts:5,modelCalls:50,reviews:2,ques
 const taskCeilingsInputSchema=objectSchema(Object.fromEntries(Object.entries(TASK_LIMITS).map(([kind,limits])=>[
  kind,objectSchema(Object.fromEntries(Object.entries(limits).map(([name,max])=>[name,{type:'integer',minimum:name==='questions'||name==='reviews'?0:1,maximum:max}]))),
 ])));
-export const researchPolicySchema=objectSchema({version:{type:'integer',enum:[1]},finish:{type:'string',enum:['selectors_only']},discovery:{type:'string',enum:['search_required']}},['version','finish','discovery']);
+export const researchPolicySchema=objectSchema({version:{type:'integer',enum:[1,2]},finish:{type:'string',enum:['selectors_only']},discovery:{type:'string',enum:['search_required']}},['version','finish','discovery']);
 export const scopeInputSchema=objectSchema({seedUrls:stringsSchema,includeDomains:stringsSchema,excludeDomains:stringsSchema});
 export const goalInputSchema=objectSchema({
  submissionId:stringSchema,objective:stringSchema,acceptance:stringsSchema,mode:{...stringSchema,description:'Registered mode id; collaborative is the default.'},modeVersion:{type:'integer',minimum:1},environment:{type:'string',enum:['live','fixture']},scope:scopeInputSchema,researchPolicy:researchPolicySchema,
@@ -54,7 +54,11 @@ export class Registry {
   research.version=2;research.actors=['deepseek'];
   research.inputSchema.properties.actor={enum:['deepseek']};
   research.inputSchema.properties.researchPolicy=clone(researchPolicySchema);
+  research.inputSchema.properties.researchPolicy.properties.version.enum=[1];
   this.capabilities.set('research@2',research);
+  const supportResearch=clone(research);supportResearch.version=3;
+  supportResearch.inputSchema.properties.researchPolicy.properties.version.enum=[2];
+  this.capabilities.set('research@3',supportResearch);
   for(const m of baseModes)this.registerMode(m);
  }
  registerMode(raw){
@@ -87,7 +91,7 @@ export function sourceScope(raw={}) {
 }
 export function normalizeResearchPolicy(raw){
  keys(raw,['version','finish','discovery'],'research policy');
- if(raw.version!==1||raw.finish!=='selectors_only'||raw.discovery!=='search_required')throw Error('Unsupported research policy');
+ if(![1,2].includes(raw.version)||raw.finish!=='selectors_only'||raw.discovery!=='search_required')throw Error('Unsupported research policy');
  return clone(raw);
 }
 export function normalizeGoal(raw,registry=new Registry()){
@@ -110,7 +114,7 @@ export function normalizeGoal(raw,registry=new Registry()){
  if(mode.review!=='operator'&&limits.reviewAgentRuns)throw Error('Mode prohibits Codex review agents');
  let project=null;
  if(raw.project){keys(raw.project,['repo','baseCommit','readPaths','writePaths','checks'],'project');project=clone(raw.project);text(project.repo,'repository');if(!path.isAbsolute(project.repo))throw Error('Repository must be absolute');if(!/^[a-f0-9]{40}$/.test(project.baseCommit??''))throw Error('Invalid base commit');validatePermissions(project);}
- return {schema:1,environment,submissionId:identifier(raw.submissionId,'submissionId'),objective:text(raw.objective,'objective'),acceptance:strings(raw.acceptance,'acceptance'),project,mode,capabilities:registry.snapshot().capabilities.filter(c=>mode.capabilities.includes(c.id)&&c.version===(policy&&c.id==='research'?2:1)),scope:sourceScope(raw.scope),limits,...(policy?{researchPolicy:policy}:{})};
+ return {schema:1,environment,submissionId:identifier(raw.submissionId,'submissionId'),objective:text(raw.objective,'objective'),acceptance:strings(raw.acceptance,'acceptance'),project,mode,capabilities:registry.snapshot().capabilities.filter(c=>mode.capabilities.includes(c.id)&&c.version===(policy&&c.id==='research'?policy.version+1:1)),scope:sourceScope(raw.scope),limits,...(policy?{researchPolicy:policy}:{})};
 }
 export function normalizeTask(raw,goal,registry=new Registry()) {
  keys(raw,['submissionId','kind','actor','objective','context','acceptance','dependsOn','priority','permissions','scope','limits','researchPolicy'],'task');

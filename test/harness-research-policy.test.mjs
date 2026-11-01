@@ -11,7 +11,7 @@ import {ResearchAdapter} from '../src/harness/research.mjs';
 const policy={version:1,finish:'selectors_only',discovery:'search_required'};
 const brief={submissionId:'legacy-selectors-hash',objective:'Keep prior research authority',acceptance:['Legacy hashes unchanged'],mode:'deepseek_only',environment:'fixture'};
 const assignment={submissionId:'legacy-r',kind:'research',objective:'Read primary evidence',acceptance:['Cited report']};
-const invalidPolicies=[null,[],true,{}, {...policy,version:2},{...policy,version:true},{...policy,version:'1'}, {...policy,finish:'quotes'}, {...policy,discovery:'optional'}, {...policy,extra:true}, {version:1,finish:'selectors_only'}, {version:1,discovery:'search_required'}];
+const invalidPolicies=[null,[],true,{}, {...policy,version:3},{...policy,version:true},{...policy,version:'1'}, {...policy,finish:'quotes'}, {...policy,discovery:'optional'}, {...policy,extra:true}, {version:1,finish:'selectors_only'}, {version:1,discovery:'search_required'}];
 
 test('absent research policy preserves literal legacy goal, capability and task hashes',()=>{
  const goal=normalizeGoal(brief),task=normalizeTask(assignment,goal);
@@ -53,12 +53,12 @@ test('policy is autonomous research only and never applies to operator or other 
 test('discovery exposes policy on goal/task and new capability without editing legacy capability schema',()=>{
  for(const schema of [goalInputSchema,taskInputSchema]){
   const pin=schema.properties.researchPolicy;assert.ok(pin);assert.equal(pin.additionalProperties,false);
-  assert.deepEqual(pin.required,['version','finish','discovery']);assert.deepEqual(pin.properties.version.enum,[1]);
+  assert.deepEqual(pin.required,['version','finish','discovery']);assert.deepEqual(pin.properties.version.enum,[1,2]);
   assert.deepEqual(pin.properties.finish.enum,['selectors_only']);assert.deepEqual(pin.properties.discovery.enum,['search_required']);
  }
  const research=new Registry().snapshot().capabilities.filter(c=>c.id==='research');
  assert.equal(research.find(c=>c.version===1).inputSchema.properties.researchPolicy,undefined);
- assert.deepEqual(research.find(c=>c.version===2).inputSchema.properties.researchPolicy,goalInputSchema.properties.researchPolicy);
+ assert.deepEqual(research.find(c=>c.version===2).inputSchema.properties.researchPolicy,{...goalInputSchema.properties.researchPolicy,properties:{...goalInputSchema.properties.researchPolicy.properties,version:{type:'integer',enum:[1]}}});
 });
 
 async function coordinatorFixture(t){

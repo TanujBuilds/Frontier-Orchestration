@@ -6,10 +6,12 @@ from itertools import zip_longest
 
 _FIELDS={'source_id','text_sha256','start','end'}
 
-def make_passages(sources,windows,max_items=96):
+def make_passages(sources,windows,max_items=96,version=1):
     """Offer exact Python-character ranges in source prefixes and valid read windows."""
     if type(max_items) is not int or not 1<=max_items<=96:
         raise ValueError('passage catalog limit must be1..96')
+    if type(version) is not int or version not in (1,2):
+        raise ValueError('unsupported passage catalog version')
     groups=[]
     for sid,source in list(sources.items())[:50]:
         text=source['text'];digest=hashlib.sha256(text.encode()).hexdigest()
@@ -20,6 +22,17 @@ def make_passages(sources,windows,max_items=96):
                     and type(w.get('start')) is int and type(w.get('end')) is int
                     and 0<=w['start']<w['end']<=len(text)):
                 intervals.append((w['start'],w['end']))
+        if version==2:
+            # Round-robin separate read windows before source round-robin, so a
+            # prefix cannot consume every retained late-window opportunity.
+            catalogs=[_boundary_passages(text,start,end,sid,digest) for start,end in intervals]
+            group=[];seen=set()
+            for layer in zip_longest(*catalogs):
+                for row in layer:
+                    if row is not None and (row['start'],row['end']) not in seen:
+                        seen.add((row['start'],row['end']));group.append(row)
+            groups.append(group)
+            continue
         merged=[]
         for start,end in sorted(intervals):
             if merged and start<=merged[-1][1]:merged[-1]=(merged[-1][0],max(end,merged[-1][1]))
@@ -37,6 +50,56 @@ def make_passages(sources,windows,max_items=96):
                 offered.append(entry)
                 if len(offered)==max_items:return offered
     return offered
+
+
+# Presentation boundaries only: no natural-language entailment is inferred here.
+# A single newline often wraps a paragraph in extracted documentation; retain it.
+_BOUNDARY=re.compile(r'(?:[.!?。！？]["\')\]]*(?=\s|$)|\n[ \t]*\n|\n(?=[ \t]*(?:[-*•] |\d+[.)] )))')
+_ABBREVIATION=re.compile(r'(?:\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|vs|etc|Fig|No)|\b[A-Z]|\be\.g|\bi\.e)\.$',re.I)
+
+def _boundary_passages(text,start,end,sid,digest):
+    """Pack exact complete units; mark cut/long units incomplete, never repair text.
+
+    This deterministic heuristic handles common prose/list punctuation, not every
+    language or code grammar. complete_unit describes boundaries, never support.
+    """
+    segment=text[start:end];cuts=[]
+    for match in _BOUNDARY.finditer(segment):
+        stop=start+match.end()
+        if match.group()[0]=='.' and _ABBREVIATION.search(text[max(start,stop-16):stop]):continue
+        cuts.append((stop,True))
+    if not cuts or cuts[-1][0]!=end:cuts.append((end,False))
+    units=[];offset=start
+    # A retained window can start in the middle of a unit. Conservatively label
+    # that first unit incomplete unless a preceding clear boundary is present.
+    left_ok=start==0 or bool(re.search(r'[.!?。！？]["\')\]]*\s*$|\n\s*\n$',text[max(0,start-80):start]))
+    for stop,right_ok in cuts:
+        if stop<=offset:continue
+        complete=left_ok and right_ok
+        if stop-offset>1000:
+            for i in range(offset,stop,800):units.append((i,min(i+800,stop),False))
+        else:units.append((offset,stop,complete))
+        offset=stop;left_ok=True
+    packed=[]
+    for a,b,complete in units:
+        if packed and complete and packed[-1][2] and b-packed[-1][0]<=800:
+            packed[-1]=(packed[-1][0],b,True)
+        else:packed.append((a,b,complete))
+    retained=[]
+    for a,b,complete in packed:
+        if b-a<12:
+            if retained and max(b,retained[-1][1])-retained[-1][0]<=1000:
+                left,right,prior_complete=retained[-1]
+                # Trailing whitespace does not invalidate a complete sentence;
+                # other short fragments must carry both known boundaries.
+                retained[-1]=(left,max(right,b),prior_complete and (complete or not text[a:b].strip()))
+            elif end-start>=12:
+                left=max(start,b-12);right=min(end,max(b,left+12))
+                retained.append((left,right,False))
+        else:retained.append((a,b,complete))
+    return [{'source_id':sid,'text_sha256':digest,'start':a,'end':b,'text':text[a:b],
+             'catalog_version':2,'complete_unit':complete}
+            for a,b,complete in retained if b-a>=12]
 
 
 def resolve_report(report,sources,offered,strict=False):

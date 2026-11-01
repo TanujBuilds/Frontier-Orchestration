@@ -27,7 +27,7 @@ class StrictPolicyTests(unittest.TestCase):
   with self.assertRaises(state.StateError):self.store.submit(manifest(),j['manifest_hash'])
  def test_closed_unknown_policy_and_operator_reject(self):
   self.strict()
-  invalid=[None,{},True,{**POLICY,'version':True},{**POLICY,'version':2},{**POLICY,'finish':'quotes'},{**POLICY,'discovery':'optional'},{**POLICY,'trusted':True}]
+  invalid=[None,{},True,{**POLICY,'version':True},{**POLICY,'version':3},{**POLICY,'finish':'quotes'},{**POLICY,'discovery':'optional'},{**POLICY,'trusted':True}]
   for p in invalid:
    with self.subTest(p=p),self.assertRaises(state.StateError):state.normalize_manifest(manifest(research_policy=p))
   with self.assertRaises(state.StateError):state.normalize_manifest(manifest(schema=2,not_after=9000,collaboration={'supervisor':'none','max_questions':0},executor='operator',research_policy=POLICY))
