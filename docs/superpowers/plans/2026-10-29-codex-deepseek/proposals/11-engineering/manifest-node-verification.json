@@ -1,0 +1,29 @@
+{
+  "sourceCommit": "6b01f6d9dbad6e8a49b0150f30afe1a2c6a593de",
+  "proposalOnly": true,
+  "noCoordinatorCalls": true,
+  "noRequestsReserved": true,
+  "goalHash": "8e9c4ef83f7468aa3add5d1a3fe4f75275a0357ee85e0078cb3505a8e241e865",
+  "expectedTaskHash": "4edddf2acb0e423cdd34e08332d9f370a9d358666ce4d0d4d96102ac5dc49bb8",
+  "effectiveTaskLimits": {
+    "seconds": 1800,
+    "attempts": 3,
+    "modelCalls": 6,
+    "reviews": 1,
+    "questions": 0
+  },
+  "omittedTaskLimits": {
+    "seconds": 1800,
+    "attempts": 3,
+    "modelCalls": 6,
+    "reviews": 1,
+    "questions": 0
+  },
+  "expandedReviewRejected": true,
+  "plannerCeiling": {
+    "source": "src/harness/planning.mjs",
+    "reservedCalls": 3,
+    "notGoalInputField": true
+  },
+  "researchManifestSha256PendingPythonNormalization": true
+}

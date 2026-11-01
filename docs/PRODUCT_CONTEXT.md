@@ -81,3 +81,14 @@ The original October 2026 “Local AI Orchestrator” brief established the coor
 ## Overnight workflow decision (2026-10-21)
 
 The owner approved the scoped coding milestone with a review-only frontier: 1–10 ordered stages drafted by DeepSeek (or a deterministic template), five DeepSeek attempts per stage, at most two Codex review rounds per stage, no Codex planning by default, and no Codex code edits at any point. Eight hours by default and a thirty-minute provider reconnect window remain. The Mac owns the worktree and check execution. Approvals bind exact plan versions and permissions. Dependencies are prepared beforehand; expansion pauses for a newly approved plan. A disposable React/TypeScript task board is the first pilot. Fake/stub checks can proceed while the Sparks are unavailable; the release gate still requires real DeepSeek multi-stage execution with real Codex reviews.
+
+## Opt-in collaboration package (2026-10-31)
+
+The approved collaboration harness adds Codex-led native implementation,
+DeepSeek-only, Codex-only and overnight-review presets. Its coordinator owns
+approvals, scope and spending; Codex remains the conversation/control interface
+and the observer is read-only. This opt-in role split permits reviewed native
+implementation and does not change the legacy overnight review-only workflow
+above. The [engineering status](superpowers/plans/2026-10-29-codex-deepseek/ENGINEERING_STATUS.md)
+distinguishes local implementation, historical live evidence and unpassed final
+release gates. No personal promotion is implied by a locally passing candidate.

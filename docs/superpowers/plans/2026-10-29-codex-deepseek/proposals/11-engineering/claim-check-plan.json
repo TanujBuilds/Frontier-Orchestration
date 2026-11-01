@@ -1,0 +1,63 @@
+{
+  "status": "planned independent inspection, not factual certification",
+  "minimumMaterialClaims": 5,
+  "claimChecks": [
+    {
+      "id": "C1",
+      "option": "SQLite",
+      "question": "What survives process crash versus power loss in WAL mode, and how does synchronous configuration change the answer?",
+      "seeds": [
+        "https://www.sqlite.org/wal.html"
+      ],
+      "condition": "Exact saved original passage states the configuration/caveat; no generic exactly-once inference."
+    },
+    {
+      "id": "C2",
+      "option": "RQ/Redis",
+      "question": "What is actually stored durably, and what worker-death/abandoned-job/retry behavior is documented?",
+      "seeds": [
+        "https://python-rq.org/docs/workers/",
+        "https://python-rq.org/docs/exceptions/"
+      ],
+      "condition": "Distinguish RQ semantics from Redis persistence configuration; unsupported Redis claims remain gaps."
+    },
+    {
+      "id": "C3",
+      "option": "Celery",
+      "question": "How do acknowledgement timing, failure and retries interact with idempotent task design?",
+      "seeds": [
+        "https://docs.celeryq.dev/en/stable/userguide/tasks.html"
+      ],
+      "condition": "Do not equate broker acknowledgement or retry with exactly-once external effects."
+    },
+    {
+      "id": "C4",
+      "option": "Temporal",
+      "question": "Which workflow execution/history/replay guarantees are documented, and what caveats apply?",
+      "seeds": [
+        "https://docs.temporal.io/workflow-execution"
+      ],
+      "condition": "A replay statement must be about workflow state, not unsupported external effects."
+    },
+    {
+      "id": "C5",
+      "option": "Temporal activities",
+      "question": "What retry/idempotency guarantee applies to activities and external costly requests?",
+      "seeds": [
+        "https://docs.temporal.io/activity-definition"
+      ],
+      "condition": "Separate execution attempts, side-effect idempotency and workflow transaction semantics."
+    }
+  ],
+  "recommendation": {
+    "label": "inference",
+    "required": "Supported comparison across all three design families, clearly scoped single-host/local-filesystem assumptions, operational burden without invented prices/benchmarks, explicit lease/fencing implementation gaps."
+  },
+  "provenance": [
+    "Compare claim interpretation to current original public primary page",
+    "Compare exact quote with saved source ID/hash/range and saved length",
+    "Preserve contrary passages, truncated-end caveats and unsupported coverage",
+    "Collect finalized packet twice and compare checksums and original manifest hash",
+    "Save independent review separately from model audit; a partial report remains partial"
+  ]
+}

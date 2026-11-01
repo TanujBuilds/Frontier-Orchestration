@@ -1,0 +1,46 @@
+{
+  "submissionId": "durable-queues-comparison-v1",
+  "kind": "research",
+  "actor": "deepseek",
+  "objective": "Compare durable queue designs for a single-host AI worker: a SQLite WAL-backed queue, Redis with RQ or Celery, and Temporal. Recommend the simplest appropriate approach for a modest number of local workers on one host and a local filesystem, while explaining when requirements justify the alternatives. Cover process-crash versus power-loss recovery, durable job state, claim/lease expiry and stale-worker fencing, retries and idempotency of external side effects (including costly model requests), and qualitative operational cost. Distinguish a database transaction or workflow replay guarantee from exactly-once external effects. Do not invent throughput benchmarks, pricing, implementation guarantees or deployment measurements. Explain unknowns and conditions.\nUse public primary sources only: official project documentation, vendor research about its own system, and owner repositories describing their own project. Perform at least one focused discovery search, then read the relevant official sources; search snippets are discovery only. Use the provided seeds efficiently. Produce a compact comparison and recommendation with at least five material factual claims supported by exact saved primary-source passages, spanning SQLite, RQ/Celery and Temporal. Recommendations must be labelled inference and supported by the factual claims. Preserve contrary evidence and important caveats. Your approved fixed budget is two hours, 30 searches, 50 downloads and 20 DeepSeek calls including finalization; leave calls for draft/self-check and finish within that original budget. No software installation, private files, shell execution, outreach or new jobs are authorized by this research question.\n",
+  "acceptance": [
+    "At least five material factual claims checked against exact saved public primary-source passages spanning SQLite,RQ/Celery,and Temporal",
+    "A supported recommendation labelled inference with contrary evidence and explicit gaps",
+    "No exactly-once external side-effect claim inferred merely from database transaction or workflow replay",
+    "Original 2-hour/20-model/30-search/50-download envelope including final three reserved draft/audit/repair calls",
+    "Spark continues after submission-session disconnection and finalized artifacts collect twice with identical checksums"
+  ],
+  "dependsOn": [],
+  "priority": "normal",
+  "scope": {
+    "seedUrls": [
+      "https://www.sqlite.org/wal.html",
+      "https://docs.python.org/3/library/sqlite3.html",
+      "https://python-rq.org/docs/workers/",
+      "https://python-rq.org/docs/exceptions/",
+      "https://docs.celeryq.dev/en/stable/userguide/tasks.html",
+      "https://docs.temporal.io/workflow-execution",
+      "https://docs.temporal.io/activity-definition"
+    ],
+    "includeDomains": [
+      "sqlite.org",
+      "python.org",
+      "python-rq.org",
+      "celeryq.dev",
+      "temporal.io",
+      "redis.io",
+      "github.com",
+      "raw.githubusercontent.com"
+    ],
+    "excludeDomains": []
+  },
+  "limits": {
+    "seconds": 7200,
+    "attempts": 20,
+    "modelCalls": 20,
+    "reviews": 0,
+    "questions": 0,
+    "searches": 30,
+    "downloads": 50
+  }
+}

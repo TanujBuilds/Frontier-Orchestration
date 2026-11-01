@@ -1,0 +1,14 @@
+{
+  "proposalOnly": true,
+  "noStoreConstructors": true,
+  "noSubmissionOrReservation": true,
+  "manifestHash": "27f494a11f45c4b2422f6f5b40c1bb99a5181fbc205ce4c4cc1337d762c3252b",
+  "schema": 1,
+  "limits": {
+    "seconds": 7200,
+    "searches": 30,
+    "downloads": 50,
+    "model_calls": 20
+  },
+  "scopeMatchesOriginal": true
+}

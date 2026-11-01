@@ -1,0 +1,149 @@
+{
+  "at": "2026-11-01T01:41:03.632760+00:00",
+  "objective": "E/F bounded pilots and deployment/rollback preparation",
+  "acceptance": "preparation delivered; live pilots, actual phone route, persistent service, final personal promotion remain incomplete and unactivated",
+  "sourceCommitAtReceipt": "284eb85b221fe9380675420452a81bfb5e5cc25f",
+  "sourceOwnership": "No tracked files, shared worktree files, original job records, services, runtime settings or credentials changed. Only owner ignored preparation directory written.",
+  "proposalOnly": true,
+  "liveDispatch": 0,
+  "newRequestReservations": 0,
+  "goalActivations": 0,
+  "automaticCodexCalls": 0,
+  "personalInstallations": 0,
+  "serviceChanges": 0,
+  "researchRoute": "one installed-candidate harness schema2 pilot; schema1 reference is never a second submission",
+  "researchBudget": {
+    "seconds": 7200,
+    "modelCalls": 20,
+    "searches": 30,
+    "downloads": 50,
+    "finalCallsReserved": 3,
+    "optionalReviewAgents": 0,
+    "automaticPlannerCalls": 0
+  },
+  "overnightBudget": {
+    "goalHours": 1,
+    "maxTasks": 1,
+    "plannerCalls": 3,
+    "taskSeconds": 1800,
+    "attempts": 3,
+    "codingModelCalls": 6,
+    "automaticCodexReviews": 1,
+    "questions": 0
+  },
+  "validated": [
+    "offline Node normalizeGoal/normalizeTask with omitted ceiling inheritance and rejection of review expansion",
+    "offline Python normalize_manifest/manifest_hash; original public source scope retained",
+    "fixture SQLite WAL backup includes committed state, stale-spending rollback rejected, unknown-schema downgrade rejected",
+    "read-only local original/completed-learning SQLite identity/deadline/counter snapshots and before-after file hashes unchanged",
+    "read-only existing-auth original/repaired Spark SQLite jobs, units and lingering",
+    "host-context Tailscale status and Serve JSON, no routes/Funnel at observation"
+  ],
+  "schema": {
+    "harnessDatabase": 1,
+    "researchDatabase": 1,
+    "researchManifests": [
+      1,
+      2
+    ],
+    "schemaIsNotSufficientForBackwardCompatibility": true
+  },
+  "privateObservations": {
+    "tailscaleRunning": true,
+    "serveRoutes": 0,
+    "publicFunnel": false,
+    "userLingering": true,
+    "persistentResearchUnitInstalled": false,
+    "historicalResearchUnitsLoaded": false,
+    "personalHarnessSkillsPresent": false,
+    "personalMcpRegistrationPresent": false,
+    "personalLaunchAgentPresent": false
+  },
+  "claims": "Five-claim checks and recommendation support are PLANNED, not certified. Historical exhausted official reports remain partial with zero accepted claims.",
+  "sourceHashes": [
+    {
+      "path": "src/harness/contracts.mjs",
+      "sha256": "2765ce67862a4227616334776a4be78a2dd9f0bd0a573fd1404c808c60700933"
+    },
+    {
+      "path": "src/harness/planning.mjs",
+      "sha256": "5c08d1fca34a6ce460a1bf1fe73c25345b71cbae39809612e88b8f065082f194"
+    },
+    {
+      "path": "src/harness/research.mjs",
+      "sha256": "d0207bce1f9f72bc309920096c0b3f5578b683736222d8adfa44e253eb490b5b"
+    },
+    {
+      "path": "src/harness/cli.mjs",
+      "sha256": "c83b618e14f624957f5f1366051eb72c07f0fb8fb36d04feed504751db43f1d7"
+    },
+    {
+      "path": "src/harness/api.mjs",
+      "sha256": "23010b862529e83de4a2f6c3daf1ff5001f4a63defa9bfcc28ca37d9b88eb65b"
+    },
+    {
+      "path": "src/harness/store.mjs",
+      "sha256": "d6bef20cf4472421046053fb4c99697688426ea06a7e5c57b5abbc69a5461fa7"
+    },
+    {
+      "path": "src/harness/package.mjs",
+      "sha256": "c3a20ddc34f41be94413724e0bacb6275f5a69a0fdbf8b2b99ea9fb1ac543f72"
+    },
+    {
+      "path": ".agents/skills/deep-research/scripts/research_state.py",
+      "sha256": "5503ea6949e997989dfadc98da94a690a76992ecff1956a39eb9247d09bf73f0"
+    },
+    {
+      "path": ".agents/skills/deep-research/deploy/deep-research.service.template",
+      "sha256": "543de2d709d7e2798ca7d3d898a8bbbfb36edc5653625830b65a79609eaf2f15"
+    },
+    {
+      "path": ".agents/skills/frontier-harness/references/operations.md",
+      "sha256": "4ed6c10c51d877fa30272b1597b1eba509314dc43af15f6a2500d1c91972d9e7"
+    },
+    {
+      "path": ".agents/skills/frontier-harness/references/compatibility.md",
+      "sha256": "44f149ed7e0b14ea41f1c9678e234c06e327a91028e81be092a9dd4bd01ee6fa"
+    }
+  ],
+  "commands": [
+    {
+      "command": "node PREPARATION/probes/prepare_manifests.mjs",
+      "result": "exit0; exact overnight limits; review expansion rejected"
+    },
+    {
+      "command": "python -B pure normalize_manifest/manifest_hash (no Store)",
+      "result": "exit0;7200s/20model/30search/50download; original scope unchanged"
+    },
+    {
+      "command": "node PREPARATION/probes/prepare_research_harness.mjs",
+      "result": "exit0; selected schema2 route goal/task normalized"
+    },
+    {
+      "command": "python3 PREPARATION/probes/inspect_state.py",
+      "result": "exit0; local DB/WAL/SHM bytes and records/counters unchanged"
+    },
+    {
+      "command": "python3 PREPARATION/probes/inspect_remote.py [--original]",
+      "result": "exit0; read-only both remote data roots; no pending operations; Linger=yes"
+    },
+    {
+      "command": "python3 -B PREPARATION/probes/rehearse_backup.py",
+      "result": "exit0; fixture-only rollback guard passed"
+    },
+    {
+      "command": "tailscale status --json / tailscale serve status --json (host context)",
+      "result": "valid JSON; Running; Serve{}; no Funnel"
+    },
+    {
+      "command": "rg private machine values in portable/",
+      "result": "exit1: no matches"
+    }
+  ],
+  "remainingDecisions": [
+    "Approve exactly one new research and one new overnight pilot within their explicit envelopes after reviewed local gates",
+    "Bind final committed candidate hash/path and matching isolated Spark candidate scripts; do not use historical package as new source",
+    "Run actual phone viewer/Host/Origin acceptance and final installed MCP/LaunchAgent/research-service recovery only after promotion gates",
+    "If explicit native host model proof still required, its separately bounded hosted session needs its own decision"
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "at": "2026-11-01T01:37:30.467820+00:00",
+  "fixtureOnly": true,
+  "noCoordinatorCalls": true,
+  "noModelsOrServices": true,
+  "snapshotIncludedCommittedWAL": true,
+  "identityPreserved": true,
+  "staleBudgetRestoreRejected": true,
+  "currentStatePackageRollbackAllowed": true,
+  "unknownSchemaRejected": true
+}

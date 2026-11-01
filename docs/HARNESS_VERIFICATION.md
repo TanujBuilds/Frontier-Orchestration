@@ -1,4 +1,11 @@
-# Harness verification — 2026-10-28
+# Harness verification
+
+Current collaboration evidence and remaining gates are tracked in
+[the engineering status](superpowers/plans/2026-10-29-codex-deepseek/ENGINEERING_STATUS.md).
+The following 2026-10-28 results describe the earlier harness revision; they do
+not certify the current candidate or supersede later failed collaboration pilots.
+
+## Historical harness verification — 2026-10-28
 
 Release is **incomplete**. The implementation is on the isolated `codex/harness`
 branch; it has not been merged or published. Installed service recovery and the

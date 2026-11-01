@@ -1,0 +1,42 @@
+{
+  "selectedRoute": "installed-candidate-harness-schema2",
+  "singlePilot": true,
+  "directSchema1File": "research.manifest.json is reference-only for original question/scope; DO NOT submit alongside harness pilot",
+  "goalHash": "397c62db6d8b6f355777d8745d416be6c261413af3da762d2ec87f1f94c3d373",
+  "taskSpecHash": "4b05b0ea4b7030cc3ce25ff3870a326fc45eb983149f2d0b4a32404a683ee57a",
+  "effectiveLimits": {
+    "seconds": 7200,
+    "attempts": 20,
+    "modelCalls": 20,
+    "reviews": 0,
+    "questions": 0,
+    "searches": 30,
+    "downloads": 50
+  },
+  "automaticPlannerCalls": 0,
+  "automaticCodexReviewCalls": 0,
+  "bridgeMapping": {
+    "schema": 2,
+    "submission_id": "ACTUAL_RETURNED_TASK_UUID",
+    "question": "task.spec.objective",
+    "mode": "goal.manifest.environment",
+    "scope": {
+      "seed_urls": "task.spec.scope.seedUrls",
+      "include_domains": "task.spec.scope.includeDomains",
+      "exclude_domains": "task.spec.scope.excludeDomains"
+    },
+    "limits": {
+      "seconds": "task.spec.limits.seconds",
+      "searches": "task.spec.limits.searches",
+      "downloads": "task.spec.limits.downloads",
+      "model_calls": "task.spec.limits.modelCalls"
+    },
+    "not_after": "Math.floor(task.deadline/1000)",
+    "collaboration": {
+      "supervisor": "codex",
+      "max_questions": 0
+    }
+  },
+  "deadline": "task.deadline = min(parent absolute goal deadline, original task start+7200000); never materialize or renew a placeholder deadline in advance",
+  "capture": "Save actual returned goal/task IDs, approval hash, task deadline, checkpoint.manifest, remoteHash and remoteJobId from THIS task. Ambiguous submit reuses the same identity/hash; never create a direct fallback job."
+}

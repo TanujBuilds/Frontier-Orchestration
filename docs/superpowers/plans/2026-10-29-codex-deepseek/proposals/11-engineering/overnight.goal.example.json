@@ -1,0 +1,52 @@
+{
+  "submissionId": "overnight-port-ceilings-20261031-proposed-v1",
+  "objective": "Verify existing overnight-review compatibility in exactly one DeepSeek coding task: implement isValidPort for integer JavaScript numbers from1 through65535 inclusive, reject other values, run protected checks, then require the existing check-gated read-only Codex review and integration. Plan one coding task with limits seconds1800,attempts3,modelCalls6,reviews1,questions0. No new commands, sources, dependencies or native execution fallback.",
+  "acceptance": [
+    "DeepSeek planning and implementation pass protected port checks",
+    "At most one automated read-only Codex review reserved after checks",
+    "Passing reviewed changes integrate without native execution fallback"
+  ],
+  "project": {
+    "repo": "/ABS/UNCHANGED/PREPARED/PORT/REPOSITORY",
+    "baseCommit": "3c1a6872a6c9ff0ceeb318248a500eae1d2d1fc3",
+    "readPaths": [
+      "src/",
+      "checks/"
+    ],
+    "writePaths": [
+      "src/port.mjs"
+    ],
+    "checks": [
+      {
+        "id": "verify",
+        "argv": [
+          "node",
+          "checks/verify.mjs"
+        ],
+        "timeoutMs": 20000
+      }
+    ]
+  },
+  "mode": "overnight_review",
+  "modeVersion": 1,
+  "environment": "live",
+  "scope": {
+    "seedUrls": [],
+    "includeDomains": [],
+    "excludeDomains": []
+  },
+  "limits": {
+    "hours": 1,
+    "maxTasks": 1,
+    "reviewAgentRuns": 0,
+    "taskLimits": {
+      "coding": {
+        "seconds": 1800,
+        "attempts": 3,
+        "modelCalls": 6,
+        "reviews": 1,
+        "questions": 0
+      }
+    }
+  }
+}

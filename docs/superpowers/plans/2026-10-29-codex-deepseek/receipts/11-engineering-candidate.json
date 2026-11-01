@@ -1,0 +1,226 @@
+{
+  "date": "2026-10-31",
+  "objective": "Complete authorized local repair, review, tests, standalone candidate and concrete gated live/deployment preparation",
+  "acceptance": "passed for current engineering objective; overall release incomplete",
+  "overallReleaseAccepted": false,
+  "baseCommit": "6b01f6d9dbad6e8a49b0150f30afe1a2c6a593de",
+  "deliveredProductCommits": [
+    "3eaeea5e9e79a1803438fb12806b3bca760793b9",
+    "284eb85b221fe9380675420452a81bfb5e5cc25f"
+  ],
+  "sourceOwnership": "One integration writer. Independent read-only audits/review/forward-test agents wrote separate private evidence, no shared writable checkout.",
+  "changes": [
+    "Strict native allowlist/role-default configuration and known requested/resolved consistency; registration remains reported metadata, not host attestation",
+    "Explicit saved-source ends and bounded repeated-read/search feedback",
+    "Checkpointed source-ID/text-hash/raw-content-hash/range evidence windows and explicit stale/omitted passage gaps",
+    "Deterministic bounded seed retrieval diagnostics, not semantic option coverage",
+    "196608-byte new request bound using actual default JSON HTTP serialization and shared unchanged provider envelope",
+    "Original reserved request payloads replay verbatim across upgrade; no retroactive payload rewriting",
+    "Exact unactivated pilots, schema-aware install/restart/rollback commands, private read-only phone preparation"
+  ],
+  "package": {
+    "sourceCommit": "284eb85b221fe9380675420452a81bfb5e5cc25f",
+    "sourceDirty": false,
+    "files": 3763,
+    "contentHash": "8fb675896247e82a27703240f1b2662bc7d3dec653d96ef0795350ab8c04c18c",
+    "manifestSha256": "c2dd389ce3db71d984691368aae951ba82572ce6adc20f38f5d9a89b8e07e5a0",
+    "strictInventoryBeforeAndAfter": true,
+    "standaloneDependenciesInstalled": true,
+    "privateConfigurationExcluded": true,
+    "oldVersionsPreserved": true,
+    "personalPromoted": false
+  },
+  "versions": {
+    "node": "24.22.0",
+    "sqlite": "3.53.4",
+    "python": "3.12.14",
+    "trafilatura": "2.3.1",
+    "mcpSdk": "1.32.2",
+    "playwright": "1.64.1",
+    "codexCli": "0.164.0"
+  },
+  "verification": {
+    "node": {
+      "command": "FRONTIER_TEST_PYTHON=PINNED_PYTHON npm test",
+      "passed": 326,
+      "failed": 0,
+      "sourceCommit": "284eb85"
+    },
+    "python": {
+      "command": "PINNED_PYTHON -B -m unittest discover -s test/research -p 'test_*.py'",
+      "passed": 112,
+      "failed": 0,
+      "sourceCommit": "284eb85"
+    },
+    "observer": {
+      "command": "npm run test:observer",
+      "passed": true,
+      "fixture": true,
+      "actualBackendEvents": true,
+      "viewports": [
+        1280,
+        390
+      ],
+      "sourceCommit": "3eaeea5",
+      "applicability": "UI/API/browser source unchanged by284eb85; negative401/403 fixtures expected"
+    },
+    "regressionRedGreen": {
+      "initialResearchCases": 9,
+      "initialResearchFailures": 3,
+      "initialMissingInterfaces": 5,
+      "existingCitationRejectionPassed": true,
+      "nativeContractTestsRedThenGreen": 2,
+      "additionalNativeOwnershipRegression": true,
+      "reviewFindingsBothRedThenGreen": true,
+      "actualUnicodeHttpBodyBytesAfterRepair": 174699,
+      "limit": 196608
+    },
+    "fixtureComparison": {
+      "complete": {
+        "claims": 5,
+        "sources": 3,
+        "simulatedModelCalls": 5
+      },
+      "missingOption": {
+        "status": "partial",
+        "claims": 3,
+        "sources": 2,
+        "recommendations": 0,
+        "simulatedModelCalls": 4
+      },
+      "liveQualityGate": false
+    },
+    "independentInstalled": {
+      "pythonPassed": 27,
+      "developmentSourceImportsDenied": true,
+      "actualPackagedCliAndSdkMcp": true,
+      "codexOnlyResearchModelCalls": 0,
+      "savedRereadNoRedownload": true,
+      "deepseekOnlyFixtureModelRequestsPerRun": 1,
+      "actualInferenceCalls": 0,
+      "successfulNodeRehearsals": 3,
+      "sameStateRestart": true,
+      "actualPriorRuntimeRollback": true,
+      "preserved": [
+        "request rows/status/hash",
+        "event rows/cursor/hash",
+        "goal/task IDs, hashes, versions, status and deadlines",
+        "spending",
+        "authentication keys",
+        "finalization receipt"
+      ],
+      "rollbackScope": "terminal fixture records only; active new-context downgrade not proven or authorized",
+      "unknownSchemaRejected": true,
+      "newAndPriorStrictInventoriesAfter": true,
+      "proposedAndFixturePlistsLinted": true
+    }
+  },
+  "independentReview": {
+    "sourceRange": "6b01f6d..3eaeea5",
+    "materialFindings": 2,
+    "resolvedMaterialFindings": 2,
+    "unresolvedMaterialFindings": 0,
+    "deferredMinorFindings": [],
+    "findings": [
+      "Silent retained-window omission lacked explicit gap",
+      "Unicode transport ASCII escaping exceeded claimed bound"
+    ],
+    "resolution": "One regression-first fix pass284eb85; full Python112 and Node326; separate independent installed/package forward review found no material runtime defect"
+  },
+  "preservation": {
+    "historicalDatabaseFilesUnchanged": true,
+    "originalExhaustedArtifactsRechecked": 8,
+    "researchJobs": [
+      "a9a544f9-22e8-4ef5-b6cc-79c3b7316a17",
+      "bfceaf05-fbe2-43ff-b3b0-0741bf3e7919"
+    ],
+    "researchStatus": "both partial20modelcalls,zeroacceptedclaims; original budgets/reports unchanged",
+    "overnightGoalId": "0f7d4d3d-468b-4003-8853-b819ada50c1e",
+    "overnightStatus": "child blocked with2spentautomaticreviews; historical expired active parent/oldlease preserved",
+    "learningAndInheritedHostPilots": "completed receipt10; not rerun"
+  },
+  "spending": {
+    "newLiveDeepSeekRequests": 0,
+    "newLiveSearches": 0,
+    "newLiveDownloads": 0,
+    "newPilotReservations": 0,
+    "newPilotActivations": 0,
+    "automaticCoordinatorCodexReviews": 0,
+    "nativeMainAndAuditReviewUsage": "unavailable; not zero",
+    "fixtures": "simulated providers and loopback HTTP only; not live spending"
+  },
+  "deploymentPreparation": {
+    "serveRoutesAtReadOnlyInspection": 0,
+    "funnelEnabled": false,
+    "sparkLingerObserved": true,
+    "persistentResearchUnitInstalled": false,
+    "personalMcpSkillsLaunchAgentInstalled": false,
+    "consistentWalBackupFixture": true,
+    "staleSpendingRestoreRejected": true,
+    "activationCommands": "proposals/11-engineering/INSTALL_ROLLBACK.md plus ignored concrete private successor bindings"
+  },
+  "compatibility": "Additive checkpoint metadata, unchanged manifest/database schemas, original deadlines/limits/reservations. New prompt bound applies only to new requests. Role config malformed or mismatched identities fail closed. Rollback requires quiescent terminal-record compatibility; retain CURRENT state, never old budgets.",
+  "pendingDecisions": [
+    "Exactly ONE installed-candidate research pilot2h/20model/30search/50download; schema2 goal/task route only; five independent primary-source claims, recommendation and disconnected checked collection required",
+    "Exactly ONE overnight goal1h/oneassignment/3plannerrequests,task30min/3attempts/6model/1automaticCodexreview/0questions; no automatic replacement",
+    "Separate explicit native-host model selection proposal1shortreadonlycall/no retries; requested metadata is not attestation",
+    "Final personal promotion only after every mandatory live gate, then actual phone/MCP/skills/services/restart verification"
+  ],
+  "evidence": {
+    "root": ".data/collaboration-evidence/engineering-20261031",
+    "index": "ARTIFACT_INDEX.json",
+    "indexSha256": "477c66a22e7371a2352742044286a6181f92b6297d8df062ca60f70894e33f89",
+    "indexedArtifacts": 131,
+    "finalPreservationVerifier": "verify-evidence.py",
+    "finalPreservationResult": {
+      "passed": true,
+      "read_only": true,
+      "historical_database_files_unchanged": true,
+      "exhausted_artifacts_unchanged": 8,
+      "checked_evidence_files": 131
+    },
+    "keyArtifacts": {
+      "context-red.log": {
+        "sha256": "0a5d5269bfa1fc995b3a2ac17512f6c77d1e2da4eddd5cbf80d23ab66384ecaa",
+        "bytes": 5512
+      },
+      "model-red.log": {
+        "sha256": "bd6b564c4f32fda3ceea6aa780245472bd0eb6ee4f3b840ba2226c42e6bc4515",
+        "bytes": 1852
+      },
+      "review-window-red.log": {
+        "sha256": "7b8d34787d2ab8f00869441bb4609df6f9d38665316dbd83ff749264e6382e40",
+        "bytes": 881
+      },
+      "review-http-red.log": {
+        "sha256": "13caa9aaef5013aff1f9206ebe538514ead70e706f540d8f5efdc5ef3111a2c6",
+        "bytes": 736
+      },
+      "review-fix-python.log": {
+        "sha256": "8db7198c40353cc7f95fc42ed41999ddb788ee5358b512ce6e18d8aa6bc77b2f",
+        "bytes": 212
+      },
+      "final-node.log": {
+        "sha256": "2f84c0d38d52b9dfeaac45b3cd3f50fc993e5dcf1f331118d22f1af609354d10",
+        "bytes": 30593
+      },
+      "combined-observer.log": {
+        "sha256": "ec08261073f10ac0ae213ab18d2475034b5095ecb4cc9e2d84fc90a583cc22cb",
+        "bytes": 667
+      },
+      "final-package-verify.json": {
+        "sha256": "2364544095295eefc5f5af404a61de494bea639d9656085e27a8c953c4f39f5e",
+        "bytes": 190
+      },
+      "installed-forward/results-final/node-forward-result.json": {
+        "sha256": "e8c762a32494490968dabf9dca4d43b8319905bbbd3e2e346aa0504027f89c2d",
+        "bytes": 4376
+      },
+      "installed-forward/INDEPENDENT_FORWARD_REPORT.md": {
+        "sha256": "09f7148eaa690233cb1239033de2360dbb0116724773bf260e45c104f92c60ac",
+        "bytes": 6716
+      }
+    }
+  },
+  "boundaries": "No main merge, push, publication, new provider, model-runtime/auth-policy/trusted-check change or final personal promotion."
+}

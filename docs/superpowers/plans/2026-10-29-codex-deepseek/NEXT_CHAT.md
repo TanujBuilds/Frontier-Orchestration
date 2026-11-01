@@ -1,3 +1,48 @@
+# Resume after authorized engineering — 2026-10-31
+
+Read owner AGENTS.md, PRODUCT_CONTEXT/MVP, private memory and the current
+[engineering status](ENGINEERING_STATUS.md),
+[receipt11](receipts/11-engineering-candidate.json), and
+[unactivated proposals](proposals/11-engineering/RECEIPT.json) first. The previous
+2026-10-30 handoff is retained below as history.
+
+Engineering source is `284eb85` on `codex/collaboration-package` after
+`3eaeea5`. Research/source-context and native model-contract repairs passed
+independent review with two findings subsequently regression-fixed. Node326,
+pinnedPython112, observer1280/390 and independent installedPython27/CLI/MCP/
+restart/current-state prior-code rollback passed. The immutable3763-file candidate
+hash is `8fb675896247e82a27703240f1b2662bc7d3dec653d96ef0795350ab8c04c18c`;
+its clean source commit is284eb85, even when later receipt/docs commits exist.
+Raw probes/logs/results and checksum index are in ignored
+`.data/collaboration-evidence/engineering-20261031/`; private final binding and
+phone-origin proposals are copied under its preparation/private directory.
+
+Current authorized engineering outcome is delivered; overall release remains
+INCOMPLETE. No fresh live pilot, reservation, model request, personal promotion,
+main merge or push occurred. Research comparison5claims is a scripted fixture,
+not live quality proof. Rollback covers terminal fixture records, not active
+new-context reservations. Both old research reports and blocked overnight job
+retain original identities, failures and spending. Learning reuse and inherited
+actual CLI-host lifecycle are complete: do not rerun.
+
+Next actions require explicit new decisions: ONE research pilot2h/20model/30search/
+50download; ONE overnight goal1h/oneassignment/3planner,task30min/3attempts/6model/
+1automaticCodexreview/0questions; separately bounded explicit-native-model proof.
+Use installed-candidate research goal/task schema2 route only; sibling schema1
+manifest is reference, never a replacement/additional pilot. Do not activate or
+reserve while awaiting approval. After actual approved pilot gates pass, assess
+final promotion authority and run exact private phone/MCP/skills/services/restart
+checks. No automatic replacement or budget increase follows failure.
+
+Before any remote deployment/activation, recheck actual ownership, pending calls,
+absolute deadlines, endpoints/modelID, script hashes and host routes. Read-only
+inspection found Serveempty/noFunnel, SparkLinger=yes, persistent research service
+absent/inactive. An expired active historical overnight parent and old lease were
+left untouched; do not clear/recreate them to regain budget. Final code binding
+uses current state and refuses unsafe downgrade.
+
+---
+
 # Resume the collaboration package — 2026-10-30
 
 ## Start

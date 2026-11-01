@@ -2,6 +2,12 @@
 
 A frontier-reviewed application that lets a local model plan and do bounded work, while a frontier model independently judges the result. The application keeps one task record and plan so the user does not have to move context between models by hand. Coding jobs spend scarce frontier usage on passing-stage reviews by default, with optional explicit guidance before a stage starts.
 
+The opt-in Codex + DeepSeek collaboration package adds four modes, native
+candidate worktrees and a read-only observer while preserving the legacy review
+workflow. Its [current engineering status](docs/superpowers/plans/2026-10-29-codex-deepseek/ENGINEERING_STATUS.md)
+is separate from final release acceptance; live research, overnight and installed
+promotion gates remain incomplete.
+
 ## First live milestone
 
 Give the application a substantial project-design brief from the Mac terminal. Codex plans and delegates one focused assignment. DeepSeek, served as one distributed model across two Sparks, answers it. Codex reviews the answer and may request one focused revision. The overnight coding workflow extends this loop to sequential implementation stages in an isolated Mac worktree. A read-only local browser timeline now displays saved jobs; browser controls remain later work.

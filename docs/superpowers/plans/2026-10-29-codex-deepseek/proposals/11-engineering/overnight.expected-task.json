@@ -1,0 +1,32 @@
+{
+  "submissionId": "plan-port",
+  "kind": "coding",
+  "actor": "deepseek",
+  "objective": "Implement isValidPort for integer JavaScript numbers from 1 through 65535 inclusive; reject all other values. Use only approved src/port.mjs and protected verify check.",
+  "acceptance": [
+    "DeepSeek planning and implementation pass protected port checks",
+    "At most one automated read-only Codex review reserved after checks",
+    "Passing reviewed changes integrate without native execution fallback"
+  ],
+  "dependsOn": [],
+  "priority": "normal",
+  "permissions": {
+    "readPaths": [
+      "src/",
+      "checks/"
+    ],
+    "writePaths": [
+      "src/port.mjs"
+    ],
+    "checks": [
+      "verify"
+    ]
+  },
+  "limits": {
+    "seconds": 1800,
+    "attempts": 3,
+    "modelCalls": 6,
+    "reviews": 1,
+    "questions": 0
+  }
+}
