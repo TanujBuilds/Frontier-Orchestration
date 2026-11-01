@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { normalizeTask } from './contracts.mjs';
 
 const bridge=fileURLToPath(new URL('../../.agents/skills/deep-research/scripts/harness_rpc.py',import.meta.url));
 export class ResearchClient {
@@ -23,10 +24,13 @@ export class ResearchAdapter {
  async step(task,owner){
   const {c}=this.worker,cp={...task.checkpoint},cfg=this.worker.config.research??{},g=c.store.get('goal',task.goalId);
   if(!cp.phase){
+   // Validate new dispatch against the approved goal; reserved manifests below replay verbatim.
+   const spec=normalizeTask(task.spec,g.manifest);
    const manifest={schema:2,submission_id:task.id,question:task.spec.objective,mode:g.manifest.environment,
     scope:{seed_urls:task.spec.scope.seedUrls,include_domains:task.spec.scope.includeDomains,exclude_domains:task.spec.scope.excludeDomains},
     limits:{seconds:task.spec.limits.seconds,searches:task.spec.limits.searches,downloads:task.spec.limits.downloads,model_calls:task.spec.limits.modelCalls},
-    not_after:Math.floor(task.deadline/1000),collaboration:{supervisor:g.manifest.mode.actors.includes('codex')?'codex':'user',max_questions:task.spec.limits.questions}};
+    not_after:Math.floor(task.deadline/1000),collaboration:{supervisor:g.manifest.mode.actors.includes('codex')?'codex':'user',max_questions:task.spec.limits.questions},
+    ...(Object.hasOwn(spec,'researchPolicy')?{research_policy:spec.researchPolicy}:{})};
    const prepared=await this.rpc({command:'prepare_manifest',manifest});return c.boundary(task.id,{phase:'submit',manifest:prepared.manifest,remoteHash:prepared.hash},owner);
   }
   if(cp.phase==='submit'){
