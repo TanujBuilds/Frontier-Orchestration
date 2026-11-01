@@ -1,3 +1,15 @@
+# Resume after citation repair / additional live failure — 2026-10-31 Pacific
+
+Read [receipt13](receipts/13-citation-repair-live.json), current ENGINEERING_STATUS, and owner ignored .data/live-release-citation-repair-20261031/{RELEASE_RECEIPT.md,CLAIM_ASSESSMENT.md,INDEPENDENT_REVIEW.md,PROGRESS.md,EVIDENCE_INDEX.json}. Source485d13c; packagec9890fb0f9b97234cf4422ffa4578af97589c9d1949743a96248775fd29be779; clean3764files.102newartifacthashes verified; original receipt12's102artifacts remain unchanged in their distinct root.
+
+Owner's Approve repair + one pilot answer has been fully spent as ONE new pilot, not an unlimited continuation. Goalb22ce2e6-6247-4081-ad87-003542baabd5/task1bf13e71-6575-4f26-b98f-155341821691/remotea257c645-6287-40f8-84f3-23f51e6ddd65 terminal PARTIAL10model/0search/6download/0officialclaims. Unused10calls do not authorize terminal-job reopening or another identity. Four exact quotations failed; model used0selectors despite66offered entries. Discovery requirement also missed. New strict-selector reply contract/examples and enforced discovery are proposals only; another live attempt requires a genuinely new decision.
+
+Source-bound resolver and forged-metadata review fix passed128Python/326Node; standalone44Python/CLI-SDKMCP/terminal-state restart/rollback fixtures pass. One independent source review found1P2, reproducedRED/fixedGREEN, finalmainverified; ordinary native reviewer count2total, explicit model test1separate. No extra review/pilot inferred. Exact validator/reservations/partial-at-cap unchanged. Old failures/IDs/budgets preserved.
+
+Actual disconnect/quiescence/identical collections passed; new coordinator and Spark unit stopped cleanly/0pending. No personal skills/MCP/LaunchAgent/Sparkwatcher/privateServe/phone activated. Conditional promotion still waits for accepted research quality, then actual installed host/phone/services/recovery. Do not rerun passed overnight/inherited-host/explicit-model/learning proofs. Full release remains incomplete; never mark complete from engineering alone.
+
+---
+
 # Resume after bounded live validation — 2026-10-31 Pacific
 
 Read [receipt12](receipts/12-live-release-validation.json) and current ENGINEERING_STATUS first. Runtime remains284eb85/package8fb675896247e82a27703240f1b2662bc7d3dec653d96ef0795350ab8c04c18c. Owner ignored .data/live-release-20261031 contains exact authorization, final receipt, independent audit,102checksummed artifacts and executable probes. No product source/protected check changed; no personal installation.

@@ -1,3 +1,13 @@
+# Citation repair and additional pilot — 2026-10-31 Pacific
+
+**FULL RELEASE INCOMPLETE.** [Receipt13](receipts/13-citation-repair-live.json) supersedes receipt12's pending-repair state. Owner explicitly approved the source-bound repair and ONE additional pilot. Source485d13c; standalone3764-file package hashc9890fb0f9b97234cf4422ffa4578af97589c9d1949743a96248775fd29be779. Full128Python/326Node,standalone44Python/SDK-MCP/terminal-state compatibility fixtures and strict inventories passed. Independent review's one P2 forged-provenance finding was regression-fixed; final correction main-verified. Raw source/request history, strict validator, existing reservations and completion limits preserved.
+
+The new pilot is terminal PARTIAL after10model/0search/6download:0officialclaims/recommendations. Model chose25legacyquotes/0selectors in all3finish attempts despite66offered selections. Four line-break quote failures persisted; required discovery search omitted. Source-bound code is offline-verified but NOT live-exercised. Nine rejected candidate claims were assessed diagnostically against six byte-identical independently archived originals; no acceptance substitution. Actual SSH disconnect, same-job quiescent completion and identical collections passed; Mac and Spark workers stopped with0pending.
+
+Personal promotion and actual installed host/phone/service/recovery remain gated. Unused10calls cannot reopen/replace a terminal pilot. Future selector-only versioned reply/discovery enforcement is a proposal; no another pilot follows automatically. Prior overnight/host/learning/browser proofs retained with byte-applicability; no repeats. No merge/push/model-runtime/authentication changes.
+
+---
+
 # Live release validation — 2026-10-31 Pacific
 
 **FULL RELEASE INCOMPLETE.** [Live receipt12](receipts/12-live-release-validation.json) supersedes earlier pending-live status. The one approved research pilot exhausted20calls/1search/7downloads with0officialclaims/recommendations and remains PARTIAL. Five final inexact quotation failures were reproduced; eight rejected candidate claims were assessed diagnostically, not accepted. Actual SSH disconnection, same-job quiescent completion and identical collections passed.
