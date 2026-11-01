@@ -216,7 +216,11 @@ class Worker:
                     'finish_action_example':copy.deepcopy(FINISH_ACTION_EXAMPLE)})
         if strict:
             content['research_policy']=copy.deepcopy(job['manifest']['research_policy'])
-            content['discovery']=self.store.discovery_status(job['id'])
+            discovery=self.store.discovery_status(job['id'])
+            # Exact search queries/outcomes remain in durable operations and the receipt.
+            # Repeating all queries here could itself exhaust the HTTP context bound.
+            content['discovery']={k:v for k,v in discovery.items() if k!='operations'}
+            content['discovery']['operation_count']=len(discovery['operations'])
             content['discovery']['instruction']='During exploration, perform a bounded search if unmet and capacity remains; otherwise finish partial with the unmet requirement. Final phases permit finish only.'
             if c['phase']!='explore':
                 content['candidate']=selector_presentation(c.get('draft'),passages)
