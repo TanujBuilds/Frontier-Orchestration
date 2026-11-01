@@ -33,12 +33,19 @@ approval_mode = "approve"
 approval_mode = "approve"
 ```
 
-This is a supported configuration hypothesis, not a demonstrated guarantee of
-its interaction with a host's effective `never` policy or managed requirements.
+On 2026-11-01 the main owner verified this narrow configuration in one fresh
+native Sol session on codex-cli0.166.0, retaining `never` and `read-only`. Actual
+MCP discovery, exact preparation, hash-bound activation and submission passed;
+all three mutation annotations remained false. The submitted Codex fixture task
+stayed `codex_ready`, with zero request rows and zero attempts. Global policy and
+personal bindings were unchanged. This establishes that disposable CLI path,
+not another host's effective policy or managed requirements.
+
 Record the actual CLI version/help, exact overrides, original approval/sandbox
-policy and resulting tool transcript. A parsed configuration or SDK invocation
-cannot replace the native-host test. A rejection stays a blocker; do not retry
-through another transport, weaken global policy or change mutation annotations.
+policy and resulting tool transcript for each applicable host. A parsed
+configuration or SDK invocation cannot replace the native-host test. A rejection
+stays a blocker; do not retry through another transport, weaken global policy or
+change mutation annotations.
 
 Before launching a paid host session, the main owner must reserve it in the
 original resource ledger, cap the entire session by its original parent deadline
