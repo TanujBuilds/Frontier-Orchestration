@@ -78,6 +78,9 @@ def rpc(store,request,config=None):
     if command=='answer':return brief_job(store.answer(request['job'],request['answer'],request['responder'],question_id=request.get('question_id')))
     if command=='questions':return [e['data'] for e in store.events(request['job']) if e['type']=='question']
     if command in ('stop','resume'):return brief_job(getattr(store,command)(request['job']))
+    if command=='proposal_export':return store.proposal_export(request['job'])
+    if command=='review_reserve':return store.review_reserve(request['job'],request['candidateHash'],request['rubricHash'],request['idempotency_key'])
+    if command=='review_submit':return store.review_submit(request['job'],request['ticketId'],request['candidateHash'],request['rubricHash'],request['decision'],request['findings'],request['coverage'],request['idempotency_key'])
     if command=='export':return export(store,request['job'])
     raise ValueError('unsupported RPC command')
 

@@ -4,7 +4,7 @@ Only the worker performs external calls. It must reserve each operation before
 calling a provider, and treat an existing pending operation as spent and
 ambiguous rather than dispatching it again.
 """
-from research_review import normalize_review_policy
+from research_review import normalize_review_policy, ReviewLifecycle, policy_parameters
 from contextlib import contextmanager
 import fcntl
 import hashlib
@@ -126,7 +126,7 @@ def manifest_hash(normalized):
     return hashlib.sha256(_json(normalize_manifest(normalized)).encode('utf-8')).hexdigest()
 
 
-class Store:
+class Store(ReviewLifecycle):
     """SQLite state with one durable transaction per externally visible change."""
 
     def __init__(self, root):
@@ -291,13 +291,13 @@ class Store:
     def claim_next(self, now=None):
         now = time.time() if now is None else now
         with self._db(transaction=True) as db:
-            row = db.execute('''SELECT * FROM jobs WHERE status IN ('running','queued')
+            row = db.execute('''SELECT * FROM jobs WHERE (status IN ('running','queued') OR (status='awaiting_semantic_review' AND deadline<=? AND json_extract(manifest_json,'$.research_policy.version')=3 AND EXISTS (SELECT 1 FROM executions WHERE job_id=jobs.id AND status='quiescent') AND NOT EXISTS (SELECT 1 FROM operations WHERE job_id=jobs.id AND status='pending')))
                                 AND COALESCE(json_extract(manifest_json,'$.executor'),'deepseek')='deepseek'
-                                ORDER BY CASE status WHEN 'running' THEN 0 ELSE 1 END,created_at,rowid LIMIT 1''').fetchone()
+                                ORDER BY CASE status WHEN 'running' THEN 0 ELSE 1 END,created_at,rowid LIMIT 1''',(now,)).fetchone()
             if row is None:
                 return None
             job = self._decode_job(row)
-            if job['status'] == 'queued':
+            if job['status'] in ('queued','awaiting_semantic_review'):
                 started = job['started_at'] if job['started_at'] is not None else now
                 deadline = job['deadline'] if job['deadline'] is not None else started + job['manifest']['limits']['seconds']
                 deadline = min(deadline, job['manifest'].get('not_after', deadline))
@@ -429,6 +429,8 @@ class Store:
             job = self._get(db, job_id)
             if job['status'] in ('stopped', 'completed', 'partial'):
                 return job
+            if status == 'completed' and policy_parameters(job['manifest'].get('research_policy'))['requires_review']:
+                self.accepted_packet(job)
             if status == 'completed' and strict_policy(job['manifest']) and not self._discovery_status(db, job)['satisfied']:
                 raise StateError('required discovery search is not satisfied by durable operation evidence')
             db.execute('UPDATE jobs SET status=?,reason=?,updated_at=? WHERE id=?', (status, reason, now, job_id))

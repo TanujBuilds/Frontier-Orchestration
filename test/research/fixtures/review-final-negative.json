@@ -1,0 +1,250 @@
+{
+  "title": "Durable queue designs for a single-host AI worker: SQLite WAL, RQ/Celery, Temporal",
+  "complete": true,
+  "claims": [
+    {
+      "id": "C1",
+      "text": "SQLite WAL commits are recorded by appending a commit record to the WAL file; durability after power loss depends on sync settings, since writers sync the WAL on every commit only when PRAGMA synchronous is FULL and omit that sync when it is NORMAL.",
+      "kind": "fact",
+      "evidence": [
+        {
+          "source_id": "S001",
+          "text_sha256": "0bba6dd70ef726ce1a9a92b7e7e5a89c312ba6022f37723608bd545868f59f97",
+          "start": 786,
+          "end": 1509
+        },
+        {
+          "source_id": "S001",
+          "text_sha256": "0bba6dd70ef726ce1a9a92b7e7e5a89c312ba6022f37723608bd545868f59f97",
+          "start": 5368,
+          "end": 6156
+        }
+      ]
+    },
+    {
+      "id": "C2",
+      "text": "SQLite's WAL implementation relies on shared memory for its wal-index, so all readers must be on the same machine, and the WAL implementation will not work on a network filesystem; the WAL file is part of the database's persistent state and separating it from the database can lose committed transactions or corrupt the file.",
+      "kind": "fact",
+      "evidence": [
+        {
+          "source_id": "S001",
+          "text_sha256": "0bba6dd70ef726ce1a9a92b7e7e5a89c312ba6022f37723608bd545868f59f97",
+          "start": 3037,
+          "end": 3812
+        },
+        {
+          "source_id": "S001",
+          "text_sha256": "0bba6dd70ef726ce1a9a92b7e7e5a89c312ba6022f37723608bd545868f59f97",
+          "start": 13043,
+          "end": 13826
+        }
+      ]
+    },
+    {
+      "id": "C3",
+      "text": "RQ workers each process a single job at a time, are recommended to run under process managers such as Supervisor or systemd in production, and maintain job registries including a StartedJobRegistry for currently executing jobs and a FailedJobRegistry for jobs that did not finish successfully.",
+      "kind": "fact",
+      "evidence": [
+        {
+          "source_id": "S002",
+          "text_sha256": "1020ba83d541e02e684f4760fc7d231a09c9267b734b4270012190102b7a00be",
+          "start": 0,
+          "end": 738
+        },
+        {
+          "source_id": "S002",
+          "text_sha256": "1020ba83d541e02e684f4760fc7d231a09c9267b734b4270012190102b7a00be",
+          "start": 738,
+          "end": 1499
+        },
+        {
+          "source_id": "S006",
+          "text_sha256": "ff03e0c1295318fa8131f9c4427ec624b83eee935dbb973c5435c499ac46b239",
+          "start": 0,
+          "end": 674
+        }
+      ]
+    },
+    {
+      "id": "C4",
+      "text": "RQ supports configuring retries via its Retry object with max and interval arguments, and interval-based retries require running workers with the --with-scheduler argument; RQ also documents that an unfinished job collected by another worker's maintenance task after a worker was terminated is moved to the FailedJobRegistry.",
+      "kind": "fact",
+      "evidence": [
+        {
+          "source_id": "S007",
+          "text_sha256": "0db4aa5925279ef5c9de59c94c5f8737729f893c5725adadcc08a000d7d080c9",
+          "start": 757,
+          "end": 1498
+        },
+        {
+          "source_id": "S007",
+          "text_sha256": "0db4aa5925279ef5c9de59c94c5f8737729f893c5725adadcc08a000d7d080c9",
+          "start": 3223,
+          "end": 3980
+        }
+      ]
+    },
+    {
+      "id": "C5",
+      "text": "Celery's default behavior acknowledges a task message in advance, just before execution, so an invocation that already started is never executed again; with acks_late the worker acknowledges after the task returns, and Celery states the worker cannot detect whether tasks are idempotent.",
+      "kind": "fact",
+      "evidence": [
+        {
+          "source_id": "S005",
+          "text_sha256": "7cebacb2187bddc054f196413b7a022e553893bc2b0fcec187663a9bb9c31887",
+          "start": 675,
+          "end": 1467
+        }
+      ]
+    },
+    {
+      "id": "C6",
+      "text": "Celery documents that a task message is not removed from the queue until acknowledged, and that a worker killed by power failure or another reason can have its reserved messages redelivered to another worker; however, the worker acknowledges the message if the child process executing the task is terminated by sys.exit() or signal even when acks_late is enabled, and redelivery in those scenarios requires considering the task_reject_on_worker_lost setting.",
+      "kind": "fact",
+      "evidence": [
+        {
+          "source_id": "S005",
+          "text_sha256": "7cebacb2187bddc054f196413b7a022e553893bc2b0fcec187663a9bb9c31887",
+          "start": 0,
+          "end": 675
+        },
+        {
+          "source_id": "S005",
+          "text_sha256": "7cebacb2187bddc054f196413b7a022e553893bc2b0fcec187663a9bb9c31887",
+          "start": 675,
+          "end": 1467
+        },
+        {
+          "source_id": "S005",
+          "text_sha256": "7cebacb2187bddc054f196413b7a022e553893bc2b0fcec187663a9bb9c31887",
+          "start": 1467,
+          "end": 2171
+        }
+      ]
+    },
+    {
+      "id": "C7",
+      "text": "Temporal states that a Workflow Execution persists its state in the face of failures and outages and resumes from the latest state, that completed Activities will not re-execute as part of a Workflow Replay, and that Activities may be retried and executed more than once, so Temporal recommends Activities be idempotent.",
+      "kind": "fact",
+      "evidence": [
+        {
+          "source_id": "S003",
+          "text_sha256": "7d171ae9a884b4b8d5386f53c1d0570b4c0f8859b0085f9fdef40f91b095fb14",
+          "start": 746,
+          "end": 1419
+        },
+        {
+          "source_id": "S004",
+          "text_sha256": "572efbd9b6f808b3e13a3ceabd0f9fadd02b41fcf4750422f896e7a9e69bf544",
+          "start": 2805,
+          "end": 3573
+        },
+        {
+          "source_id": "S004",
+          "text_sha256": "572efbd9b6f808b3e13a3ceabd0f9fadd02b41fcf4750422f896e7a9e69bf544",
+          "start": 4303,
+          "end": 5062
+        }
+      ]
+    },
+    {
+      "id": "C8",
+      "text": "Temporal documents that if an Activity completes successfully but the Worker crashes before notifying the Temporal Service, the Event History will not reflect completion and the Activity will be retried; it states that with a Retry Policy allowing retries Temporal guarantees the Activity will be observed as completed exactly once, but the Activity may be executed multiple times and may partially complete more than once, and idempotency keys are enforced by the called service, not by the Activity itself.",
+      "kind": "fact",
+      "evidence": [
+        {
+          "source_id": "S004",
+          "text_sha256": "572efbd9b6f808b3e13a3ceabd0f9fadd02b41fcf4750422f896e7a9e69bf544",
+          "start": 5758,
+          "end": 6525
+        },
+        {
+          "source_id": "S004",
+          "text_sha256": "572efbd9b6f808b3e13a3ceabd0f9fadd02b41fcf4750422f896e7a9e69bf544",
+          "start": 7289,
+          "end": 7937
+        }
+      ]
+    }
+  ],
+  "summary": [
+    "C1",
+    "C2",
+    "C3",
+    "C4",
+    "C5",
+    "C6",
+    "C7",
+    "C8"
+  ],
+  "comparisons": [
+    {
+      "text": "Durable job state: SQLite WAL records commits in the WAL file with durability conditioned on synchronous=FULL, and the WAL file must stay with the database; RQ keeps job state in Redis-backed registries (started, finished, failed); Temporal persists Workflow Execution state and resumes from the latest state after failures and outages.",
+      "claim_ids": [
+        "C1",
+        "C2",
+        "C3",
+        "C7"
+      ]
+    },
+    {
+      "text": "Process-crash versus power-loss recovery: Celery's default pre-execution acknowledgement means a started invocation is not re-executed, while acks_late acknowledges after return and a killed worker's reserved messages can be redelivered, with exceptions for signal/exit termination unless task_reject_on_worker_lost is considered; RQ moves an unfinished job collected after worker termination to the FailedJobRegistry; Temporal retries an Activity whose completion was not reported, and completed Activities do not re-execute on Workflow Replay.",
+      "claim_ids": [
+        "C5",
+        "C6",
+        "C4",
+        "C7",
+        "C8"
+      ]
+    },
+    {
+      "text": "Retries and external side effects: RQ offers configurable Retry(max, interval) with a scheduler requirement; Celery cannot detect idempotency and its acknowledgement mode determines whether started work may be re-executed; Temporal retries Activities and guarantees only that an Activity is observed as completed exactly once while it may execute or partially complete multiple times, so idempotency keys must be enforced by the external service.",
+      "claim_ids": [
+        "C4",
+        "C5",
+        "C6",
+        "C8"
+      ]
+    },
+    {
+      "text": "A database transaction, a queue acknowledgement, or a workflow replay guarantee is not the same as exactly-once external effects: Temporal explicitly separates the platform's observed-completion guarantee from multiple Activity executions and places idempotency enforcement in the called service, and Celery states the worker cannot detect whether tasks are idempotent.",
+      "claim_ids": [
+        "C5",
+        "C8"
+      ]
+    }
+  ],
+  "recommendations": [
+    {
+      "text": "Inference: for a modest number of local workers on one host with a local filesystem, a SQLite WAL-backed queue is the simplest candidate because it avoids a separate Redis or Temporal service, provided the database and its WAL file stay together on the local filesystem, synchronous is set to FULL if power-loss durability is required, and the application implements its own claim/lease expiry, stale-worker fencing, retry policy and idempotency keys for costly model requests; the saved sources do not document a SQLite queue's lease or fencing mechanism, so this is an untested design proposal.",
+      "claim_ids": [
+        "C1",
+        "C2",
+        "C8"
+      ]
+    },
+    {
+      "text": "Inference: Redis with RQ or Celery becomes justified when the application wants a ready-made worker/registry/retry framework and can accept running Redis plus a process manager; RQ's registries and Retry object cover job state and retries, while Celery's acknowledgement mode must be chosen deliberately (default early ack versus acks_late with task_reject_on_worker_lost) and tasks must be made idempotent because Celery cannot detect idempotency.",
+      "claim_ids": [
+        "C3",
+        "C4",
+        "C5",
+        "C6"
+      ]
+    },
+    {
+      "text": "Inference: Temporal becomes justified when requirements include durable multi-step workflow state that survives failures and outages, replay-based resumption, and managed Activity retry bookkeeping; even then, exactly-once external effects are not provided by the platform, so costly model requests still need service-enforced idempotency keys because Activities may execute or partially complete more than once.",
+      "claim_ids": [
+        "C7",
+        "C8"
+      ]
+    }
+  ],
+  "contradictions": [],
+  "unanswered": [
+    "The saved sources do not document a SQLite-backed queue's claim/lease expiry or stale-worker fencing mechanism, so the recommendation for SQLite relies on an untested application-level design.",
+    "The saved sources do not establish Redis persistence configuration (e.g., AOF/fsync) or RQ/Celery power-loss durability guarantees, so Redis-based recovery after power loss is unknown from this evidence.",
+    "The saved sources do not quantify operational cost, throughput, pricing or deployment effort for any option; qualitative operational cost is inferred only from the presence of additional services (Redis, Temporal Service) and process managers.",
+    "The saved sources do not document Temporal's own deployment or operational requirements for a single host, so its operational cost relative to SQLite or Redis is unknown."
+  ]
+}

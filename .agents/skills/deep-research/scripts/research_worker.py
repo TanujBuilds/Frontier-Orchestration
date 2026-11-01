@@ -435,6 +435,8 @@ class Worker:
 
         if job['manifest'].get('collaboration',{}).get('supervisor','none')!='none':
             extra='\nDuring exploration you may ask a necessary clarification using {"action":"ask_supervisor","question":"..."}. This cannot expand scope.'
+        if policy['requires_review'] and c.get('semantic_feedback'):
+            content['semantic_feedback']=copy.deepcopy(c['semantic_feedback'])
         def payload():
             return {'phase':c['phase'],'messages':[{'role':'system','content':(STRICT_SYSTEM if strict else SYSTEM)+(SUPPORT_SYSTEM if support else '')+extra},
                 {'role':'user','content':json.dumps(content,ensure_ascii=False)}]}
@@ -521,6 +523,9 @@ class Worker:
             job=self.store.get(job['id'])
             if job['status']!='running': return
             if self.store.yield_boundary(job['id']):return
+            reviewed=policy_parameters(job['manifest'].get('research_policy'))['requires_review']
+            if reviewed and c.get('semantic',{}).get('accepted'):
+                return self.finalize(job,c)
             remaining=job['deadline']-time.time()
             if remaining<=0: return self.finalize(job,c,'deadline reached')
             if c['next']=='finalize': return self.finalize(job,c,c.get('reason'))
@@ -529,8 +534,13 @@ class Worker:
                 replay=any(o['id']==job['id']+':'+str(c['step'])+':model' for o in self.store.operations(job['id']))
                 effective_span=max(1,job['deadline']-job['started_at'])
                 if not replay and c['phase']=='explore' and (job['counters']['model']>=limit-3 or remaining<=min(1800,effective_span/4)):
-                    c['phase']='draft';c['limited']=True
+                    c['phase']='draft';c['limited']=not reviewed
                     self.store.checkpoint(job['id'],c)
+                if reviewed:
+                    semantic=c.get('semantic',{})
+                    used=job['counters']['model']-semantic.get('correctionStartModel',0)
+                    if (semantic.get('revisions') and used>=semantic['correctionAllowance']) or (not semantic.get('revisions') and job['counters']['model']>=limit-1):
+                        return self.finalize(job,c,'reserved correction capacity exhausted')
                 if self.scout_busy(): time.sleep(min(5,remaining)); continue
                 payload=self.model_payload(job,c)
                 try:
@@ -584,7 +594,14 @@ class Worker:
                         if not errors:c['draft']=normalized
                         if discovery_unmet:errors.append(DISCOVERY_GAP)
                         c['errors']=errors
-                        if c['phase']=='explore' and discovery_unmet and action['report'].get('complete') is True:pass
+                        if reviewed and not errors:
+                            if normalized['complete']:
+                                self.store.stage_candidate(job['id'],c,normalized,offered,request_ref)
+                                return
+                            return self.finalize(job,c,'incomplete report')
+                        if reviewed and c.get('semantic',{}).get('revisions'):
+                            c['phase']='repair';c['next']='model'
+                        elif c['phase']=='explore' and discovery_unmet and action['report'].get('complete') is True:pass
                         elif c['phase'] in ('explore','draft'): c['phase']='audit'
                         elif c['phase']=='audit' and errors: c['phase']='repair'
                         else: c['next']='finalize'
@@ -596,7 +613,7 @@ class Worker:
                     c['history'].append({'role':'user','content':{'protocol_error':str(e)[:500]}})
                     if c['phase']=='draft':c['phase']='audit'
                     elif c['phase']=='audit':c['phase']='repair'
-                    elif c['phase']=='repair':c['next']='finalize'
+                    elif c['phase']=='repair' and not (reviewed and c.get('semantic',{}).get('revisions')):c['next']='finalize'
             else:
                 action=c['action']
                 try:
@@ -658,7 +675,11 @@ class Worker:
 
     def finalize(self,job,c,reason=None):
         if self.store.get(job['id'])['status']!='running':return
-        draft=c.get('draft')
+        reviewed=policy_parameters(job['manifest'].get('research_policy'))['requires_review']
+        accepted=None
+        if reviewed and c.get('semantic',{}).get('accepted'):
+            accepted=self.store.accepted_packet(self.store.get(job['id']))
+        draft=json.loads(accepted['canonical']['report']) if accepted else c.get('draft')
         if not draft or validate_report(draft,c['sources']):
             draft={'title':'Incomplete research','complete':False,'claims':[],'summary':[],
                    'comparisons':[],'recommendations':[],'contradictions':[],
@@ -670,6 +691,7 @@ class Worker:
             if DISCOVERY_GAP not in draft['unanswered']:draft['unanswered'].append(DISCOVERY_GAP)
             reason=reason or DISCOVERY_GAP
         status='completed' if draft['complete'] and not c['limited'] and not reason and c['phase'] in ('audit','repair') and not c['errors'] else 'partial'
+        if reviewed:status='completed' if accepted else 'partial'
         if discovery is not None and status=='partial':
             draft=copy.deepcopy(draft);draft['complete']=False
         c['next']='finalize';c['reason']=reason
@@ -697,6 +719,12 @@ class Worker:
                 'model_support':'proposed_only','independent_semantic_review':'pending',
                 'release_acceptance':'not_granted',
                 'interpretation':'Lifecycle completion means protocol/provenance only; semantic support requires independent assessment of these exact report/source artifacts.'}
+        if reviewed:
+            receipt['quality'].update(independent_semantic_review='passed' if accepted else 'not_accepted',
+                accepted_candidate_hash=accepted['descriptor']['candidateHash'] if accepted else None,
+                review_binding=accepted['descriptor'] if accepted else None)
+            receipt['independent_review']='accepted' if accepted else 'not_accepted'
+            receipt['semantic_reviews']=copy.deepcopy(c.get('semantic',{}).get('tickets',[]))
         if job['manifest'].get('executor')=='operator':receipt['model_self_check']='not_run_operator_mode'
         atomic(directory/'receipt.json',json.dumps(receipt,indent=2))
         self.store.finish(job['id'],status,reason)
