@@ -123,3 +123,25 @@ unsupported quotations and citations still fail report validation. Prompt
 changes and offline fixtures do not prove live model reliability. Preserve
 terminal historical jobs and their counters; a new live pilot requires a
 separate user decision, not automatic replacement or resubmission.
+
+## Autonomous source-bound citations (2026-10-31)
+
+New autonomous research prompts offer bounded `citation_passages` entries with
+`source_id`, full saved-text `text_sha256`, Python-character `start`/`end`, and
+exact text. The model may cite one by copying only the four selector fields.
+The worker accepts only a unique entry in that request's actual reserved prompt,
+rechecks the current saved source hash/range and copies its exact text into a
+cloned normalized report before the unchanged exact-passage validator. Normalized
+evidence retains the selector provenance. Raw model results are preserved.
+
+Unknown, stale, malformed, mixed quote/selector or unoffered ranges reject. This
+is not fuzzy quotation matching, factual certification or permission to retrieve
+other sources. Legacy exact-quote reports and the native operator research path
+remain unchanged. Existing reserved payloads replay verbatim without new fields.
+
+The catalog and actual ASCII-escaped HTTP request remain bounded; omitted passage
+selections are explicit. Model guidance encourages a compact supported report
+before exploration reaches its cutoff. The existing last-three-call reservation,
+partial-at-cap rule, original deadlines and request accounting remain authoritative;
+no quote resolution or prompt instruction can turn an exhausted partial job into
+an accepted report. A new live pilot still requires its own explicit authorization.
