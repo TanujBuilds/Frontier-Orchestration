@@ -93,7 +93,16 @@
     "independentPrimaryDownloads": 6,
     "knownProviderReportedDeepSeekTokens": 390552,
     "unknown": "Coding SSE usage and automatic/native/main/reviewer usage not exposed; never zeroed",
-    "independentNativeEvidenceReviewRuns": 1
+    "independentNativeEvidenceReviewRuns": 1,
+    "hostGoalMeterSnapshot": {
+      "provenance": "functions.get_goal actual snapshot",
+      "status": "active",
+      "tokensUsed": 406559,
+      "timeUsedSeconds": 1613,
+      "updatedAt": 1793502123,
+      "tokenBudget": null,
+      "scope": "Host goal meter snapshot; not a per-provider bill or per-agent usage breakdown"
+    }
   },
   "verification": {
     "strictPackageAfter": true,
@@ -124,8 +133,8 @@
   },
   "evidence": {
     "localIgnoredRoot": ".data/live-release-20261031",
-    "indexedArtifacts": 101,
-    "indexSha256": "e1cd18dd5f76d51e103824853f7adca9f91e46cc1c3088e0bfcce1161650fe17",
+    "indexedArtifacts": 102,
+    "indexSha256": "c6730062dc43f11950529eb3384ed9b8792a07a57da39b49ad4b81be690b8f22",
     "executableProbesRetained": true,
     "privateConfigAndConnectionKeysExcluded": true
   },

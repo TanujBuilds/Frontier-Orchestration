@@ -1,6 +1,6 @@
 # Resume after bounded live validation — 2026-10-31 Pacific
 
-Read [receipt12](receipts/12-live-release-validation.json) and current ENGINEERING_STATUS first. Runtime remains284eb85/package8fb675896247e82a27703240f1b2662bc7d3dec653d96ef0795350ab8c04c18c. Owner ignored .data/live-release-20261031 contains exact authorization, final receipt, independent audit,101checksummed artifacts and executable probes. No product source/protected check changed; no personal installation.
+Read [receipt12](receipts/12-live-release-validation.json) and current ENGINEERING_STATUS first. Runtime remains284eb85/package8fb675896247e82a27703240f1b2662bc7d3dec653d96ef0795350ab8c04c18c. Owner ignored .data/live-release-20261031 contains exact authorization, final receipt, independent audit,102checksummed artifacts and executable probes. No product source/protected check changed; no personal installation.
 
 Research goal5471f70a-5df4-4d32-bc2d-42f6195d148d/task20e668dd-4e8f-4081-a798-46bf3a77b549/remote f895a4c8-90ab-4e95-b430-f1c14ac1fc4b is terminal PARTIAL:20model/1search/7download/0officialclaims. Disconnected completion/collections passed; researchquality FAILED. Do not resubmit/replace/resume/renew this or historical failed jobs. Proposed offline fix direction is deterministic source-hash/range quote selection and clearer bounded report-section examples, keeping exact provenance. Another live research budget needs a new explicit decision.
 
