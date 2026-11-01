@@ -112,6 +112,25 @@ test('packaged Python entrypoints preserve the immutable inventory without calle
  assert.equal(await verifyPackage(destination),true);
 });
 
+test('standalone Python imports cannot fall back to the development checkout',async t=>{
+ const root=await mkdtemp(path.join(os.tmpdir(),'harness-python-entry-'));t.after(()=>rm(root,{recursive:true,force:true}));const destination=path.join(root,'version');await packageHarness({sourceRoot,destination});
+ const scripts=path.join(destination,'runtime/.agents/skills/deep-research/scripts'),env=withoutBytecodeSettings(),state=path.join(root,'research-state');
+ // Deny every Python source import from the development checkout. An installed
+ // entrypoint that accidentally falls back to it must fail this actual process.
+ const guard=path.join(root,'python-import-guard');await mkdir(guard);await writeFile(path.join(guard,'sitecustomize.py'),`import sys, importlib.abc, importlib.machinery
+class Guard(importlib.abc.MetaPathFinder):
+ def find_spec(self, fullname, path=None, target=None):
+  spec=importlib.machinery.PathFinder.find_spec(fullname, path, target)
+  if spec and spec.origin and spec.origin.startswith(${JSON.stringify(sourceRoot)}): raise ImportError('Development checkout import forbidden')
+  return spec
+sys.meta_path.insert(0, Guard())
+`);env.PYTHONPATH=guard;
+
+ const cli=await execute(python,['-B',path.join(scripts,'research_cli.py'),'--data-dir',state,'status'],{cwd:root,env});assert.deepEqual(JSON.parse(cli.stdout),[]);
+ const packet=await new Promise((resolve,reject)=>{const p=spawn(python,['-B',path.join(scripts,'harness_rpc.py'),'--data-dir',state],{cwd:root,env,stdio:['pipe','pipe','pipe']});let out='',err='';p.stdout.on('data',b=>out+=b);p.stderr.on('data',b=>err+=b);p.once('error',reject);p.once('close',code=>code===0?resolve(JSON.parse(out)):reject(Error(err||out)));p.stdin.end(JSON.stringify({command:'status'}));});assert.deepEqual(packet,[]);
+ assert.equal(await verifyPackage(destination),true);
+});
+
 test('installed research RPCs and MCP restart preserve the immutable package inventory',async t=>{
  const root=await mkdtemp(path.join(os.tmpdir(),'harness-python-runtime-')),destination=path.join(root,'version'),state=path.join(root,'state'),config=path.join(root,'config.json'),env=withoutBytecodeSettings();let child,client;
  const stop=async()=>{await client?.close();client=null;if(child&&child.exitCode===null&&child.signalCode===null){const exited=new Promise(r=>child.once('exit',r));child.kill('SIGTERM');await exited;}child=null;};t.after(async()=>{await stop();await rm(root,{recursive:true,force:true});});
@@ -128,4 +147,12 @@ test('installed research RPCs and MCP restart preserve the immutable package inv
  const report={title:'Installed SQLite evidence',complete:true,claims:[{id:'C1',kind:'fact',text:'WAL processes share one host.',evidence:[{source_id:'S001',quote:text}]}],summary:['C1'],comparisons:[],recommendations:[],contradictions:[],unanswered:[]};const done=await operation('research_action',{idempotencyKey:'finish',taskId:task.id,action:{action:'finish',report}});assert.equal(done.status,'accepted');assert.equal(done.spent.model,0);assert.equal(done.spent.download,1);assert.equal(done.deadline,started.deadline);assert.equal(done.result.checksumsVerified,true);assert.match(await readFile(path.join(done.result.directory,'report.md'),'utf8'),/FIXTURE/);assert.equal(await verifyPackage(destination),true);
  await stop();const help=await execute(process.execPath,[launcher,'--help'],{cwd:root,env});assert.match(help.stdout,/Frontier Harness/);assert.equal(await verifyPackage(destination),true);
  const cache=path.join(destination,'runtime/.agents/skills/deep-research/scripts/__pycache__');await mkdir(cache);await writeFile(path.join(cache,'unlisted.pyc'),'untrusted bytecode');await assert.rejects(verifyPackage(destination),/Unlisted/);
+});
+
+test('reviewed onboarding references and Spark unit are inventoried in the standalone layout',async t=>{
+ const root=await mkdtemp(path.join(os.tmpdir(),'harness-onboarding-package-'));t.after(()=>rm(root,{recursive:true,force:true}));const source=await portableSource(root),skill=path.join(source,'.agents/skills/frontier-harness');
+ for(const name of ['onboarding.md','personal-instructions-template.md'])await writeFile(path.join(skill,'references',name),'REVIEWED_'+name);
+ const destination=path.join(root,'version'),manifest=await packageHarness({sourceRoot:source,destination});
+ for(const name of ['onboarding.md','personal-instructions-template.md'])for(const prefix of ['references/','skills/frontier-harness/references/']){const relative=prefix+name;assert.ok(manifest.files.some(f=>f.path===relative));assert.equal(await readFile(path.join(destination,relative),'utf8'),'REVIEWED_'+name);}
+ const unit='runtime/.agents/skills/deep-research/deploy/deep-research.service.template';assert.ok(manifest.files.some(f=>f.path===unit));assert.equal(await readFile(path.join(destination,unit),'utf8'),await readFile(path.join(source,'.agents/skills/deep-research/deploy/deep-research.service.template'),'utf8'));assert.equal(await verifyPackage(destination),true);
 });

@@ -56,3 +56,19 @@ Implementation requires current nonfixture evidence from an independent native r
 A checksum establishes integrity, **not authenticity**. Anyone who can author receipts can declare independent authority. Use separately trusted reviewer exports and scrutinize them; never treat exit0 as authentication, authorization or semantic certification. `prePromotion` combines implementation and live research quality only. `activation` reports personal_activation; `postActivation` combines actual installed_host_discovery, persistent_research_worker, physical_phone and installed_restart. Missing installed checks do not block proposal rendering. Model/coordinator approval and fixture installed checks cannot pass those gates. Active-policy rollback is always pending/unsupported in this version, even if a terminal-only receipt says passed. `fullRelease` remains INCOMPLETE; the checker performs no personal inspection and grants no installation authority.
 
 Optional sealed handoff: the evidence index may include `seal` with exact file references `done`, `result`, `resultSha256`, `index`. See `$defs.done`, `$defs.sealedResult`, `$defs.sealedIndex` for the small supported adapter format. DONE binds result hash, index hash, candidate content and matching terminal status; the sidecar is the bare result hash plus optional newline. Every indexed artifact is rehashed. Convert a differently shaped lane result into a new adapter, preserving the original sealed files as indexed proof; never edit original DONE/result/index. A valid seal proves completeness/integrity only. Quality still needs its separate bound assessment/review. Unsealed or missing live handoffs are never inferred from an intermediate status string.
+
+## November 1 checkpoint extension
+
+[Bounded installation checkpoints](INSTALLATION.md) document the narrow local
+binding/replay/removal and CURRENT SQLite backup API. This is separate from the
+advisory checker; readiness never gains apply authority. Its tests use NEW fake
+personal/state roots only. MCP, personal managed instructions, Mac/Spark services
+and private viewer routes remain reviewable manual supervisor steps.
+
+Prepared bundles now add `installation-checkpoints.json`,
+`onboarding-managed-block-plan.json` and `spark-worker-plan.json`. The plan binds
+actual onboarding-template and worker-unit inventory hashes when present. Older
+candidates missing those entries say `pending_missing_from_candidate`; no old
+package or receipt is edited, and no new bytes are claimed as unchanged. All new
+files remain UNEXECUTED. The actual final candidate is built/frozen only by the
+supervisor after integrated verification; it must precede the one new live pilot.

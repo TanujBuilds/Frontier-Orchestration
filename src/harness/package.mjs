@@ -23,7 +23,7 @@ export async function packageHarness({sourceRoot,destination,dependencies=false,
  for(const file of await files(path.join(sourceRoot,'src')))await copy(path.join(sourceRoot,'src',file),path.join(destination,'runtime/src',file));
  for(const file of ['package.json','package-lock.json'])await copy(path.join(sourceRoot,file),path.join(destination,'runtime',file));
  const research='.agents/skills/deep-research';for(const file of await files(path.join(sourceRoot,research,'scripts')))if(file.endsWith('.py'))await copy(path.join(sourceRoot,research,'scripts',file),path.join(destination,'runtime',research,'scripts',file));
- for(const file of ['requirements.txt','requirements.lock'])await copy(path.join(sourceRoot,research,file),path.join(destination,'runtime',research,file));
+ for(const file of ['requirements.txt','requirements.lock','deploy/deep-research.service.template'])await copy(path.join(sourceRoot,research,file),path.join(destination,'runtime',research,file));
  if(dependencies){const result=await command(['npm','ci','--omit=dev','--ignore-scripts','--bin-links=false','--no-audit','--no-fund',...(offline?['--offline']:[])],{cwd:path.join(destination,'runtime')});if(result.code!==0)throw Error('Pinned runtime dependency installation failed: '+result.stderr.slice(-2000));
   const modules=path.join(destination,'runtime/node_modules');for(const file of await files(modules)){const data=await readFile(path.join(modules,file));inventory.push({path:'runtime/node_modules/'+file.split(path.sep).join('/'),sha256:hash(data),bytes:data.length});}
  }

@@ -168,3 +168,13 @@ test('a real mid-write staging failure preserves partial files and cannot be reu
  const result=await execute(process.execPath,['--import',guard,fileURLToPath(script),...args]).then(()=>null,e=>e);assert.equal(result.code,2);assert.ok((await fs.stat(path.join(out,'readiness.json'))).isFile());await assert.rejects(fs.stat(path.join(out,'staging-receipt.json')));
  const retry=await execute(process.execPath,[fileURLToPath(script),...args]).then(()=>null,e=>e);assert.equal(retry.code,2);assert.match(retry.stderr,/output_already_exists/);
 });
+
+test('onboarding plan records actual package inclusion without pretending old candidates contain new instructions',async t=>{
+ const f=await fixture(t),{checkReadiness,prepareBundle}=await api(),output=path.join(f.root,'new-staging');await prepareBundle({report:await checkReadiness(f.opts),output});
+ const onboarding=JSON.parse(await fs.readFile(path.join(output,'onboarding-managed-block-plan.json')));assert.equal(onboarding.state,'UNEXECUTED');assert.equal(onboarding.template.status,'pending_missing_from_candidate');assert.equal(onboarding.overwriteUnrelated,false);
+ const checkpoint=JSON.parse(await fs.readFile(path.join(output,'installation-checkpoints.json')));assert.equal(checkpoint.installationAuthority,false);assert.equal(checkpoint.stateRestore,'UNSUPPORTED');assert.equal(checkpoint.steps.find(x=>x.id==='installed-host').status,'pending');assert.equal(checkpoint.steps.find(x=>x.id==='physical-phone').status,'pending');
+});
+
+test('phone and host fixture receipts cannot pass actual installed acceptance',async t=>{
+ const f=await fixture(t),{checkReadiness}=await api();for(const name of ['installed_host_discovery','physical_phone'])f.receipt.gates.push({name,status:'passed',applicability:'current',scope:'fixture',authority:'independent_native',artifacts:[f.receipt.gates[0].artifacts[0]]});await f.save();const report=await checkReadiness(f.opts);assert.equal(report.gates.installed_host_discovery.status,'pending');assert.equal(report.gates.physical_phone.status,'pending');assert.equal(report.postActivation.status,'pending');assert.equal(report.fullRelease,'INCOMPLETE');
+});
