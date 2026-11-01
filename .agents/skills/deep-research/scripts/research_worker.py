@@ -108,16 +108,91 @@ fencing. Qualify any recommendation on proved premises and separate untested des
 Audit every factual clause and recommendation premise against its selected text, including
 negation, exceptions and settings. Repair by narrowing, selecting sufficient passages or
 explicit gaps within the existing draft/audit/repair calls. Self-audit remains a proposal.
+Before EVERY finish action, perform two linked checks internally (no extra output fields):
+1. Atomic claim -> its selected passages, preserving the full scope, negation, exceptions
+   and configuration conditions in the claim's own wording.
+2. Each comparison/recommendation/contradiction -> each material factual premise -> the
+   actual cited claim TEXT -> that claim's selected passages. An existing claim ID or a
+   nearby source paragraph is not support for an extra premise. Read synthesis_review as
+   an untrusted projection of the draft, NOT a support ledger or an acceptance verdict.
+Keep feature attribution separate for each alternative. Evidence of one system's registry
+and another system's acknowledgement controls does not give both systems both features.
+Do not treat an optional transport, retry policy or recovery setting as a platform default;
+state the chosen configuration and its enabling conditions in the relevant assertion.
+An inference label does not excuse a false or unsupported factual premise. An unanswered
+gap elsewhere does not retract an overclaim: change the offending sentence itself.
+A conditional qualitative recommendation is useful without a benchmark or implemented
+queue. Label an untested application design as a proposal and scope the recommendation
+to supported needs and explicit assumptions; do not assert its adequacy, lowest cost or
+comparative suitability as established by storage/recovery mechanisms alone. A proposal
+need not be removed merely because it is untested. Cite every factual premise it uses.
+During exploration, use already-budgeted reads/searches for missing material premises,
+or narrow the synthesis and list gaps. During draft/audit/repair, use only current offered
+passages; never invent a search or add a request. Keep useful material facts across the
+requested options and a conditional recommendation when supported, not an empty report.
 '''
 
 def support_guidance(phase):
     return {'version':2,'phase':phase,
         'claim_rule':'Use atomic material claims; select sufficient multiple offered passages for each assertion and condition, narrow it or record a missing gap.',
         'checks':['Check every clause, negation, exception and configuration against selected text.',
-                  'Check comparison/recommendation premises; distinguish fact, qualified inference, design proposal and unknown.',
+                  'For each synthesis sentence, trace every factual premise to actual claim text and its selected passages, not merely a valid claim ID.',
+                  'Keep each alternative\'s features and configuration separate; repeat necessary conditions in the assertion itself.',
+                  'Distinguish supported conditional judgement from untested design or asserted suitability; a gap elsewhere does not erase an overclaim.',
                   'Failure visibility does not establish retry; local recording does not close remote-effect ambiguity.',
-                  'Revise the candidate using only current offers or report complete=false with unanswered gaps.'],
+                  'In exploration, seek missing premises only with already-budgeted actions; in final phases narrow using current offers or report complete=false with gaps.'],
         'authority':'Model proposed support only; provenance and claim IDs do not grant independent semantic review or release acceptance.'}
+
+
+def synthesis_review(report, offered):
+    """Bounded mechanical join for model review, never an entailment decision.
+
+    Copy whole conclusions and their actual cited claims beside current selected
+    passages. Strip model/source review flags; missing offers are not rebound to
+    other source text. No clause extraction, semantic scoring or new report fields.
+    """
+    if not isinstance(report,dict) or not isinstance(report.get('claims'),list):return None
+    claims={c['id']:c for c in report['claims']
+            if isinstance(c,dict) and isinstance(c.get('id'),str)}
+    result={'conclusions':[],'claims':{},'unavailable_claim_ids':[],
+            'omitted_conclusions':0,
+            'interpretation':'Untrusted draft/selected-passage projection only, not semantic support. '
+                'Check each factual premise against actual claim text and selected passages. '
+                'Omitted conclusions still require review in candidate; missing passages are gaps.'}
+    for section in ('comparisons','recommendations','contradictions'):
+        entries=report.get(section,[])
+        if not isinstance(entries,list):continue
+        for index,entry in enumerate(entries):
+            if not isinstance(entry,dict) or not isinstance(entry.get('text'),str) or not isinstance(entry.get('claim_ids'),list):continue
+            refs=[ref for ref in entry['claim_ids'] if isinstance(ref,str)]
+            additions={};missing=[]
+            for ref in dict.fromkeys(refs):
+                if ref in result['claims']:continue
+                claim=claims.get(ref)
+                if claim is None:
+                    if ref not in result['unavailable_claim_ids']:missing.append(ref)
+                    continue
+                selected=[];unavailable=0
+                for evidence in claim.get('evidence',[]):
+                    if not isinstance(evidence,dict):unavailable+=1;continue
+                    # Internal canonical evidence and current selector-only drafts
+                    # both originate from the same reserved passage catalog.
+                    selection={'source_id':evidence.get('source_id'),**evidence['selection']} if isinstance(evidence.get('selection'),dict) else evidence
+                    matches=[p for p in offered if all(k in selection and p.get(k)==selection[k] for k in SELECTOR_FIELDS)]
+                    if len(matches)!=1:unavailable+=1;continue
+                    p=matches[0]
+                    selected.append({**{k:p[k] for k in SELECTOR_FIELDS},'text':p['text']})
+                additions[ref]={'text':claim.get('text'),'kind':claim.get('kind'),
+                                'selected_passages':selected,'unavailable_selections':unavailable}
+            row={'section':section,'index':index,'text':entry['text'],'claim_ids':refs}
+            candidate={**result,'conclusions':result['conclusions']+[row],
+                       'claims':{**result['claims'],**additions},
+                       'unavailable_claim_ids':result['unavailable_claim_ids']+missing}
+            # Leave room for the omission counter to grow, without slicing text.
+            if len(json.dumps(candidate).encode())>32700:
+                result['omitted_conclusions']+=1
+            else:result=candidate
+    return result
 
 
 def selector_presentation(report,offered):
@@ -271,7 +346,8 @@ class Worker:
             content['citation_catalog_version']=2
             content['support_guidance']=support_guidance(c['phase'])
             if c['phase']!='explore':
-                content['finalization']['instruction']='Prefer 5-8 atomic material claims if sufficient, with as many supporting offered selectors as needed within the existing 10-entry limit. Preserve conditions; otherwise narrow claims or list explicit gaps.'
+                content['synthesis_review']=synthesis_review(content.get('candidate'),passages)
+                content['finalization']['instruction']='Prefer 5-8 atomic material claims if sufficient, within the existing 10-entry evidence limit. Check atomic claims against selected passages, then every synthesis factual premise against actual cited claim text AND its selected passages. Keep per-alternative features and enabling conditions; narrow the offending sentence or state a conditional proposal and gaps. Do not assert unverified suitability. Return only the existing finish/report shape; no review ledger or extra fields.'
         extra=''
 
         if job['manifest'].get('collaboration',{}).get('supervisor','none')!='none':
@@ -291,8 +367,12 @@ class Worker:
         if stale:omissions.append('Stale read passages omitted because saved source hashes changed')
         while size()>196608 and history:history.pop(0)
         if len(history)<len(c['history'][-12:]):omissions.append('Older history omitted')
+        if size()>196608 and content.get('synthesis_review') is not None:
+            content['synthesis_review']=None
+            omissions.append('Synthesis projection omitted; audit actual candidate and current offers')
         if size()>196608 and content.get('candidate') is not None:
             content['candidate']=None;omissions.append('Candidate omitted; use retained passages or report explicit gaps')
+            if support:content['synthesis_review']=None
         while size()>196608 and catalog:
             catalog.pop();
             if 'Source catalog entries omitted' not in omissions:omissions.append('Source catalog entries omitted')
@@ -303,6 +383,7 @@ class Worker:
             if strict:
                 history.clear()
                 if 'candidate' in content:content['candidate']=None
+                if support and 'synthesis_review' in content:content['synthesis_review']=None
             passages.pop();content['context_bounds']['citation_passages_omitted']+=1
             if 'Citation selections omitted by bounded context' not in omissions:omissions.append('Citation selections omitted by bounded context')
         while size()>196608 and coverage:

@@ -1,0 +1,506 @@
+{
+  "description": "Exact failed policy2 official report and selected saved passages. Diagnostic fixture, not a semantic certifier or a real-model repair result. Independent evaluator cases are separate.",
+  "report_sha256": "47b67d94a18c9011930cac7033d48ceb383e1917dd51d674c0d507d0d67196cb",
+  "report": {
+    "title": "Durable queue designs for a single-host AI worker: SQLite WAL, Redis RQ/Celery, and Temporal",
+    "complete": true,
+    "claims": [
+      {
+        "id": "C1",
+        "text": "SQLite WAL commits by appending a commit record to the WAL file, and WAL mode will not work on a network filesystem because its wal-index uses shared memory requiring all readers on the same machine.",
+        "kind": "fact",
+        "evidence": [
+          {
+            "source_id": "S001",
+            "quote": "\nThe WAL approach inverts this. The original content is preserved in the database file and the changes are appended into a separate WAL file. A COMMIT occurs when a special record indicating a commit is appended to the WAL. Thus a COMMIT can happen without ever writing to the original database, which allows readers to continue operating from the original unaltered database while changes are simultaneously being committed into the WAL. Multiple transactions can be appended to the end of a single WAL file.\nOf course, one wants to eventually transfer all the transactions that are appended in the WAL file back into the original database. Moving the WAL file transactions back into the database is called a \"checkpoint\".",
+            "selection": {
+              "text_sha256": "0bba6dd70ef726ce1a9a92b7e7e5a89c312ba6022f37723608bd545868f59f97",
+              "start": 786,
+              "end": 1509
+            }
+          },
+          {
+            "source_id": "S001",
+            "quote": " If no copy of the page exists in the WAL prior to the reader's end mark, then the page is read from the original database file. Readers can exist in separate processes, so to avoid forcing every reader to scan the entire WAL looking for pages (the WAL file can grow to multiple megabytes, depending on how often checkpoints are run), a data structure called the \"wal-index\" is maintained in shared memory which helps readers locate pages in the WAL quickly and with a minimum of I/O. The wal-index greatly improves the performance of readers, but the use of shared memory means that all readers must exist on the same machine. This is why the write-ahead log implementation will not work on a network filesystem.\nWriters merely append new content to the end of the WAL file.",
+            "selection": {
+              "text_sha256": "0bba6dd70ef726ce1a9a92b7e7e5a89c312ba6022f37723608bd545868f59f97",
+              "start": 3037,
+              "end": 3812
+            }
+          }
+        ]
+      },
+      {
+        "id": "C2",
+        "text": "SQLite WAL durability after power loss depends on the synchronous setting: writers sync the WAL on every commit with PRAGMA synchronous=FULL but omit that sync with NORMAL, sacrificing durability after power loss or hard reboot.",
+        "kind": "fact",
+        "evidence": [
+          {
+            "source_id": "S001",
+            "quote": " Further, syncing the content to the disk is not required, as long as the application is willing to sacrifice durability following a power loss or hard reboot. (Writers sync the WAL on every transaction commit if PRAGMA synchronous is set to FULL but omit this sync if PRAGMA synchronous is set to NORMAL.)\nOn the other hand, read performance deteriorates as the WAL file grows in size since each reader must check the WAL file for the content and the time needed to check the WAL file is proportional to the size of the WAL file. The wal-index helps find content in the WAL file much faster, but performance still falls off with increasing WAL file size. Hence, to maintain good read performance it is important to keep the WAL file size down by running checkpoints at regular intervals.",
+            "selection": {
+              "text_sha256": "0bba6dd70ef726ce1a9a92b7e7e5a89c312ba6022f37723608bd545868f59f97",
+              "start": 5368,
+              "end": 6156
+            }
+          }
+        ]
+      },
+      {
+        "id": "C3",
+        "text": "RQ workers are separate Python processes that each process one job at a time, and RQ documentation advises running them under process managers such as Supervisor or systemd in production.",
+        "kind": "fact",
+        "evidence": [
+          {
+            "source_id": "S002",
+            "quote": "A worker is a Python process that typically runs in the background and exists solely as a work horse to perform lengthy or blocking tasks that you don’t want to perform inside web processes.\nTo start crunching work, simply start a worker from the root of your project directory:\n$ rq worker high default low\n*** Listening for work on high, default, low\nGot send_newsletter('me@nvie.com') from default\nJob ended normally without result\n*** Listening for work on high, default, low\n...\nWorkers will read jobs from the given queues (the order is important) in an endless loop, waiting for new work to arrive when all jobs are done.\nEach worker will process a single job at a time. Within a worker, there is no concurrent processing going on.",
+            "selection": {
+              "text_sha256": "1020ba83d541e02e684f4760fc7d231a09c9267b734b4270012190102b7a00be",
+              "start": 0,
+              "end": 738
+            }
+          },
+          {
+            "source_id": "S002",
+            "quote": " If you want to perform jobs concurrently, simply start more workers.\nYou should use process managers like Supervisor or systemd to run RQ workers in production.\nBy default, workers will start working immediately and will block and wait for new work when they run out of work. Workers can also be started in burst mode to finish all currently available work and quit as soon as all given queues are emptied.\n$ rq worker --burst high default low\n*** Listening for work on high, default, low\nGot send_newsletter('me@nvie.com') from default\nJob ended normally without result\nNo more work, burst finished.\nRegistering death.\nThis can be useful for batch work that needs to be processed periodically, or just to scale up your workers temporarily during peak periods.",
+            "selection": {
+              "text_sha256": "1020ba83d541e02e684f4760fc7d231a09c9267b734b4270012190102b7a00be",
+              "start": 738,
+              "end": 1499
+            }
+          }
+        ]
+      },
+      {
+        "id": "C4",
+        "text": "RQ records failed jobs in a FailedJobRegistry and supports configurable retries via a Retry object with max and interval arguments; interval-based retries require workers started with --with-scheduler.",
+        "kind": "fact",
+        "evidence": [
+          {
+            "source_id": "S003",
+            "quote": "Jobs can fail due to exceptions occurring. When your RQ workers run in the background, how do you get notified of these exceptions?\nThe default safety net for RQ is the FailedJobRegistry. Every job that doesn’t\nexecute successfully is stored here, along with its exception information (type,\nvalue, traceback).\nfrom redis import Redis\nfrom rq import Queue\nfrom rq.job import Job\nfrom rq.registry import FailedJobRegistry\nredis = Redis()\nqueue = Queue(connection=redis)\nregistry = FailedJobRegistry(queue=queue)\n# Show all failed job IDs and the exceptions they caused during runtime\nfor job_id in registry.get_job_ids():\n    job = Job.fetch(job_id, connection=redis)\n    print(job_id, job.exc_info)\nNew in version 1.5.0\nRQ lets you easily retry failed jobs.",
+            "selection": {
+              "text_sha256": "0db4aa5925279ef5c9de59c94c5f8737729f893c5725adadcc08a000d7d080c9",
+              "start": 0,
+              "end": 757
+            }
+          },
+          {
+            "source_id": "S003",
+            "quote": " To configure retries, use RQ’s\nRetry object that accepts max and interval arguments. For example:\nfrom redis import Redis\nfrom rq import Retry, Queue\nfrom somewhere import my_func\nqueue = Queue(connection=redis)\n# Retry up to 3 times, failed job will be requeued immediately\nqueue.enqueue(my_func, retry=Retry(max=3))\n# Retry up to 3 times, with 60 seconds interval in between executions\nqueue.enqueue(my_func, retry=Retry(max=3, interval=60))\n# Retry up to 3 times, with longer interval in between retries\nqueue.enqueue(my_func, retry=Retry(max=3, interval=[10, 30, 60]))\nIf you use `interval` argument with `Retry`, don't forget to run your workers using the `--with-scheduler` argument.\nRQ supports registering custom exception handlers.",
+            "selection": {
+              "text_sha256": "0db4aa5925279ef5c9de59c94c5f8737729f893c5725adadcc08a000d7d080c9",
+              "start": 757,
+              "end": 1498
+            }
+          }
+        ]
+      },
+      {
+        "id": "C5",
+        "text": "RQ documentation describes an unfinished job being collected by another worker's maintenance task when a worker is terminated mid-job, moving the job to the FailedJobRegistry; RQ also offers a workhorse-termination handler.",
+        "kind": "fact",
+        "evidence": [
+          {
+            "source_id": "S003",
+            "quote": "\nThis is how you set a workhorse termination handler to an RQ worker:\nfrom my_handlers import my_work_horse_killed_handler\nw = Worker([q], work_horse_killed_handler=my_work_horse_killed_handler)\nThe handler itself is a function that takes the following parameters: job,\nretpid, ret_val and rusage:\nfrom resource import struct_rusage\nfrom rq.job import Job\ndef my_work_horse_killed_handler(job: Job, retpid: int, ret_val: int, rusage: struct_rusage):\n    # do your thing here, for example set job.retries_left to 0\nRQ Exceptions you can get in your job failure callbacks\nThis error means an unfinished job was collected by another worker’s maintenance task. This usually happens when a worker is busy with a job and is terminated before it finished that job.",
+            "selection": {
+              "text_sha256": "0db4aa5925279ef5c9de59c94c5f8737729f893c5725adadcc08a000d7d080c9",
+              "start": 3223,
+              "end": 3980
+            }
+          },
+          {
+            "source_id": "S003",
+            "quote": " Another worker collects this job and moves it to the FailedJobRegistry.",
+            "selection": {
+              "text_sha256": "0db4aa5925279ef5c9de59c94c5f8737729f893c5725adadcc08a000d7d080c9",
+              "start": 3980,
+              "end": 4052
+            }
+          }
+        ]
+      },
+      {
+        "id": "C6",
+        "text": "Celery documentation states that a task message is not removed from the queue until acknowledged, and a worker killed by power failure or other cause will have its message redelivered to another worker; by default Celery acknowledges before execution so an already-started invocation is not re-executed, while acks_late acknowledges after return for idempotent tasks.",
+        "kind": "fact",
+        "evidence": [
+          {
+            "source_id": "S006",
+            "quote": "Tasks¶\nTasks are the building blocks of Celery applications.\nA task is a class that can be created out of any callable. It performs dual roles in that it defines both what happens when a task is called (sends a message), and what happens when a worker receives that message.\nEvery task class has a unique name, and this name is referenced in messages so the worker can find the right function to execute.\nA task message is not removed from the queue until that message has been acknowledged by a worker. A worker can reserve many messages in advance and even if the worker is killed – by power failure or some other reason – the message will be redelivered to another worker.",
+            "selection": {
+              "text_sha256": "7cebacb2187bddc054f196413b7a022e553893bc2b0fcec187663a9bb9c31887",
+              "start": 0,
+              "end": 675
+            }
+          },
+          {
+            "source_id": "S006",
+            "quote": "\nIdeally task functions should be idempotent: meaning the function won’t cause unintended effects even if called multiple times with the same arguments. Since the worker cannot detect if your tasks are idempotent, the default behavior is to acknowledge the message in advance, just before it’s executed, so that a task invocation that already started is never executed again.\nIf your task is idempotent you can set the acks_late option\nto have the worker acknowledge the message after the task returns\ninstead. See also the FAQ entry Should I use retry or acks_late?.\nNote that the worker will acknowledge the message if the child process executing\nthe task is terminated (either by the task calling sys.exit(), or by signal)\neven when acks_late is enabled.  This behavior is intentional\nas…\n",
+            "selection": {
+              "text_sha256": "7cebacb2187bddc054f196413b7a022e553893bc2b0fcec187663a9bb9c31887",
+              "start": 675,
+              "end": 1467
+            }
+          }
+        ]
+      },
+      {
+        "id": "C7",
+        "text": "Celery documentation notes that even with acks_late the worker acknowledges the message if the child process is terminated by sys.exit() or a signal, and redelivery in those scenarios requires considering the task_reject_on_worker_lost setting.",
+        "kind": "fact",
+        "evidence": [
+          {
+            "source_id": "S006",
+            "quote": "\nIdeally task functions should be idempotent: meaning the function won’t cause unintended effects even if called multiple times with the same arguments. Since the worker cannot detect if your tasks are idempotent, the default behavior is to acknowledge the message in advance, just before it’s executed, so that a task invocation that already started is never executed again.\nIf your task is idempotent you can set the acks_late option\nto have the worker acknowledge the message after the task returns\ninstead. See also the FAQ entry Should I use retry or acks_late?.\nNote that the worker will acknowledge the message if the child process executing\nthe task is terminated (either by the task calling sys.exit(), or by signal)\neven when acks_late is enabled.  This behavior is intentional\nas…\n",
+            "selection": {
+              "text_sha256": "7cebacb2187bddc054f196413b7a022e553893bc2b0fcec187663a9bb9c31887",
+              "start": 675,
+              "end": 1467
+            }
+          },
+          {
+            "source_id": "S006",
+            "quote": "- We don’t want to rerun tasks that forces the kernel to send\na SIGSEGV (segmentation fault) or similar signals to the process.\n- We assume that a system administrator deliberately killing the task does not want it to automatically restart.\n- A task that allocates too much memory is in danger of triggering the kernel OOM killer, the same may happen again.\n- A task that always fails when redelivered may cause a high-frequency message loop taking down the system.\nIf you really want a task to be redelivered in these scenarios you should\nconsider enabling the task_reject_on_worker_lost setting.\nWarning\nA task that blocks indefinitely may eventually stop the worker instance from doing any other work.",
+            "selection": {
+              "text_sha256": "7cebacb2187bddc054f196413b7a022e553893bc2b0fcec187663a9bb9c31887",
+              "start": 1467,
+              "end": 2171
+            }
+          }
+        ]
+      },
+      {
+        "id": "C8",
+        "text": "Temporal documentation states a Workflow Execution persists state across failures and outages and resumes from the latest recorded event in its Event History, and completed Activities do not re-execute during Workflow Replay.",
+        "kind": "fact",
+        "evidence": [
+          {
+            "source_id": "S004",
+            "quote": "\nDurability\nDurability is the absence of an imposed time limit.\nA Workflow Execution is durable because it executes a Temporal Workflow Definition (also called a Temporal Workflow Function), your application code, effectively once and to completion—whether your code executes for seconds or years.\nReliability\nReliability is responsiveness in the presence of failure.\nA Workflow Execution is reliable, because it is fully recoverable after a failure. The Temporal Platform ensures the state of the Workflow Execution persists in the face of failures and outages and resumes execution from the latest state.\nScalability\nScalability is responsiveness in the presence of load.",
+            "selection": {
+              "text_sha256": "7d171ae9a884b4b8d5386f53c1d0570b4c0f8859b0085f9fdef40f91b095fb14",
+              "start": 746,
+              "end": 1419
+            }
+          },
+          {
+            "source_id": "S004",
+            "quote": "\nIf a failure occurs, the Workflow Execution picks up where the last recorded event occurred in the Event History.\nCommands and awaitables\nA Workflow Execution does two things:\n- Issue Commands.\n- Wait on an Awaitables (often called Futures).\nCommand generation and waiting\nCommands are issued and Awaitables are provided by the use of Workflow APIs in the Workflow Definition.\nCommands are generated whenever the Workflow Function is executed. The Worker Process supervises the Command generation and makes sure that it maps to the current Event History. (For more information, see Deterministic constraints.)",
+            "selection": {
+              "text_sha256": "7d171ae9a884b4b8d5386f53c1d0570b4c0f8859b0085f9fdef40f91b095fb14",
+              "start": 2151,
+              "end": 2761
+            }
+          },
+          {
+            "source_id": "S005",
+            "quote": "- Payment processing system - A payment processing system must charge the customer only once for a given purchase. If the system was not designed to be idempotent, duplicate requests would result in extra charges and unhappy customers. A payment processing system that is designed to be idempotent ensures customers are not charged multiple times for the same transaction, preventing financial discrepancies.\nBy design, completed Activities will not re-execute as part of a Workflow Replay. However, Activities won’t record to the Event History until they return or produce an error. If an Activity fails to report to the server at all, it will be retried. Designing for idempotence, especially if you have a Global Namespace, will improve reusability and reliability.",
+            "selection": {
+              "text_sha256": "572efbd9b6f808b3e13a3ceabd0f9fadd02b41fcf4750422f896e7a9e69bf544",
+              "start": 2805,
+              "end": 3573
+            }
+          }
+        ]
+      },
+      {
+        "id": "C9",
+        "text": "Temporal documentation states that an Activity may be executed multiple times and partially complete more than once, and that if a Worker crashes after an Activity completes but before notifying the service, the Activity is retried; idempotency keys must be enforced by the called service, not by the Activity itself.",
+        "kind": "fact",
+        "evidence": [
+          {
+            "source_id": "S005",
+            "quote": " To maintain idempotency, design your Activities to be more granular. In this case, you could have three Activities, one for each step. This way, only the step that failed will be executed again. However, you must balance this against the potential for a larger Event History, since there would now be three Activity Executions instead of one.\nIdempotence for Activities is also important due to a particular edge case inherent in distributed computing. Consider a scenario in which a Worker polls the Temporal Service, accepts the Activity Task, and begins executing the Activity. The Activity function completes successfully, but the Worker crashes just before it notifies the Temporal Service.",
+            "selection": {
+              "text_sha256": "572efbd9b6f808b3e13a3ceabd0f9fadd02b41fcf4750422f896e7a9e69bf544",
+              "start": 5062,
+              "end": 5758
+            }
+          },
+          {
+            "source_id": "S005",
+            "quote": " In this case, the Event History won’t reflect the successful completion of the Task, so the Activity will be retried. If the Activity is not idempotent, this could have negative consequences, such as duplicate charges in a payment processing scenario.\nYou can achieve idempotency in your application through the use of unique identifiers, known as idempotency keys, which are used to detect duplicate requests. These are enforced by the service you are calling from your Activity, not by the Activity itself.\nFor example, the APIs provided by most payment processors allow the client to include an idempotency key with the request. When the payment service receives a request, it checks a database to determine whether there has already been a request with this key.",
+            "selection": {
+              "text_sha256": "572efbd9b6f808b3e13a3ceabd0f9fadd02b41fcf4750422f896e7a9e69bf544",
+              "start": 5758,
+              "end": 6525
+            }
+          },
+          {
+            "source_id": "S005",
+            "quote": " Since Temporal can’t tell when a Worker crashes, Workflows rely on the start_to_close timeout to know how long to wait before assuming that an Activity is inactive.\nFor an Activity with a Retry Policy that allows retries, Temporal guarantees that the Activity will be observed as completed exactly once. However, the Activity may be executed multiple times and may even partially complete more than once during this process. This could lead to a scenario where certain parts of the Activity are executed multiple times before a successful execution is completed.\nYou should typically not write retry logic manually within your Activity Definition.",
+            "selection": {
+              "text_sha256": "572efbd9b6f808b3e13a3ceabd0f9fadd02b41fcf4750422f896e7a9e69bf544",
+              "start": 7289,
+              "end": 7937
+            }
+          }
+        ]
+      },
+      {
+        "id": "C10",
+        "text": "Temporal documentation states that Temporal guarantees an Activity with a retry policy will be observed as completed exactly once, while the Activity itself may execute multiple times; this is a workflow-observation guarantee, not a guarantee of exactly-once external side effects.",
+        "kind": "fact",
+        "evidence": [
+          {
+            "source_id": "S005",
+            "quote": " Since Temporal can’t tell when a Worker crashes, Workflows rely on the start_to_close timeout to know how long to wait before assuming that an Activity is inactive.\nFor an Activity with a Retry Policy that allows retries, Temporal guarantees that the Activity will be observed as completed exactly once. However, the Activity may be executed multiple times and may even partially complete more than once during this process. This could lead to a scenario where certain parts of the Activity are executed multiple times before a successful execution is completed.\nYou should typically not write retry logic manually within your Activity Definition.",
+            "selection": {
+              "text_sha256": "572efbd9b6f808b3e13a3ceabd0f9fadd02b41fcf4750422f896e7a9e69bf544",
+              "start": 7289,
+              "end": 7937
+            }
+          },
+          {
+            "source_id": "S005",
+            "quote": " In this case, the Event History won’t reflect the successful completion of the Task, so the Activity will be retried. If the Activity is not idempotent, this could have negative consequences, such as duplicate charges in a payment processing scenario.\nYou can achieve idempotency in your application through the use of unique identifiers, known as idempotency keys, which are used to detect duplicate requests. These are enforced by the service you are calling from your Activity, not by the Activity itself.\nFor example, the APIs provided by most payment processors allow the client to include an idempotency key with the request. When the payment service receives a request, it checks a database to determine whether there has already been a request with this key.",
+            "selection": {
+              "text_sha256": "572efbd9b6f808b3e13a3ceabd0f9fadd02b41fcf4750422f896e7a9e69bf544",
+              "start": 5758,
+              "end": 6525
+            }
+          }
+        ]
+      }
+    ],
+    "summary": [
+      "C1",
+      "C2",
+      "C3",
+      "C4",
+      "C5",
+      "C6",
+      "C7",
+      "C8",
+      "C9",
+      "C10"
+    ],
+    "comparisons": [
+      {
+        "text": "SQLite WAL is a single-host, single-writer-at-a-time embedded store whose power-loss durability depends on synchronous=FULL; it is unsuitable on a network filesystem (C1, C2). RQ and Celery add a separate Redis broker and worker processes with their own retry and acknowledgement semantics (C3, C4, C6, C7). Temporal adds a durable workflow service with event-history replay and activity retry policies, but its exactly-once observation guarantee does not make external effects exactly-once (C8, C9, C10).",
+        "claim_ids": [
+          "C1",
+          "C2",
+          "C3",
+          "C4",
+          "C6",
+          "C7",
+          "C8",
+          "C9",
+          "C10"
+        ]
+      },
+      {
+        "text": "For process-crash recovery, Celery's default early acknowledgement avoids re-running an already-started task but can lose work if the worker dies before completion, while acks_late enables redelivery for idempotent tasks with documented exceptions for signal/OOM termination (C6, C7). Temporal retries activities whose completion was not recorded, so a crash after a costly model call can cause a duplicate call unless the external service enforces an idempotency key (C9, C10).",
+        "claim_ids": [
+          "C6",
+          "C7",
+          "C9",
+          "C10"
+        ]
+      },
+      {
+        "text": "RQ's maintenance collection of unfinished jobs and its workhorse-termination handler provide failure visibility and cleanup hooks, but the saved passages do not establish lease expiry, stale-worker fencing, or exactly-once external effects (C5).",
+        "claim_ids": [
+          "C5"
+        ]
+      }
+    ],
+    "recommendations": [
+      {
+        "text": "Inference: for a modest number of local workers on one host with a local filesystem, the simplest appropriate approach is a SQLite WAL-backed queue with synchronous=FULL, a single-writer claim transaction, explicit lease/expiry columns and fencing tokens checked before committing results, plus idempotency keys for costly model requests; this relies on C1 and C2 and on the assumption that the host is not a network filesystem.",
+        "claim_ids": [
+          "C1",
+          "C2"
+        ]
+      },
+      {
+        "text": "Inference: choose Redis with RQ or Celery when you need a separate broker and multiple worker processes with built-in retry registries and acknowledgement controls, accepting the added Redis operational component and the documented acknowledgement caveats (C3, C4, C6, C7).",
+        "claim_ids": [
+          "C3",
+          "C4",
+          "C6",
+          "C7"
+        ]
+      },
+      {
+        "text": "Inference: choose Temporal when multi-step workflows must survive failures and outages with event-history replay and managed activity retries justify the additional service and worker infrastructure; still enforce idempotency keys at the external model provider because Temporal's exactly-once observation guarantee does not cover external side effects (C8, C9, C10).",
+        "claim_ids": [
+          "C8",
+          "C9",
+          "C10"
+        ]
+      }
+    ],
+    "contradictions": [],
+    "unanswered": [
+      "The saved passages do not document SQLite's own claim/lease or stale-worker fencing mechanisms; any such design is an application-level proposal, not a SQLite guarantee.",
+      "No saved passage establishes exactly-once external effects for SQLite, RQ, Celery, or Temporal; provider-side idempotency enforcement remains required and unverified here.",
+      "No throughput, pricing, or deployment measurements were found in the saved primary sources, so operational cost comparisons remain qualitative and unquantified.",
+      "The python.org sqlite3 seed was not saved, so Python DB-API transaction behavior is not covered by this evidence.",
+      "Celery's default early acknowledgement versus acks_late redelivery is a documented trade-off (C6, C7); the saved passages do not establish which setting is appropriate for a given workload."
+    ]
+  },
+  "citation_passages": [
+    {
+      "source_id": "S001",
+      "text_sha256": "0bba6dd70ef726ce1a9a92b7e7e5a89c312ba6022f37723608bd545868f59f97",
+      "start": 786,
+      "end": 1509,
+      "text": "\nThe WAL approach inverts this. The original content is preserved in the database file and the changes are appended into a separate WAL file. A COMMIT occurs when a special record indicating a commit is appended to the WAL. Thus a COMMIT can happen without ever writing to the original database, which allows readers to continue operating from the original unaltered database while changes are simultaneously being committed into the WAL. Multiple transactions can be appended to the end of a single WAL file.\nOf course, one wants to eventually transfer all the transactions that are appended in the WAL file back into the original database. Moving the WAL file transactions back into the database is called a \"checkpoint\"."
+    },
+    {
+      "source_id": "S001",
+      "text_sha256": "0bba6dd70ef726ce1a9a92b7e7e5a89c312ba6022f37723608bd545868f59f97",
+      "start": 3037,
+      "end": 3812,
+      "text": " If no copy of the page exists in the WAL prior to the reader's end mark, then the page is read from the original database file. Readers can exist in separate processes, so to avoid forcing every reader to scan the entire WAL looking for pages (the WAL file can grow to multiple megabytes, depending on how often checkpoints are run), a data structure called the \"wal-index\" is maintained in shared memory which helps readers locate pages in the WAL quickly and with a minimum of I/O. The wal-index greatly improves the performance of readers, but the use of shared memory means that all readers must exist on the same machine. This is why the write-ahead log implementation will not work on a network filesystem.\nWriters merely append new content to the end of the WAL file."
+    },
+    {
+      "source_id": "S001",
+      "text_sha256": "0bba6dd70ef726ce1a9a92b7e7e5a89c312ba6022f37723608bd545868f59f97",
+      "start": 5368,
+      "end": 6156,
+      "text": " Further, syncing the content to the disk is not required, as long as the application is willing to sacrifice durability following a power loss or hard reboot. (Writers sync the WAL on every transaction commit if PRAGMA synchronous is set to FULL but omit this sync if PRAGMA synchronous is set to NORMAL.)\nOn the other hand, read performance deteriorates as the WAL file grows in size since each reader must check the WAL file for the content and the time needed to check the WAL file is proportional to the size of the WAL file. The wal-index helps find content in the WAL file much faster, but performance still falls off with increasing WAL file size. Hence, to maintain good read performance it is important to keep the WAL file size down by running checkpoints at regular intervals."
+    },
+    {
+      "source_id": "S002",
+      "text_sha256": "1020ba83d541e02e684f4760fc7d231a09c9267b734b4270012190102b7a00be",
+      "start": 0,
+      "end": 738,
+      "text": "A worker is a Python process that typically runs in the background and exists solely as a work horse to perform lengthy or blocking tasks that you don’t want to perform inside web processes.\nTo start crunching work, simply start a worker from the root of your project directory:\n$ rq worker high default low\n*** Listening for work on high, default, low\nGot send_newsletter('me@nvie.com') from default\nJob ended normally without result\n*** Listening for work on high, default, low\n...\nWorkers will read jobs from the given queues (the order is important) in an endless loop, waiting for new work to arrive when all jobs are done.\nEach worker will process a single job at a time. Within a worker, there is no concurrent processing going on."
+    },
+    {
+      "source_id": "S002",
+      "text_sha256": "1020ba83d541e02e684f4760fc7d231a09c9267b734b4270012190102b7a00be",
+      "start": 738,
+      "end": 1499,
+      "text": " If you want to perform jobs concurrently, simply start more workers.\nYou should use process managers like Supervisor or systemd to run RQ workers in production.\nBy default, workers will start working immediately and will block and wait for new work when they run out of work. Workers can also be started in burst mode to finish all currently available work and quit as soon as all given queues are emptied.\n$ rq worker --burst high default low\n*** Listening for work on high, default, low\nGot send_newsletter('me@nvie.com') from default\nJob ended normally without result\nNo more work, burst finished.\nRegistering death.\nThis can be useful for batch work that needs to be processed periodically, or just to scale up your workers temporarily during peak periods."
+    },
+    {
+      "source_id": "S003",
+      "text_sha256": "0db4aa5925279ef5c9de59c94c5f8737729f893c5725adadcc08a000d7d080c9",
+      "start": 0,
+      "end": 757,
+      "text": "Jobs can fail due to exceptions occurring. When your RQ workers run in the background, how do you get notified of these exceptions?\nThe default safety net for RQ is the FailedJobRegistry. Every job that doesn’t\nexecute successfully is stored here, along with its exception information (type,\nvalue, traceback).\nfrom redis import Redis\nfrom rq import Queue\nfrom rq.job import Job\nfrom rq.registry import FailedJobRegistry\nredis = Redis()\nqueue = Queue(connection=redis)\nregistry = FailedJobRegistry(queue=queue)\n# Show all failed job IDs and the exceptions they caused during runtime\nfor job_id in registry.get_job_ids():\n    job = Job.fetch(job_id, connection=redis)\n    print(job_id, job.exc_info)\nNew in version 1.5.0\nRQ lets you easily retry failed jobs."
+    },
+    {
+      "source_id": "S003",
+      "text_sha256": "0db4aa5925279ef5c9de59c94c5f8737729f893c5725adadcc08a000d7d080c9",
+      "start": 757,
+      "end": 1498,
+      "text": " To configure retries, use RQ’s\nRetry object that accepts max and interval arguments. For example:\nfrom redis import Redis\nfrom rq import Retry, Queue\nfrom somewhere import my_func\nqueue = Queue(connection=redis)\n# Retry up to 3 times, failed job will be requeued immediately\nqueue.enqueue(my_func, retry=Retry(max=3))\n# Retry up to 3 times, with 60 seconds interval in between executions\nqueue.enqueue(my_func, retry=Retry(max=3, interval=60))\n# Retry up to 3 times, with longer interval in between retries\nqueue.enqueue(my_func, retry=Retry(max=3, interval=[10, 30, 60]))\nIf you use `interval` argument with `Retry`, don't forget to run your workers using the `--with-scheduler` argument.\nRQ supports registering custom exception handlers."
+    },
+    {
+      "source_id": "S003",
+      "text_sha256": "0db4aa5925279ef5c9de59c94c5f8737729f893c5725adadcc08a000d7d080c9",
+      "start": 3223,
+      "end": 3980,
+      "text": "\nThis is how you set a workhorse termination handler to an RQ worker:\nfrom my_handlers import my_work_horse_killed_handler\nw = Worker([q], work_horse_killed_handler=my_work_horse_killed_handler)\nThe handler itself is a function that takes the following parameters: job,\nretpid, ret_val and rusage:\nfrom resource import struct_rusage\nfrom rq.job import Job\ndef my_work_horse_killed_handler(job: Job, retpid: int, ret_val: int, rusage: struct_rusage):\n    # do your thing here, for example set job.retries_left to 0\nRQ Exceptions you can get in your job failure callbacks\nThis error means an unfinished job was collected by another worker’s maintenance task. This usually happens when a worker is busy with a job and is terminated before it finished that job."
+    },
+    {
+      "source_id": "S003",
+      "text_sha256": "0db4aa5925279ef5c9de59c94c5f8737729f893c5725adadcc08a000d7d080c9",
+      "start": 3980,
+      "end": 4052,
+      "text": " Another worker collects this job and moves it to the FailedJobRegistry."
+    },
+    {
+      "source_id": "S006",
+      "text_sha256": "7cebacb2187bddc054f196413b7a022e553893bc2b0fcec187663a9bb9c31887",
+      "start": 0,
+      "end": 675,
+      "text": "Tasks¶\nTasks are the building blocks of Celery applications.\nA task is a class that can be created out of any callable. It performs dual roles in that it defines both what happens when a task is called (sends a message), and what happens when a worker receives that message.\nEvery task class has a unique name, and this name is referenced in messages so the worker can find the right function to execute.\nA task message is not removed from the queue until that message has been acknowledged by a worker. A worker can reserve many messages in advance and even if the worker is killed – by power failure or some other reason – the message will be redelivered to another worker."
+    },
+    {
+      "source_id": "S006",
+      "text_sha256": "7cebacb2187bddc054f196413b7a022e553893bc2b0fcec187663a9bb9c31887",
+      "start": 675,
+      "end": 1467,
+      "text": "\nIdeally task functions should be idempotent: meaning the function won’t cause unintended effects even if called multiple times with the same arguments. Since the worker cannot detect if your tasks are idempotent, the default behavior is to acknowledge the message in advance, just before it’s executed, so that a task invocation that already started is never executed again.\nIf your task is idempotent you can set the acks_late option\nto have the worker acknowledge the message after the task returns\ninstead. See also the FAQ entry Should I use retry or acks_late?.\nNote that the worker will acknowledge the message if the child process executing\nthe task is terminated (either by the task calling sys.exit(), or by signal)\neven when acks_late is enabled.  This behavior is intentional\nas…\n"
+    },
+    {
+      "source_id": "S006",
+      "text_sha256": "7cebacb2187bddc054f196413b7a022e553893bc2b0fcec187663a9bb9c31887",
+      "start": 1467,
+      "end": 2171,
+      "text": "- We don’t want to rerun tasks that forces the kernel to send\na SIGSEGV (segmentation fault) or similar signals to the process.\n- We assume that a system administrator deliberately killing the task does not want it to automatically restart.\n- A task that allocates too much memory is in danger of triggering the kernel OOM killer, the same may happen again.\n- A task that always fails when redelivered may cause a high-frequency message loop taking down the system.\nIf you really want a task to be redelivered in these scenarios you should\nconsider enabling the task_reject_on_worker_lost setting.\nWarning\nA task that blocks indefinitely may eventually stop the worker instance from doing any other work."
+    },
+    {
+      "source_id": "S004",
+      "text_sha256": "7d171ae9a884b4b8d5386f53c1d0570b4c0f8859b0085f9fdef40f91b095fb14",
+      "start": 746,
+      "end": 1419,
+      "text": "\nDurability\nDurability is the absence of an imposed time limit.\nA Workflow Execution is durable because it executes a Temporal Workflow Definition (also called a Temporal Workflow Function), your application code, effectively once and to completion—whether your code executes for seconds or years.\nReliability\nReliability is responsiveness in the presence of failure.\nA Workflow Execution is reliable, because it is fully recoverable after a failure. The Temporal Platform ensures the state of the Workflow Execution persists in the face of failures and outages and resumes execution from the latest state.\nScalability\nScalability is responsiveness in the presence of load."
+    },
+    {
+      "source_id": "S004",
+      "text_sha256": "7d171ae9a884b4b8d5386f53c1d0570b4c0f8859b0085f9fdef40f91b095fb14",
+      "start": 2151,
+      "end": 2761,
+      "text": "\nIf a failure occurs, the Workflow Execution picks up where the last recorded event occurred in the Event History.\nCommands and awaitables\nA Workflow Execution does two things:\n- Issue Commands.\n- Wait on an Awaitables (often called Futures).\nCommand generation and waiting\nCommands are issued and Awaitables are provided by the use of Workflow APIs in the Workflow Definition.\nCommands are generated whenever the Workflow Function is executed. The Worker Process supervises the Command generation and makes sure that it maps to the current Event History. (For more information, see Deterministic constraints.)"
+    },
+    {
+      "source_id": "S005",
+      "text_sha256": "572efbd9b6f808b3e13a3ceabd0f9fadd02b41fcf4750422f896e7a9e69bf544",
+      "start": 2805,
+      "end": 3573,
+      "text": "- Payment processing system - A payment processing system must charge the customer only once for a given purchase. If the system was not designed to be idempotent, duplicate requests would result in extra charges and unhappy customers. A payment processing system that is designed to be idempotent ensures customers are not charged multiple times for the same transaction, preventing financial discrepancies.\nBy design, completed Activities will not re-execute as part of a Workflow Replay. However, Activities won’t record to the Event History until they return or produce an error. If an Activity fails to report to the server at all, it will be retried. Designing for idempotence, especially if you have a Global Namespace, will improve reusability and reliability."
+    },
+    {
+      "source_id": "S005",
+      "text_sha256": "572efbd9b6f808b3e13a3ceabd0f9fadd02b41fcf4750422f896e7a9e69bf544",
+      "start": 5062,
+      "end": 5758,
+      "text": " To maintain idempotency, design your Activities to be more granular. In this case, you could have three Activities, one for each step. This way, only the step that failed will be executed again. However, you must balance this against the potential for a larger Event History, since there would now be three Activity Executions instead of one.\nIdempotence for Activities is also important due to a particular edge case inherent in distributed computing. Consider a scenario in which a Worker polls the Temporal Service, accepts the Activity Task, and begins executing the Activity. The Activity function completes successfully, but the Worker crashes just before it notifies the Temporal Service."
+    },
+    {
+      "source_id": "S005",
+      "text_sha256": "572efbd9b6f808b3e13a3ceabd0f9fadd02b41fcf4750422f896e7a9e69bf544",
+      "start": 5758,
+      "end": 6525,
+      "text": " In this case, the Event History won’t reflect the successful completion of the Task, so the Activity will be retried. If the Activity is not idempotent, this could have negative consequences, such as duplicate charges in a payment processing scenario.\nYou can achieve idempotency in your application through the use of unique identifiers, known as idempotency keys, which are used to detect duplicate requests. These are enforced by the service you are calling from your Activity, not by the Activity itself.\nFor example, the APIs provided by most payment processors allow the client to include an idempotency key with the request. When the payment service receives a request, it checks a database to determine whether there has already been a request with this key."
+    },
+    {
+      "source_id": "S005",
+      "text_sha256": "572efbd9b6f808b3e13a3ceabd0f9fadd02b41fcf4750422f896e7a9e69bf544",
+      "start": 7289,
+      "end": 7937,
+      "text": " Since Temporal can’t tell when a Worker crashes, Workflows rely on the start_to_close timeout to know how long to wait before assuming that an Activity is inactive.\nFor an Activity with a Retry Policy that allows retries, Temporal guarantees that the Activity will be observed as completed exactly once. However, the Activity may be executed multiple times and may even partially complete more than once during this process. This could lead to a scenario where certain parts of the Activity are executed multiple times before a successful execution is completed.\nYou should typically not write retry logic manually within your Activity Definition."
+    }
+  ],
+  "source_bindings": {
+    "S001": {
+      "url": "https://www.sqlite.org/wal.html",
+      "raw_sha256": "f3467b530b883d4a00574fe1a898b3d121ed72764ae28cf66941080ac0badb9e",
+      "saved_text_sha256": "0bba6dd70ef726ce1a9a92b7e7e5a89c312ba6022f37723608bd545868f59f97"
+    },
+    "S002": {
+      "url": "https://python-rq.org/docs/workers/",
+      "raw_sha256": "ee89c73c5a18136b6f4a159111923e0dad381aead363c1da10ba214ca9c1614f",
+      "saved_text_sha256": "1020ba83d541e02e684f4760fc7d231a09c9267b734b4270012190102b7a00be"
+    },
+    "S003": {
+      "url": "https://python-rq.org/docs/exceptions/",
+      "raw_sha256": "b7bbe5a4d4077e1229e23bb236cea964d10d36121fd214343be637dbace57910",
+      "saved_text_sha256": "0db4aa5925279ef5c9de59c94c5f8737729f893c5725adadcc08a000d7d080c9"
+    },
+    "S004": {
+      "url": "https://docs.temporal.io/workflow-execution",
+      "raw_sha256": "5ca5f1c2b170d6e759ef46623912e01e6b17999124b0142ad98ce859f1e76e79",
+      "saved_text_sha256": "7d171ae9a884b4b8d5386f53c1d0570b4c0f8859b0085f9fdef40f91b095fb14"
+    },
+    "S005": {
+      "url": "https://docs.temporal.io/activity-definition",
+      "raw_sha256": "e3d7b049d76071132a0f9c1bc3b281dc2189ed53059fab6aec08375aad806fc9",
+      "saved_text_sha256": "572efbd9b6f808b3e13a3ceabd0f9fadd02b41fcf4750422f896e7a9e69bf544"
+    },
+    "S006": {
+      "url": "https://docs.celeryq.dev/en/stable/userguide/tasks.html",
+      "raw_sha256": "ab191fa175e75f0a382f91dd31689712b0b21b6ffd4df679c0cec56c6539aa5d",
+      "saved_text_sha256": "7cebacb2187bddc054f196413b7a022e553893bc2b0fcec187663a9bb9c31887"
+    }
+  }
+}

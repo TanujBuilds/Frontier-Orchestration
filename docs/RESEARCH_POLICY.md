@@ -92,3 +92,35 @@ mechanics and known evidence failures; they do not demonstrate a real-model qual
 improvement. Independent review of the exact finalized report, selected passages and
 original primary sources remains necessary. Full release and personal installation
 are not granted by this offline contract repair.
+
+### Evidence-bound synthesis guidance (November 1, 2026)
+
+New policy 2 requests check two links: each atomic claim against its selected
+passages, then each factual premise in a comparison, recommendation or
+contradiction against the actual cited claim text and those passages. Existing
+claim IDs establish membership, not relevance. Configuration conditions belong
+in the assertion itself, and features must remain attributed to each alternative.
+A gap elsewhere does not retract an overclaim. A conditional qualitative
+recommendation or explicitly untested design proposal does not require a deployed
+implementation or benchmark; its adequacy or comparative suitability must not be
+presented as established by unrelated mechanism evidence.
+
+During existing final phases, `synthesis_review` is model context only: a bounded
+mechanical projection of draft conclusions, their actual cited claims and exact
+currently offered selected passages. It contains no inferred premises or support
+verdicts, copies no model/source verification flags and grants no authority.
+Missing current selections remain missing; nearby text never substitutes for
+them. Whole conclusions are omitted when the projection reaches its 32768-byte
+bound, with an explicit count. The projection is dropped before the candidate
+when the unchanged total request cap requires it, and is removed whenever that
+candidate or its offered selectors are removed. The model must still audit the
+candidate and current offers. This duplicates context for attention; it does not
+increase evidence, calls or acceptance guarantees.
+
+All phases use the same synthesis discipline. Missing factual premises can use
+already-budgeted exploration actions; final phases still permit finish only.
+Report shape, policy and capability versions, deterministic provenance checks,
+legacy/policy 1 prompts and saved reserved requests are unchanged. Offline
+historical and arbitrary-topic scenarios test this presentation and its bounds;
+they are not evidence that a real model repaired the report. Independent exact
+output assessment and a separately authorized live pilot remain distinct gates.
