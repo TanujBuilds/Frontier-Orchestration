@@ -52,3 +52,23 @@ that goal's coding workspace. It permits a partial receipt without discarding or
 silently integrating unfinished changes; continuing coding requires a separately
 approved goal. Unknown remote ownership still holds the shared slot. Reconciliation
 does not recreate a missing remote submission or refund requests.
+
+## Bounded research context repair (2026-10-31)
+
+The worker now exposes saved-source ends and repeated-read/search feedback,
+retains up to12 source-ID/hash/range records (at most two per source), and presents
+up to24000 saved passage characters plus bounded source prefixes. Evicted, stale
+or omitted passages are explicit evidence gaps. Seed retrieval diagnostics do
+not establish semantic coverage or factual support. The entire new model request
+is bounded to196608 serialized bytes using the provider's actual JSON encoding
+and shared unchanged completion envelope; oversized approved question/scope
+fails before reservation. Previously reserved requests replay their exact stored
+payloads across upgrade, including payloads created before this bound existed.
+The bound applies to new requests, not retroactive rewriting of old evidence.
+
+Deterministic five-claim comparison and missing-option fixtures exercise this
+context. They are not the mandatory live original-source quality gate. Both
+exhausted real reports remain partial and unchanged; source permission, exact
+saved-quotation checks and the last-three-call draft/audit/repair reservation
+remain authoritative. Fresh live research and overnight validation still require
+separately approved exact budgets.

@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 from research_reader import _ResponseSocket, read_url
 from research_search import SearxSearch
 from research_worker import atomic
+from research_protocol import completion_payload
 
 class DeepSeek:
     def __init__(self,base_url,model_id,api_key_env=None):
@@ -39,8 +40,7 @@ class DeepSeek:
             self.verified=True
         remaining=timeout-(time.monotonic()-start)
         if remaining<=0:raise TimeoutError('model request deadline expired')
-        obj=self.request('POST','/chat/completions',{'model':self.model_id,'messages':messages,'stream':False,'temperature':0.2,'max_tokens':8192,
-            'chat_template_kwargs':{'enable_thinking':False}},remaining)
+        obj=self.request('POST','/chat/completions',completion_payload(self.model_id,messages),remaining)
         choice=obj['choices'][0]
         content=choice['message'].get('content')
         # Persist transport evidence even when the model produced no usable action.

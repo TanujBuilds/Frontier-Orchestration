@@ -8,7 +8,7 @@ import time
 import uuid
 from urllib.parse import urlsplit, urljoin
 from research_state import BudgetExceeded, StateError
-from research_protocol import parse_action, validate_report, render_report, REPORT_SHAPE, FINISH_ACTION_EXAMPLE
+from research_protocol import parse_action, validate_report, render_report, REPORT_SHAPE, FINISH_ACTION_EXAMPLE, completion_payload
 
 SYSTEM = '''You are the DeepSeek research worker. Answer the approved question using public evidence.
 Return exactly one JSON action: {"action":"search","query":"..."},
@@ -78,8 +78,10 @@ class Worker:
             windows.append(window)
             # Bound checkpoint metadata and avoid one source displacing all others.
             same=[w for w in windows if w['source_id']==sid]
-            if len(same)>2:windows.remove(same[0])
-            while len(windows)>12:windows.pop(0)
+            if len(same)>2:
+                windows.remove(same[0]);c['evidence_windows_evicted']=c.get('evidence_windows_evicted',0)+1
+            while len(windows)>12:
+                windows.pop(0);c['evidence_windows_evicted']=c.get('evidence_windows_evicted',0)+1
         return duplicate or end<=start
 
     def model_payload(self,job,c):
@@ -94,14 +96,15 @@ class Worker:
                             'truncated':source.get('truncated',False),
                             'text_sha256':hashlib.sha256(source['text'].encode()).hexdigest(),
                             'content_sha256':source.get('contentSha256')})
-        windows=[];window_chars=0;stale=0
+        windows=[];window_chars=0;stale=0;omitted_windows=c.get('evidence_windows_evicted',0)
         for entry in reversed(c.get('evidence_windows',[])[:12]):
             source=c['sources'].get(entry['source_id'])
             if not source or entry.get('text_sha256')!=hashlib.sha256(source['text'].encode()).hexdigest() or entry.get('content_sha256')!=source.get('contentSha256'):
                 stale+=1;continue
             start,end=entry['start'],entry['end']
             if not 0<=start<end<=len(source['text']):stale+=1;continue
-            if window_chars+end-start>24000:continue
+            if window_chars+end-start>24000:
+                omitted_windows+=1;continue
             windows.append({**entry,'text':source['text'][start:end]});window_chars+=end-start
         seeds=job['manifest']['scope']['seed_urls']
         coverage=[]
@@ -116,6 +119,7 @@ class Worker:
                  'coverage':{'seeds':coverage,'omitted_seeds':max(0,len(seeds)-50),
                      'interpretation':'Seed retrieval only; not proof of relevance, option coverage, factual support or completeness. Missing options in the question remain unanswered.'},
                  'context_bounds':{'version':1,'max_payload_bytes':196608,'stale_windows_omitted':stale,
+                     'read_windows_omitted':omitted_windows,
                      'omissions':['Some source prefixes omitted'] if len(c['sources'])>50 or any(not row['text'] for row in catalog) else []}}
         if c['phase']!='explore':
             content.update(candidate=c.get('draft'),validation_errors=c['errors'][-15:],
@@ -130,8 +134,15 @@ class Worker:
             return {'phase':c['phase'],'messages':[{'role':'system','content':SYSTEM+extra},
                 {'role':'user','content':json.dumps(content,ensure_ascii=False)}]}
         # Include JSON escaping and Unicode bytes of the complete dispatch payload.
-        def size():return len(json.dumps(payload(),ensure_ascii=False).encode())
+        def size():
+            value=payload()
+            # DeepSeek.request uses the default ASCII-escaped JSON serializer.
+            wire=completion_payload(getattr(self.model,'model_id','unreported'),value['messages'])
+            return max(len(json.dumps(value).encode()),len(json.dumps(wire).encode()))
         omissions=content['context_bounds']['omissions']
+        window_gap='Read passages omitted by bounded context; missing ranges are evidence gaps'
+        if omitted_windows:omissions.append(window_gap)
+        if stale:omissions.append('Stale read passages omitted because saved source hashes changed')
         while size()>196608 and history:history.pop(0)
         if len(history)<len(c['history'][-12:]):omissions.append('Older history omitted')
         if size()>196608 and content.get('candidate') is not None:
@@ -140,8 +151,8 @@ class Worker:
             catalog.pop();
             if 'Source catalog entries omitted' not in omissions:omissions.append('Source catalog entries omitted')
         while size()>196608 and windows:
-            windows.pop();
-            if 'Read windows omitted' not in omissions:omissions.append('Read windows omitted; missing passages are evidence gaps')
+            windows.pop();content['context_bounds']['read_windows_omitted']+=1
+            if window_gap not in omissions:omissions.append(window_gap)
         while size()>196608 and coverage:
             coverage.pop();content['coverage']['omitted_seeds']+=1
         if size()>196608:raise ValueError('Approved question/scope exceeds bounded model context')

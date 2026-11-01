@@ -19,7 +19,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200);self.end_headers()
         self.wfile.write(json.dumps({'data':[{'id':self.server.model_id}]}).encode())
     def do_POST(self):
-        payload=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+        raw=self.rfile.read(int(self.headers['Content-Length']))
+        self.server.raw_bodies.append(raw)
+        payload=json.loads(raw)
         self.server.posts.append(payload)
         action=self.server.actions.pop(0)
         self.send_response(200);self.end_headers()
@@ -31,7 +33,7 @@ class HTTPRecoveryTests(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         self.store=Store(self.tmp.name)
         self.server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
-        self.server.model_id='fixture-http';self.server.gets=0;self.server.posts=[]
+        self.server.model_id='fixture-http';self.server.gets=0;self.server.posts=[];self.server.raw_bodies=[]
         self.server.actions=[{'action':'read','url':URL},{'action':'finish','report':report()},{'action':'finish','report':report()}]
         self.thread=threading.Thread(target=self.server.serve_forever,daemon=True);self.thread.start()
         self.addCleanup(self.server.server_close);self.addCleanup(self.server.shutdown)
@@ -40,6 +42,24 @@ class HTTPRecoveryTests(unittest.TestCase):
         m={'submission_id':'crash','question':'A queue comparison','mode':'fixture','scope':{'seed_urls':[URL]}}
         return self.store.submit(m,manifest_hash(m))
     def read(self,url,**kwargs):return {'ok':True,'url':url,'finalUrl':url,'text':TEXT,'contentSha256':'a'*64,'fetchedAt':'fixture'}
+    def test_context_bound_matches_actual_unicode_http_body(self):
+        job=self.submit();job=self.store.claim_next()
+        model=DeepSeek(self.base,'fixture-http')
+        worker=Worker(self.store,model,lambda q:{},self.read,mode='fixture')
+        c={'step':0,'phase':'draft','sources':{},'history':[],'draft':None,'errors':[]}
+        for i in range(25):c['sources']['S'+str(i+1).zfill(3)]={'url':URL,'text':'🔥'*50000}
+        payload=worker.model_payload(job,c)
+        model.complete(payload['messages'],5)
+        actual_bytes=len(self.server.raw_bodies[-1])
+        self.assertLessEqual(actual_bytes,196608)
+        context=json.loads(payload['messages'][-1]['content'])
+        self.assertTrue(context['context_bounds']['omissions'])
+        evidence=__import__('os').environ.get('RESEARCH_CONTEXT_EVIDENCE_DIR')
+        if evidence:
+            Path(evidence,'unicode-http.json').write_text(json.dumps({'fixture':True,
+                'actual_http_body_bytes':actual_bytes,'limit':196608,'request_count':len(self.server.posts),
+                'body_sha256':__import__('hashlib').sha256(self.server.raw_bodies[-1]).hexdigest()}))
+
     def test_model_id_mismatch_never_sends_completion(self):
         with self.assertRaises(ValueError):DeepSeek(self.base,'wrong').complete([],2)
         self.assertEqual(self.server.posts,[])

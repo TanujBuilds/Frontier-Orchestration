@@ -3,6 +3,12 @@ import html
 import json
 import re
 
+def completion_payload(model_id,messages):
+    """One shared HTTP body shape for dispatch and bounded context accounting."""
+    return {'model':model_id,'messages':messages,'stream':False,'temperature':0.2,
+            'max_tokens':8192,'chat_template_kwargs':{'enable_thinking':False}}
+
+
 REPORT_SHAPE = {
  'title':'Report title', 'complete':True,
  'claims':[{'id':'C1','text':'A factual statement','kind':'fact',

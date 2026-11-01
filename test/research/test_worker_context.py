@@ -124,6 +124,18 @@ class ContextTests(unittest.TestCase):
         self.assertEqual(final['counters']['model'],2)
         self.assertEqual(model.calls,1)
         self.assertEqual(self.store.operations(self.job['id'])[0]['payload'],legacy)
+    def test_omitted_read_passages_are_explicit_at_payload_and_checkpoint_caps(self):
+        for i in range(3):
+            sid='S00'+str(i+1);self.c['sources'][sid]=source('x'*50000)
+            self.w.tool(self.job,self.c,{'action':'read','source_id':sid,'start':3000,'length':12000},60)
+        self.c['phase']='draft';context=self.payload()
+        self.assertEqual(len(context['evidence_windows']),2)
+        self.assertGreater(context['context_bounds']['read_windows_omitted'],0)
+        self.assertTrue(any('passages' in message for message in context['context_bounds']['omissions']))
+        for start in (16000,29000):self.read(start,12000)
+        self.assertGreater(self.payload()['context_bounds']['read_windows_omitted'],0)
+        self.assertGreater(self.c['evidence_windows_evicted'],0)
+
     def test_boundary_signals_never_allow_fabricated_quote(self):
         self.c['sources']['S001']=source('x'*50000)
         self.read(50000)
