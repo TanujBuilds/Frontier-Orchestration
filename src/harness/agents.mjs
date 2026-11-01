@@ -2,6 +2,15 @@ import { randomUUID } from 'node:crypto';
 import { digest } from './contracts.mjs';
 import { normalizeAgentRegistration,normalizeProgressReport,normalizeHelpRequest } from './collaboration-contracts.mjs';
 
+// This allowlist describes host capability, not proof that a model executed.
+function nativeModelConfig(config){
+ const models=config.nativeModels??[],roles=config.nativeRoleModels??{};
+ const valid=value=>typeof value==='string'&&value===value.trim()&&value.length>0&&value.length<=200;
+ if(!Array.isArray(models)||models.length>100||models.some(x=>!valid(x))||new Set(models).size!==models.length)throw Error('Invalid native model configuration: nativeModels must be a unique string array');
+ if(!roles||typeof roles!=='object'||Array.isArray(roles)||Object.getPrototypeOf(roles)!==Object.prototype||Object.entries(roles).some(([role,model])=>!['implementer','explorer','reviewer','supervisor'].includes(role)||!valid(model)||!models.includes(model)))throw Error('Invalid native role model configuration');
+ return {models,roles};
+}
+
 export class Agents {
  constructor({c,config={}}){this.c=c;this.config=config;}
  register(input,key){return this.c.store.command(key,{op:'agent.register',...input},()=>{
@@ -9,10 +18,12 @@ export class Agents {
   if(!g.manifest.mode.actors.includes(registration.actor))throw Error('Mode prohibits registered actor');
   let modelSource=registration.model.requested?'explicit':'inherited';
   if(registration.actor==='codex'){
-   const fallback=this.config.nativeRoleModels?.[registration.role];
+   const {models,roles}=nativeModelConfig(this.config);
+   const fallback=roles[registration.role];
    if(!registration.model.requested&&fallback){registration.model.requested=fallback;modelSource='role_default';}
-   for(const model of [registration.model.requested,registration.model.resolved].filter(Boolean))if(!this.config.nativeModels?.includes(model))throw Error(`Native model unavailable or unsupported: ${model}`);
+   for(const model of [registration.model.requested,registration.model.resolved].filter(Boolean))if(!models.includes(model))throw Error(`Native model unavailable or unsupported: ${model}`);
   }
+  if(registration.actor==='codex'&&registration.model.requested&&registration.model.resolved&&registration.model.requested!==registration.model.resolved)throw Error('Native requested/resolved model mismatch; host aliases are unsupported');
   const previous=registration.hostAgentId?this.c.store.all('agent').find(a=>a.hostAgentId===registration.hostAgentId):null;
   if(previous){if(previous.registrationHash!==digest(registration))throw Error('Host agent correlation already belongs to another registration');return previous;}
   const agent={...registration,id:randomUUID(),goalId:t.goalId,registrationHash:digest(registration),modelSource,registeredAt:this.c.now(),lastReport:null,accounting:{tokens:null,source:'unavailable'}};

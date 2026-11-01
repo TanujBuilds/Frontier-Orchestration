@@ -317,3 +317,37 @@ test('pending import serializes approved revision and rebind through idempotent 
  const accepted=await slow;assert.equal(accepted.status,'accepted');assert.equal(accepted.integration.candidateCommit,done.native.commit);assert.equal(accepted.reviews,1);assert.equal(f.c.getGoal(g.id).integrationPending,null);
  assert.deepEqual(await f.integration.accept(input,'accept'),accepted);assert.equal(await readFile(path.join(accepted.integration.worktree,'src/answer.mjs'),'utf8'),'export const answer=42;\n');
 });
+
+test('native model metadata preserves explicit selection and inheritance without claiming execution',async t=>{
+ const f=await fixture(t,'codex_only'),a=f.c.submitTask({goalId:f.g.id,...task},'model-task');
+ const {Agents}=await import('../src/harness/agents.mjs');
+ const agents=new Agents({c:f.c,config:{nativeModels:['host-a','host-b'],nativeRoleModels:{explorer:'host-a'}}});
+ const input={version:1,taskId:a.id,role:'explorer',actor:'codex'};
+ const explicit=agents.register({...input,model:{requested:'host-b'}},'explicit-model');
+ assert.deepEqual(explicit.model,{requested:'host-b',resolved:null});assert.equal(explicit.modelSource,'explicit');
+ const reported=agents.register({...input,model:{requested:'host-b',resolved:'host-b'}},'reported-model');
+ assert.equal(reported.accounting.source,'unavailable');assert.equal(reported.accounting.tokens,null);
+ const inherited=new Agents({c:f.c}).register({...input,role:'implementer'},'inherit-model');
+ assert.deepEqual(inherited.model,{requested:null,resolved:null});assert.equal(inherited.modelSource,'inherited');
+ assert.throws(()=>agents.register({...input,model:{requested:'host-a',resolved:'host-b'}},'mismatch-model'),/model.*match|mismatch/i);
+ assert.throws(()=>agents.register({...input,model:{resolved:'host-b'}},'default-mismatch'),/model.*match|mismatch/i);
+});
+test('native model configuration fails closed instead of treating strings as allowlists',async t=>{
+ const f=await fixture(t,'codex_only'),a=f.c.submitTask({goalId:f.g.id,...task},'model-config-task');
+ const {Agents}=await import('../src/harness/agents.mjs'),input={version:1,taskId:a.id,role:'implementer',actor:'codex',model:{requested:'host'}};
+ const bad=[{nativeModels:'host-a'}, {nativeModels:['host-a','host-a']}, {nativeModels:[null]},
+  {nativeModels:['']},{nativeModels:['host-a'],nativeRoleModels:[]},
+  {nativeModels:['host-a'],nativeRoleModels:{typo:'host-a'}},
+  {nativeModels:['host-a'],nativeRoleModels:{explorer:'unavailable'}}];
+ for(const [i,config]of bad.entries())assert.throws(()=>new Agents({c:f.c,config}).register(input,'bad-model-config-'+i),/native.*model|model.*config/i);
+ assert.equal(f.c.store.all('agent').length,0);
+});
+
+test('unsupported model metadata rejects native start before writer reservation',async t=>{
+ const f=await fixture(t,'codex_only'),a=f.c.submitTask({goalId:f.g.id,...task},'model-start-task');
+ const bad=new Integration({c:f.c,checksFactory:f.checksFactory,config:{nativeModels:['host-a']}});
+ const before=f.c.getTask(a.id);
+ await assert.rejects(bad.startNative({taskId:a.id,layout:'candidate_v1',registration:{version:1,taskId:a.id,role:'implementer',actor:'codex',model:{requested:'host-b'}}},'bad-native-model'),/unavailable|unsupported/i);
+ assert.deepEqual(f.c.getTask(a.id),before);assert.equal(f.c.store.all('agent').length,0);
+ assert.equal(f.c.store.db.prepare('SELECT COUNT(*) AS n FROM requests').get().n,0);
+});

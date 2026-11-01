@@ -100,7 +100,12 @@ credentials or change Spark runtime settings. `nativeModels` is the private nati
 model allowlist, `nativeRoleModels` supplies optional per-role defaults. Explicit
 unsupported choices fail; unspecified native choices inherit the host. The parent
 must use supported host model parameters and record only observed resolution.
-Registration metadata does not configure a host model or provider.
+Registration metadata does not configure a host model or provider. The allowlist
+must be an array of unique nonempty model names; role defaults use only the four
+known roles and must be allowlisted. Known requested/resolved identities must
+match; host aliases are unsupported. Even a reported inherited resolved name
+requires allowlisting. Null resolution and usage remain unknown; registration
+never attests actual host execution.
 
 `roles/{implementer,explorer,reviewer}.toml` are data examples containing only
 `developer_instructions`. Apply only through an explicitly selected native role
