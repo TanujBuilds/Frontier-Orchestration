@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {createHash} from 'node:crypto';
 import {mkdir,writeFile,readFile,lstat} from 'node:fs/promises';
-import {verifyProposal,verifyReviewedReceipt} from './research-review.mjs';
+import {verifyProposal,verifyReviewedReceipt,verifyAcceptedArtifacts} from './research-review.mjs';
 export {verifyProposal,verifyReviewedReceipt} from './research-review.mjs';
 import { digest,normalizeTask } from './contracts.mjs';
 
@@ -75,7 +75,7 @@ export class ResearchAdapter {
     let reviewed=null;
     if(task.spec.researchPolicy?.version===3&&remote.status==='completed'){
      const receipt=JSON.parse(await readFile(path.join(collected.directory,'receipt.json'),'utf8'));reviewed=verifyReviewedReceipt(receipt,task);
-     const report=JSON.parse(await readFile(path.join(collected.directory,'claims.json'),'utf8'));if(digest(report)!==reviewed.reportSha256)throw Error('Accepted report content mismatch');
+     const [report,sources]=await Promise.all(['claims.json','sources.json'].map(file=>readFile(path.join(collected.directory,file))));verifyAcceptedArtifacts(reviewed,report,sources);
     }
     const done=c.completeTask(task.id,{directory:collected.directory,checksumsVerified:true,remoteJobId:cp.remoteJobId,receiptStatus:remote.status,independentReview:reviewed?'accepted':'not_requested',...(reviewed?{reviewBinding:reviewed}:{})},owner);
     if(remote.status==='partial')c.store.tx(()=>{const t=c.store.get('task',task.id);t.status='partial';c.store.put('task',t);});return c.getTask(done.id);

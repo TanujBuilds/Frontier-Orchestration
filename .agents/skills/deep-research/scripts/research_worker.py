@@ -539,7 +539,7 @@ class Worker:
                 if reviewed:
                     semantic=c.get('semantic',{})
                     used=job['counters']['model']-semantic.get('correctionStartModel',0)
-                    if (semantic.get('revisions') and used>=semantic['correctionAllowance']) or (not semantic.get('revisions') and job['counters']['model']>=max(0,limit-2)):
+                    if not replay and ((semantic.get('revisions') and used>=semantic['correctionAllowance']) or (not semantic.get('revisions') and job['counters']['model']>=max(0,limit-2))):
                         return self.finalize(job,c,'reserved correction capacity exhausted')
                 if self.scout_busy(): time.sleep(min(5,remaining)); continue
                 payload=self.model_payload(job,c)
@@ -701,6 +701,10 @@ class Worker:
             'claims.json':json.dumps(draft,ensure_ascii=False,indent=2),
             'sources.json':json.dumps(c['sources'],ensure_ascii=False,indent=2),
             'manifest.json':json.dumps(job['manifest'],ensure_ascii=False,indent=2)}
+        if accepted:
+            # Final artifact bytes are the exact reviewed bytes, without cross-language reserialization.
+            artifacts['claims.json']=accepted['canonical']['report']
+            artifacts['sources.json']=accepted['canonical']['sources']
         hashes={}
         for name,data in artifacts.items():atomic(directory/name,data);hashes[name]=hashlib.sha256(data.encode()).hexdigest()
         current=self.store.get(job['id'])

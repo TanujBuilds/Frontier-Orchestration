@@ -68,7 +68,8 @@
       "tests": [
         "test/research/test_review_lifecycle.py:ReviewLifecycleTests.test_wrong_hash_incomplete_coverage_and_forged_flags_cannot_accept",
         "test/research/test_review_edges.py:ReviewEdges.test_proposal_tamper_and_wrong_rubric_never_approve",
-        "test/harness-research-review.test.mjs"
+        "test/harness-research-review.test.mjs",
+        "test/research/test_review_findings.py"
       ],
       "assertions": "Reject without acceptance; idempotent replay returns same committed outcome; unrelated hash/identity cannot be substituted."
     },
@@ -95,7 +96,8 @@
         "test/research/test_review_edges.py",
         "test/research/test_review_lifecycle.py:ReviewLifecycleTests.test_reservation_and_submission_replay_survive_restart_without_refund",
         "test/harness-research-review-package.test.mjs",
-        "test/harness-research-review.test.mjs"
+        "test/harness-research-review.test.mjs",
+        "test/research/test_review_findings.py"
       ],
       "assertions": "Replay exact IDs/hashes/raw outcomes; no duplicated ambiguous requests, unchanged deadlines/counters, final report equals accepted candidate."
     },
@@ -132,7 +134,8 @@
       "id": "installed_fixture_contract",
       "tests": [
         "test/harness-research-review-package.test.mjs",
-        "test/release-readiness.test.mjs"
+        "test/release-readiness.test.mjs",
+        "test/research/test_review_findings.py"
       ],
       "assertions": "Current-state restart/receipt replay and bytecode suppression hold; fixture result cannot satisfy live semantic gate."
     }

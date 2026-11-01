@@ -85,7 +85,7 @@ async function receipt(raw,root,expected,budget){
        need(r.status==='completed'&&r.mode==='live','live_review_receipt_required');
        try{verifyReviewedReceipt(r,{checkpoint:{remoteJobId:r.job_id,remoteHash:r.manifest_hash},spec:{researchPolicy:raw.policy}});}catch{throw new ReadinessError('invalid_pre_final_review_binding');}
        need(q.report_sha256===independent.reportSha256&&independent.sourceSha256s.length===1&&q.source_artifact_sha256===independent.sourceSha256s[0],'stale_pre_final_artifacts');
-       const reportIndex=g.artifacts.findIndex(a=>a.role==='report');need(digest(parseBoundedJson(data[reportIndex],MAX_ARTIFACT))===q.review_binding.reportSha256,'stale_accepted_report');
+       const reportIndex=g.artifacts.findIndex(a=>a.role==='report'),sourceIndex=g.artifacts.findIndex(a=>a.role==='source');need(hash(data[reportIndex])===q.review_binding.reportSha256&&hash(data[sourceIndex])===q.review_binding.sourcesSha256,'stale_accepted_report_or_sources');
       }
      }
     }
