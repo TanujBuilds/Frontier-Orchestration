@@ -39,10 +39,11 @@ def make_passages(sources,windows,max_items=96):
     return offered
 
 
-def resolve_report(report,sources,offered):
+def resolve_report(report,sources,offered,strict=False):
     """Clone a report and resolve only exact selections present in its dispatched prompt.
 
-    Legacy quotes are deliberately untouched. Invalid selector syntax, stale source
+    Legacy quotes are deliberately untouched unless strict=True. Strict mode accepts
+    only raw closed selectors; canonical metadata is coordinator-owned. Invalid selector syntax, stale source
     identity, ambiguous offers or invented ranges fail before unchanged validation.
     Raw model reports and saved sources are never modified.
     """
@@ -56,6 +57,8 @@ def resolve_report(report,sources,offered):
         if not isinstance(entries,list):continue
         if len(entries)>10:raise ValueError('too many evidence entries')
         for i,entry in enumerate(entries):
+            if strict and (not isinstance(entry,dict) or set(entry)!=_FIELDS):
+                raise ValueError('selector-only output requires closed source_id,text_sha256,start,end evidence; legacy quotes and canonical metadata are forbidden')
             if not isinstance(entry,dict):continue
             nested='selection' in entry
             if nested:
@@ -71,7 +74,7 @@ def resolve_report(report,sources,offered):
             text=source['text']
             if hashlib.sha256(text.encode()).hexdigest()!=digest:raise ValueError('stale passage source hash')
             if type(start) is not int or type(end) is not int or not 0<=start<end<=len(text) or not 12<=end-start<=1000:raise ValueError('invalid passage range')
-            matches=[row for row in offered if isinstance(row,dict) and all(row.get(k)==selected[k] for k in _FIELDS)]
+            matches=[row for row in offered if isinstance(row,dict) and all(type(row.get(k)) is type(selected[k]) and row.get(k)==selected[k] for k in _FIELDS)]
             quote=text[start:end]
             if len(matches)!=1 or matches[0].get('text')!=quote:raise ValueError('passage was not uniquely offered in the reserved prompt')
             if nested and entry['quote']!=quote:raise ValueError('normalized quote differs from its source selection')

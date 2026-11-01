@@ -31,6 +31,12 @@ class WorkerBusy(StateError):
 
 DEFAULT_LIMITS = {'seconds': 7200, 'searches': 30, 'downloads': 50, 'model_calls': 20}
 COUNTER_LIMITS = {'search': 'searches', 'download': 'downloads', 'model': 'model_calls'}
+RESEARCH_POLICY = {'version': 1, 'finish': 'selectors_only', 'discovery': 'search_required'}
+
+
+def strict_policy(manifest):
+    return 'research_policy' in manifest
+
 
 
 def _json(value):
@@ -47,7 +53,7 @@ def _keys(value, allowed, label):
 
 def normalize_manifest(raw):
     """Validate a manifest and materialize defaults before approval hashing."""
-    _keys(raw, ('schema', 'mode', 'submission_id', 'question', 'scope', 'limits', 'not_after', 'collaboration', 'executor'), 'manifest')
+    _keys(raw, ('schema', 'mode', 'submission_id', 'question', 'scope', 'limits', 'not_after', 'collaboration', 'executor', 'research_policy'), 'manifest')
     mode = raw.get('mode', 'live')
     if mode not in ('live', 'fixture'):
         raise StateError('mode must be live or fixture')
@@ -69,6 +75,14 @@ def normalize_manifest(raw):
         if 'executor' in raw:
             if raw['executor'] not in ('deepseek','operator'):raise StateError('invalid research executor')
             extension['executor']=raw['executor']
+    if 'research_policy' in raw:
+        policy = raw['research_policy']
+        _keys(policy, tuple(RESEARCH_POLICY), 'research_policy')
+        if type(policy.get('version')) is not int or policy != RESEARCH_POLICY:
+            raise StateError('unsupported research_policy; require closed version1 selector-only/search-required contract')
+        if extension.get('executor') == 'operator':
+            raise StateError('operator research cannot select autonomous research_policy')
+        extension['research_policy'] = dict(policy)
     submission = raw.get('submission_id')
     if not isinstance(submission, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,80}', submission):
         raise StateError('submission_id must contain 1 to 80 letters, numbers, underscores, or hyphens')
@@ -342,6 +356,49 @@ class Store:
             return [self._decode_operation(row) for row in db.execute(
                 'SELECT * FROM operations WHERE job_id=? ORDER BY sequence', (job_id,))]
 
+    def _discovery_status(self, db, job):
+        """Derive discovery from reserved operations, never checkpoint/model flags.
+
+        Empty successful search satisfies performing discovery, not useful coverage.
+        Upstream blocked/partial engines, malformed results and ambiguous requests
+        remain spent and unproven. Queries are retained for independent assessment.
+        """
+        requested = strict_policy(job['manifest'])
+        records = []
+        for row in db.execute("SELECT * FROM operations WHERE job_id=? AND kind='search' ORDER BY sequence", (job['id'],)):
+            op = self._decode_operation(row)
+            payload, result = op['payload'], op['result']
+            query = payload.get('query') if isinstance(payload, dict) else None
+            valid_query = (isinstance(query, str) and 1 <= len(query.strip()) <= 1000
+                           and not any(ord(c) < 32 for c in query)
+                           and not any(x.startswith(('!', '?')) for x in query.split()))
+            within_deadline = (job['started_at'] is not None and job['deadline'] is not None
+                               and job['started_at'] <= op['created_at'] < job['deadline']
+                               and op['updated_at'] <= job['deadline'])
+            success = False
+            if op['status'] == 'completed' and valid_query and within_deadline and isinstance(result, dict):
+                error = result.get('error')
+                empty = (result.get('status') == 'empty' and result.get('results') == []
+                         and isinstance(error, dict) and error.get('code') == 'no_usable_results')
+                success = (isinstance(result.get('results'), list)
+                           and result.get('status') in (None, 'ok', 'empty')
+                           and (not error or empty) and not result.get('unresponsive_engines')
+                           and result.get('query', query) == query)
+            records.append({'id': op['id'], 'status': op['status'], 'query': query,
+                            'satisfied': success, 'error': op['error'] if op['status'] == 'failed' else
+                            result.get('error') if isinstance(result, dict) else None})
+        satisfied = any(r['satisfied'] for r in records)
+        failed = sum(r['status'] != 'pending' and not r['satisfied'] for r in records)
+        status = ('not_requested' if not requested else 'satisfied' if satisfied else
+                  'attempted' if any(r['status'] == 'pending' for r in records) else
+                  'failed' if failed else 'requested')
+        return {'requested': requested, 'state': status, 'attempted': len(records),
+                'satisfied': satisfied, 'failed': failed, 'operations': records}
+
+    def discovery_status(self, job_id):
+        with self._db() as db:
+            return self._discovery_status(db, self._get(db, job_id))
+
     def checkpoint(self, job_id, state):
         if not isinstance(state, dict):
             raise StateError('checkpoint must be an object')
@@ -362,6 +419,8 @@ class Store:
             job = self._get(db, job_id)
             if job['status'] in ('stopped', 'completed', 'partial'):
                 return job
+            if status == 'completed' and strict_policy(job['manifest']) and not self._discovery_status(db, job)['satisfied']:
+                raise StateError('required discovery search is not satisfied by durable operation evidence')
             db.execute('UPDATE jobs SET status=?,reason=?,updated_at=? WHERE id=?', (status, reason, now, job_id))
             self._event(db, job_id, 'finished', {'status': status, 'reason': reason}, now)
             return self._get(db, job_id)
