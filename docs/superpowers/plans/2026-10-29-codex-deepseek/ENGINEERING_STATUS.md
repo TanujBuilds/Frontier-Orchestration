@@ -1,3 +1,31 @@
+# Offline selector/discovery contract repair — 2026-10-31 Pacific
+
+**SCOPED OFFLINE GOAL COMPLETE; FULL RELEASE INCOMPLETE.**
+[Receipt14](receipts/14-selector-contract-offline.json) and
+[policy contract](../../../../RESEARCH_POLICY.md) describe the opt-in version1
+selector-only/required-discovery contract. Runtime465930a; immutable3764-file
+candidate8678287cfa618e8028346b77886b0dfea593cd7813762fcdcdf19eb43e063623.
+Approval/bridge/request pins, strict reserved offers, consistent selector prompts,
+separate canonical artifacts and durable same-job/deadline search evidence now
+have334Node/151Python/88installedPython and actual installed CLI/SDK-MCP/restart
+fixture verification plus independent source review. Legacy/operator behavior,
+hashes, spending and old evidence are preserved. The source review's one P2
+Unicode prompt bound finding is resolved. A failed cache-writing fixture candidate
+was preserved; separate v2 passed strict inventory before/after installed tests.
+
+Exactly ONE hash-pinned future research proposal is UNACTIVATED/UNAPPROVED with
+2h20model30search50download0planner0automaticreview0questions; no old job or budget
+was renewed. This work made0newliveproviderrequests. Live selector-only model
+quality/semantic five-claim gate remain UNVERIFIED; personal components remain
+UNINSTALLED. No active strict downgrade or installed-host/phone/service proof is
+claimed. Intermediate canonical records stay coordinator-local; fixed exports
+retain final canonical claims. UI/observer/API/MCP/skills bytes are unchanged;
+prior applicable browser/host/learning/overnight proofs were retained, not repeated.
+Full release still needs a genuinely new bounded pilot decision and later release
+and installation gates. Earlier status sections below remain historical.
+
+---
+
 # Citation repair and additional pilot — 2026-10-31 Pacific
 
 **FULL RELEASE INCOMPLETE.** [Receipt13](receipts/13-citation-repair-live.json) supersedes receipt12's pending-repair state. Owner explicitly approved the source-bound repair and ONE additional pilot. Source485d13c; standalone3764-file package hashc9890fb0f9b97234cf4422ffa4578af97589c9d1949743a96248775fd29be779. Full128Python/326Node,standalone44Python/SDK-MCP/terminal-state compatibility fixtures and strict inventories passed. Independent review's one P2 forged-provenance finding was regression-fixed; final correction main-verified. Raw source/request history, strict validator, existing reservations and completion limits preserved.

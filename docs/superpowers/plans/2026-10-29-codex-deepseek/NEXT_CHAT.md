@@ -1,3 +1,48 @@
+# Offline selector/discovery repair complete — 2026-10-31 Pacific
+
+This scoped OFFLINE engineering goal is complete; **FULL RELEASE INCOMPLETE**.
+Read [receipt14](receipts/14-selector-contract-offline.json) and
+[the policy contract](../../../../RESEARCH_POLICY.md). Runtime/source465930a;
+new standalone3764-file candidate hash8678287cfa618e8028346b77886b0dfea593cd7813762fcdcdf19eb43e063623.
+
+New autonomous goals can explicitly pin the closed version1 selector-only and
+required-search policy. Approval/task/bridge/request pins, all prompt surfaces,
+actual reserved-offer resolution, separate canonical records and durable discovery
+are enforced. Legacy hashes/reservations and zero-model operator quotes remain
+compatible. Unknown policies reject before dispatch; database version unchanged.
+
+Final334Node/151Python,88installedPython, independent source review and actual
+standalone CLI/SDK-MCP fixtures passed. One P2 Unicode discovery-history bound
+regression was independently reproduced and fixed. Current-state process restart
+preserves exact policy/approval/hash/deadline/checkpoint/counters and raw requests.
+Installed fixture services stopped cleanly and strict package inventory stayed
+unchanged. The first cache-contaminated test-harness candidate remains failed
+evidence; a fresh v2 passed with subprocess bytecode suppression. No active strict
+job downgrade or old-runtime rollback claim is made.
+
+Owner ignored evidence `.data/selector-contract-repair-20261031/` holds final
+receipt, completion matrix,102checksummed artifacts, executable probes, RED/GREEN/
+final logs, independent review and installed receipts. All4050prior files and both
+historical102-artifactindices remain unchanged. New evidence indexSHA256:
+f6a6cbaf3e5f7553685e0045876a8aacf7b54b9a8c3234a44f1c055f1a7a9987.
+
+Exactly ONE future strict-policy pilot proposal is saved, UNACTIVATED/UNAPPROVED,
+with the same public question/scope and2h/20model/30search/50download/0planner/
+0automaticreview/0questions including final3calls. Goal hash9ed65912287a1af83eb6c0c35dcd55af061e35fa9a4fdc1c4bf7a00023f5274c;
+task hasheb72127a863696a740f3da9c631d18cd169f0e38f8b9ba281089cc6b73b17bbb.
+No activation/reservation/submission/deployment followed. Its suggested approval
+text is not a user decision. Never reuse old unused calls, reopen terminal jobs or
+create replacements automatically.
+
+Live selector-only behavior and five-official-claim quality remain UNVERIFIED;
+personal components remain UNINSTALLED. Provenance is not semantic support.
+No new live DeepSeek/programmatic hosted-model/search/page-provider requests,
+SSH deployment, primary merge/push or publication. Ordinary native engineering
+usage remains unknown, not zero. Preserve the branch/worktrees/evidence and passed
+unchanged UI/host/learning/overnight proofs. Earlier sections below are historical.
+
+---
+
 # Resume after citation repair / additional live failure — 2026-10-31 Pacific
 
 Read [receipt13](receipts/13-citation-repair-live.json), current ENGINEERING_STATUS, and owner ignored .data/live-release-citation-repair-20261031/{RELEASE_RECEIPT.md,CLAIM_ASSESSMENT.md,INDEPENDENT_REVIEW.md,PROGRESS.md,EVIDENCE_INDEX.json}. Source485d13c; packagec9890fb0f9b97234cf4422ffa4578af97589c9d1949743a96248775fd29be779; clean3764files.102newartifacthashes verified; original receipt12's102artifacts remain unchanged in their distinct root.

@@ -1,0 +1,101 @@
+{
+  "schema": 1,
+  "date": "2026-10-31",
+  "scope": "mandatory-selector-and-discovery-offline-repair",
+  "status": "complete",
+  "fullReleaseStatus": "incomplete",
+  "runtimeSourceCommit": "465930ae78964e69c8d3787cedc99d1b097754b9",
+  "sourceCommits": [
+    "28fd527",
+    "cd026aa",
+    "315042c",
+    "de8ded4",
+    "465930a"
+  ],
+  "policy": {
+    "version": 1,
+    "finish": "selectors_only",
+    "discovery": "search_required"
+  },
+  "manifestSchemas": [
+    1,
+    2
+  ],
+  "databaseSchemaChanged": false,
+  "legacyCapability": "research@1 preserved",
+  "strictCapability": "research@2 opt-in",
+  "candidate": {
+    "files": 3764,
+    "contentHash": "8678287cfa618e8028346b77886b0dfea593cd7813762fcdcdf19eb43e063623",
+    "manifestSHA256": "c47596fdf39cd21f33a02177868db07912709a08927fd5961509cf67a6095055",
+    "sourceDirty": false,
+    "disposableStandalone": true,
+    "strictInventoryBeforeAfter": true
+  },
+  "verification": {
+    "node": 334,
+    "python": 151,
+    "installedPython": 88,
+    "actualCliSdkMcp": "passed; simulated providers only",
+    "developmentImportsDenied": true,
+    "currentStateProcessRestart": "exact policy/approval/hash/spending/deadline/checkpoint/requests/results preserved",
+    "independentSourceReview": "clear; one P2 Unicode discovery prompt-size regression reproduced and fixed",
+    "actualFailedResponses": 3,
+    "actualOfferedCounterfactual": "exact provenance only, not live or semantic success",
+    "blockedEngineAndDeadlinePartialFixtures": "passed",
+    "diffCheck": "passed"
+  },
+  "preservation": {
+    "oldFilesUnchanged": 4050,
+    "oldEvidenceIndexArtifacts": [
+      102,
+      102
+    ],
+    "failedFirstFixtureCandidate": "preserved unlisted Python cache; corrected test harness, rebuilt separate v2",
+    "oldReportsApprovalsBudgetsDeadlinesUnchanged": true
+  },
+  "futurePilot": {
+    "status": "UNACTIVATED_UNAPPROVED",
+    "count": 1,
+    "goalHash": "9ed65912287a1af83eb6c0c35dcd55af061e35fa9a4fdc1c4bf7a00023f5274c",
+    "taskHash": "eb72127a863696a740f3da9c631d18cd169f0e38f8b9ba281089cc6b73b17bbb",
+    "samePublicQuestionAndScope": true,
+    "budget": {
+      "seconds": 7200,
+      "model": 20,
+      "search": 30,
+      "download": 50,
+      "planner": 0,
+      "automaticReview": 0,
+      "questions": 0,
+      "reservedFinalCalls": 3
+    },
+    "activated": false,
+    "submitted": false,
+    "reservations": 0
+  },
+  "usage": {
+    "newLiveDeepSeekRequests": 0,
+    "programmaticHostedModelCalls": 0,
+    "newSearchProviderRequests": 0,
+    "newPublicPageDownloads": 0,
+    "nativeUsage": "unknown, not zero",
+    "fixtureRequests": "simulated only; counts retained in fixture receipts"
+  },
+  "limits": {
+    "liveSelectorOnlyQuality": "UNVERIFIED",
+    "semanticSupport": "not established by provenance",
+    "personalComponents": "UNINSTALLED",
+    "activeStrictDowngrade": "unsupported/unproven; no old-runtime rollback claim",
+    "canonicalIntermediates": "coordinator-local hash-bound artifacts; fixed export transfers final canonical claims",
+    "browserEvidence": "reused only unchanged UI/observer/API/MCP/skills bytes; new policy/bridge covered by affected Node and installed MCP tests",
+    "primaryMergePushPublication": false
+  },
+  "evidence": {
+    "indexSHA256": "f6a6cbaf3e5f7553685e0045876a8aacf7b54b9a8c3234a44f1c055f1a7a9987",
+    "artifactCount": 102,
+    "localReceipt": "DELIVERY_RECEIPT.md",
+    "review": "review/INDEPENDENT_REVIEW.md",
+    "installedReceipt": "forward/NODE_FORWARD.md"
+  }
+}
