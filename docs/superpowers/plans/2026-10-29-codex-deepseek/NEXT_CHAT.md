@@ -1,3 +1,58 @@
+# Offline research support quality delivered — 2026-10-31 Pacific
+
+**SCOPED OFFLINE GOAL COMPLETE; FULL RELEASE INCOMPLETE.**
+See [receipt16](receipts/16-support-quality-offline.json) and [contract](../../../RESEARCH_POLICY.md).
+New branch `codex/research-support-quality`, source415043b; no primary merge/push.
+Explicit policy2/research@3/catalog2 improves bounded evidence boundaries and
+atomic/multiple-passage/recommendation guidance. Legacy/policy1 hashes/defaults,
+reserved catalogs/payloads, operator zero-model and all limits remain unchanged.
+Coordinator quality receipts bind exact claims/sources and leave independent
+semantic review pending/release ungranted. Provenance is not truth certification.
+
+335Node/183Python/126independently installedPython passed, plus actual installed
+CLI/SDK strictv1/v2, legacy, operator, stop/deadline and current-state restart/replay
+fixtures. Independent review's one P2 clipped punctuation/abbreviation finding was
+reproduced RED, corrected and independently verified with its original four-case
+probe; full suites green. No unresolved material findings/deferred minors.
+
+Protected offline evaluation retains original13claims,4fullysupported/9incomplete,
+all old output and4original supported facts; separate reviewed26diagnostic units/
+7compact summaries and17heldout cases/two domains (6positive/11negative). Necessary
+clause availability1→3 is structural counterfactual, not observed model improvement.
+C9 already had an alternative old offer. Final saved-input wire177497<=196608bytes,
+92offers retained. No live model/search/page/hosted-model request or SSH deployment.
+
+NEW immutable3764-file candidate source415043b, content
+47cc83b7b57752ce612c5958ff255487bd047cdfb9105ba83b38b47a18453974;
+manifestSHA5a2a9872fa1d98e283b1bd3da85ccb20b082c6df439b6b8c124a2f346ec96623.
+Strict inventories/external pins before/after pass; development imports denied,
+all Python children suppress bytecode. Disposable services exited0/processes absent;
+18raw backend model operations and original spending/deadlines replayed exactly.
+Initial sandbox-only loopback denial is preserved; fresh authorized fixture passed.
+11,910prior localfiles/four historical indexes unchanged; no old budget reset.
+
+Exactly ONE future proposal remains UNAPPROVED/UNACTIVATED, policy2/research@3,
+same public question/scope and2h20model30search50download0planner0automaticreview0questions.
+Goalhashcd99935429888580f9d0a7b6557d28e359e70eb08dce4ece08193e057aa7bbe8;
+taskhash69b85e8f7dad669e31fc071a1a4ff88aff25c2db2f0c2874850e7857258019ee.
+Requires five material fully supported claims spanning all requested families and
+a supported conditional recommendation, independently checked against exact final
+report/selections/primary archives. No requests/reservations/deployment followed.
+Unused old calls cannot be reused. No active-v2 downgrade safety claimed.
+
+Owner ignored packet `research-support-quality-20261031` retains receipts/probes/
+source-review/fix/evaluation/forward evidence, 222checksummed artifacts;
+indexSHA256cee41e3016122024e62b1043965c717df881c5a48816643831ace2c1eaaabf28. New source branch/worktrees retained. Unchanged observer/UI bytes
+support existing visual evidence; prior host/learning/overnight proofs retained
+historically, not repeated or certified as new-policy live acceptance. Live semantic
+quality UNVERIFIED, original pilot quality NOT ACCEPTED, personal UNINSTALLED;
+installed-host/phone/persistent-service/full-release gates remain incomplete.
+Native per-agent usage unknown; exposed host telemetry snapshot retained separately.
+
+Earlier notes below are historical relative to this scoped offline delivery.
+
+---
+
 # One approved strict-selector live pilot finished — 2026-10-31 Pacific
 
 **Execution completed; research quality NOT ACCEPTED. FULL RELEASE INCOMPLETE.**

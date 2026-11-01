@@ -1,0 +1,130 @@
+{
+  "schema": 1,
+  "date": "2026-10-31 Pacific",
+  "scope": "offline research support-quality repair and protected evaluation",
+  "status": "complete",
+  "fullReleaseStatus": "incomplete",
+  "branch": "codex/research-support-quality",
+  "runtimeSourceCommit": "415043b5539f5004e24db70754e744706ad13fab",
+  "sourceCommits": [
+    "63ba4b1",
+    "b106ad4",
+    "415043b"
+  ],
+  "policy": {
+    "version": 2,
+    "finish": "selectors_only",
+    "discovery": "search_required"
+  },
+  "capability": "research@3",
+  "citationCatalogVersion": 2,
+  "databaseSchemaChanged": false,
+  "manifestSchemas": [
+    1,
+    2
+  ],
+  "legacyCompatibility": "Absent policy/research@1 and policy1/research@2 hashes, defaults, reservations and operator zero-model retained",
+  "candidate": {
+    "sourceCommit": "415043b5539f5004e24db70754e744706ad13fab",
+    "contentHash": "47cc83b7b57752ce612c5958ff255487bd047cdfb9105ba83b38b47a18453974",
+    "manifestSHA256": "5a2a9872fa1d98e283b1bd3da85ccb20b082c6df439b6b8c124a2f346ec96623",
+    "files": 3764,
+    "sourceDirty": false,
+    "disposableStandalone": true,
+    "strictInventoryBeforeAfter": true
+  },
+  "verification": {
+    "node": 335,
+    "python": 183,
+    "installedPython": 126,
+    "actualInstalledCliSdkMcp": "passed; simulated providers only; development imports denied",
+    "restart": "Exact policy/hash/deadline/counters/checkpoint/raw requests/results retained; terminal replay adds no spending",
+    "rawInstalledBackendModelOperations": 18,
+    "stopDeadlinePartial": "explicit installed v2 fixtures passed",
+    "actualSavedInputWireBytes": 177497,
+    "retainedOffers": 92,
+    "maximumHttpBytes": 196608,
+    "independentReview": "one P2 reproduced and fixed RED-to-GREEN; original four-case reviewer probe independently passes",
+    "unresolvedMaterialFindings": 0,
+    "deferredMinors": 0,
+    "diffCheck": "passed"
+  },
+  "evaluation": {
+    "actualOriginalClaims": 13,
+    "originalFullySupported": 4,
+    "originalIncomplete": 9,
+    "officialOutputChanged": false,
+    "diagnosticReferencePropositions": 26,
+    "compactMaterialSummaries": 7,
+    "retainedSupportedOriginalFacts": 4,
+    "heldoutCases": 17,
+    "heldoutDomains": 2,
+    "supportedPositives": 6,
+    "negativeOrPartialCases": 11,
+    "structuralNecessaryClausesAvailableBefore": 1,
+    "structuralNecessaryClausesAvailableAfter": 3,
+    "semanticAssessment": "independent native reference judgments bound to exact report/source/fixture hashes; exact replay refuses unknown inputs",
+    "observedRealModelImprovement": false,
+    "counterfactualOnly": true,
+    "recommendation": "conditional candidate-for-evaluation; implementation/operations/provider gaps retained"
+  },
+  "preservation": {
+    "oldFilesUnchanged": 11910,
+    "historicalIndexedArtifactCounts": [
+      102,
+      102,
+      102,
+      91
+    ],
+    "oldPackagesAndFailuresPreserved": true,
+    "oldIdsApprovalsBudgetsDeadlinesAndCanonicalOutputUnchanged": true,
+    "remoteState": "no new remote actions; historical remote evidence preserved, no fresh live assertion"
+  },
+  "futurePilot": {
+    "count": 1,
+    "status": "UNACTIVATED_UNAPPROVED",
+    "goalHash": "cd99935429888580f9d0a7b6557d28e359e70eb08dce4ece08193e057aa7bbe8",
+    "taskHash": "69b85e8f7dad669e31fc071a1a4ff88aff25c2db2f0c2874850e7857258019ee",
+    "samePublicQuestionAndSourceScope": true,
+    "budget": {
+      "seconds": 7200,
+      "model": 20,
+      "search": 30,
+      "download": 50,
+      "planner": 0,
+      "automaticReview": 0,
+      "questions": 0,
+      "reservedFinalCalls": 3
+    },
+    "acceptance": "Five material fully supported claims across SQLite,RQ/Celery,Temporal plus a supported conditional recommendation; independent exact-report/primary-source assessment required",
+    "activated": false,
+    "submitted": false,
+    "reservations": 0
+  },
+  "usage": {
+    "newLiveDeepSeekRequests": 0,
+    "programmaticHostedModelCalls": 0,
+    "newSearchProviderRequests": 0,
+    "newPublicPageDownloads": 0,
+    "sshDeployments": 0,
+    "nativeUsage": "Host goal telemetry snapshot saved separately; per-agent/billing attribution unknown, not zero",
+    "fixtureRequests": "Simulated only;18 backend model operations and1Node consult in installed CLI/SDK fixture, plus separately recorded Python fixture counters"
+  },
+  "limits": {
+    "liveSemanticQuality": "UNVERIFIED",
+    "personalComponents": "UNINSTALLED",
+    "activeV2Downgrade": "unsupported/unproven; no old-runtime rollback claim",
+    "historicalProofs": "Unchanged observer/UI assets checked; existing host/learning/overnight proofs retained historically, not rerun or promoted into new-policy live acceptance",
+    "primaryMergePushPublication": false,
+    "boundaryHeuristic": "Presentation units are not semantic support or guaranteed language parsing",
+    "originalLiveResearchQuality": "NOT_ACCEPTED"
+  },
+  "evidence": {
+    "indexSHA256": "cee41e3016122024e62b1043965c717df881c5a48816643831ace2c1eaaabf28",
+    "artifactCount": 222,
+    "localReceipt": "DELIVERY_RECEIPT.md",
+    "independentReview": "review/INDEPENDENT_REVIEW.md + review/FIX_RESOLUTION.json",
+    "independentEvaluation": "review/FINAL_EVALUATION_BINDINGS.json",
+    "installedForward": "FORWARD_REPORT.md"
+  }
+}
