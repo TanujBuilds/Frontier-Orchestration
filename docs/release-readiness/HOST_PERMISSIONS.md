@@ -34,7 +34,7 @@ approval_mode = "approve"
 ```
 
 On 2026-11-01 the main owner verified this narrow configuration in one fresh
-native Sol session on codex-cli0.166.0, retaining `never` and `read-only`. Actual
+native Sol session on codex-cli 0.166.0, retaining `never` and `read-only`. Actual
 MCP discovery, exact preparation, hash-bound activation and submission passed;
 all three mutation annotations remained false. The submitted Codex fixture task
 stayed `codex_ready`, with zero request rows and zero attempts. Global policy and

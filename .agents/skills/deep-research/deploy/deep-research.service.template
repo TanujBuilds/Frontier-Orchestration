@@ -5,7 +5,7 @@ After=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=__ROOT__
-ExecStart="__ROOT__/.venv/bin/python3" "__ROOT__/scripts/research_cli.py" --data-dir "__DATA__" worker --config "__CONFIG__" --watch
+ExecStart="__ROOT__/.venv/bin/python3" -B "__ROOT__/scripts/research_cli.py" --data-dir "__DATA__" worker --config "__CONFIG__" --watch
 Restart=on-failure
 RestartSec=15
 Nice=10
