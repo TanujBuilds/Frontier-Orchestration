@@ -2,7 +2,7 @@
 
 **SCOPED OFFLINE GOAL COMPLETE; FULL RELEASE INCOMPLETE.**
 [Receipt14](receipts/14-selector-contract-offline.json) and
-[policy contract](../../../../RESEARCH_POLICY.md) describe the opt-in version1
+[policy contract](../../../RESEARCH_POLICY.md) describe the opt-in version1
 selector-only/required-discovery contract. Runtime465930a; immutable3764-file
 candidate8678287cfa618e8028346b77886b0dfea593cd7813762fcdcdf19eb43e063623.
 Approval/bridge/request pins, strict reserved offers, consistent selector prompts,

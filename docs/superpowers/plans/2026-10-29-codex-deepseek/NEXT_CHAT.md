@@ -2,7 +2,7 @@
 
 This scoped OFFLINE engineering goal is complete; **FULL RELEASE INCOMPLETE**.
 Read [receipt14](receipts/14-selector-contract-offline.json) and
-[the policy contract](../../../../RESEARCH_POLICY.md). Runtime/source465930a;
+[the policy contract](../../../RESEARCH_POLICY.md). Runtime/source465930a;
 new standalone3764-file candidate hash8678287cfa618e8028346b77886b0dfea593cd7813762fcdcdf19eb43e063623.
 
 New autonomous goals can explicitly pin the closed version1 selector-only and
