@@ -1,3 +1,57 @@
+# One approved strict-selector live pilot finished — 2026-10-31 Pacific
+
+**Execution completed; research quality NOT ACCEPTED. FULL RELEASE INCOMPLETE.**
+[Receipt15](receipts/15-selector-contract-live.json) records this one new explicit
+approval. Runtime465930a and the pinned immutable3764-file candidate
+8678287cfa618e8028346b77886b0dfea593cd7813762fcdcdf19eb43e063623 were unchanged.
+No code repair, replacement, budget increase, repeated completed proof, personal
+installation, model/search/auth tuning, primary merge or push occurred.
+
+The pilot used11DeepSeekcalls/2searches/7downloads/0planner/0automaticCodexreviews/
+0questions;286392provider-reported tokens (native usage unknown). Both finish
+responses used13selectors and0legacyquotes. Exact approved policy, durable
+successful focused searches, provenance, actual launch-SSH disconnection followed
+by same-worker completion, quiescence and two byte-identical manual collections
+passed. The coordinator also retained its normal collection. Spark unit stopped
+inactive/MainPID0/exit0/pending0; disposable Mac coordinator exited0/listenerclosed.
+This is launch-session disconnection evidence, not a whole-Mac network outage.
+
+The official backend report is completed with13claims/5recommendations; all13
+were reviewed against7original primary-page archives. Six current raw bodies
+match earlier independent archives; one new atomic-commit original was copied
+from the pilot. No extra external downloads. Original-document facts are broadly
+corroborated, but9compoundclaims cite chunks omitting important supporting clauses;
+onlyC3,C4,C11,C13 are fully supported as submitted. Five fully citation-supported
+material claims spanning all requested families cannot be certified. Material
+comparison/recommendation issues include RQ failed-registry bookkeeping versus
+redelivery, local-deduplication versus remote-effect crash ambiguity, and unsupported
+operational/fencing premises. Separate review diagnosis did not rewrite citations
+or the official report. Coordinator completed/accepted statuses mean protocol,
+provenance and transport; its final summary explicitly records failed quality.
+
+Goal1e95f07b-8b45-4dd5-b3aa-4b5f110a539d/taskebd51a60-4adf-4d47-bed3-ea370bac2742/
+remotea73f888c-d586-4854-8151-b4d06c6e84a1 are terminal. Remote normalized hash
+5a8d235dc742c884589d06961e11592c03824ac65d31d3994158bf617f702285; final coordinator
+receipt d8a8618284b75acfd3d4ce17e0b380e06215f4cf5cc9857954272db4905c3aaf.
+Remaining9modelcalls are not renewable or transferable. Do not resume/recreate
+this or old terminal jobs. No next pilot is authorized or prepared as a replacement.
+
+Owner ignored `.data/live-selector-pilot-20261031/` contains authorization,
+RELEASE_RECEIPT.md, CLAIM_ASSESSMENT.md, raw requests/offers/results, primary
+originals, two collections, executable probes and91indexed artifacts. IndexSHA256:
+e07afe4f0d6dc9dc4ded5d279a0d608accbe94c834e1a72c07ef4ed7635294d8.
+All11811prior local files and5prior remote-job logical records/spending remain
+unchanged; existing provider config/new remote source inventory unchanged.
+
+The selector/discovery implementation now has a real live-path success, not just
+fixtures, while research content/recommendation quality remains a failed gate.
+Personal components remain UNINSTALLED; release/installed-host/phone/service gates
+are not satisfied by this result. Further engineering or a fresh pilot needs its
+own concrete user direction; do not extend this consumed approval. Earlier notes
+below remain historical.
+
+---
+
 # Offline selector/discovery repair complete — 2026-10-31 Pacific
 
 This scoped OFFLINE engineering goal is complete; **FULL RELEASE INCOMPLETE**.

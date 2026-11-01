@@ -1,3 +1,26 @@
+# Strict-selector live pilot result — 2026-10-31 Pacific
+
+**FULL RELEASE INCOMPLETE; research quality NOT ACCEPTED.**
+[Receipt15](receipts/15-selector-contract-live.json) supersedes the prior future-pilot
+approval state. The owner approved exactly one pinned candidate/goal/task pilot;
+it is now terminal after11model/2search/7download/0planner/0automaticreview/
+0questions. Selector-only output and enforced discovery were exercised live:
+both finishes13selectors/0quotes, exact provenance passed. Actual launch-session
+SSH disconnection, same-worker quiescent completion, two identical collections,
+old11811localfiles/5remotejobs preserved and clean disposable shutdown passed.
+
+Content review checked13official claims against7original pages:4fullysupported
+as-cited,9compoundcitationcoveragegaps; RQ redelivery/registry and external-effect
+idempotency comparisons plus operational/fencing premises need revision. The
+backend completed/accepted statuses do not certify this independent semantic
+quality. No citations/output were repaired into success. Full-release/five-claim
+quality/recommendation/installation gates remain incomplete. Personal components
+remain UNINSTALLED. No further pilot, budget increase, old-job reopening, source
+repair, runtime change or installation follows automatically. Candidate/runtime
+465930a bytes remain pinned and unchanged; prior expensive proofs were retained.
+
+---
+
 # Offline selector/discovery contract repair — 2026-10-31 Pacific
 
 **SCOPED OFFLINE GOAL COMPLETE; FULL RELEASE INCOMPLETE.**

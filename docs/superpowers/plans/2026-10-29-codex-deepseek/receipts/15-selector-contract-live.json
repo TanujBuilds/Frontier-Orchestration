@@ -1,0 +1,144 @@
+{
+  "schema": 1,
+  "date": "2026-10-31",
+  "scope": "one-explicitly-approved-strict-selector-research-pilot",
+  "execution": "completed",
+  "backendStatus": "completed",
+  "coordinatorStatus": "completed",
+  "researchQuality": "needs_revision_not_accepted",
+  "fullReleaseStatus": "incomplete",
+  "goalId": "1e95f07b-8b45-4dd5-b3aa-4b5f110a539d",
+  "taskId": "ebd51a60-4adf-4d47-bed3-ea370bac2742",
+  "remoteJobId": "a73f888c-d586-4854-8151-b4d06c6e84a1",
+  "goalHash": "9ed65912287a1af83eb6c0c35dcd55af061e35fa9a4fdc1c4bf7a00023f5274c",
+  "taskHash": "eb72127a863696a740f3da9c631d18cd169f0e38f8b9ba281089cc6b73b17bbb",
+  "remoteHash": "5a8d235dc742c884589d06961e11592c03824ac65d31d3994158bf617f702285",
+  "coordinatorReceiptHash": "d8a8618284b75acfd3d4ce17e0b380e06215f4cf5cc9857954272db4905c3aaf",
+  "candidate": {
+    "sourceCommit": "465930ae78964e69c8d3787cedc99d1b097754b9",
+    "contentHash": "8678287cfa618e8028346b77886b0dfea593cd7813762fcdcdf19eb43e063623",
+    "manifestSHA256": "c47596fdf39cd21f33a02177868db07912709a08927fd5961509cf67a6095055"
+  },
+  "policy": {
+    "version": 1,
+    "finish": "selectors_only",
+    "discovery": "search_required"
+  },
+  "limits": {
+    "seconds": 7200,
+    "model": 20,
+    "search": 30,
+    "download": 50,
+    "planner": 0,
+    "automaticReview": 0,
+    "questions": 0,
+    "reservedFinalCalls": 3
+  },
+  "actual": {
+    "deepseekCalls": 11,
+    "searches": 2,
+    "downloads": 7,
+    "plannerCalls": 0,
+    "automaticCodexReviews": 0,
+    "questions": 0,
+    "providerReportedTokens": 286392,
+    "nativeMainReviewUsage": "unknown, not zero",
+    "newIndependentExternalDownloads": 0
+  },
+  "unusedCalls": {
+    "model": 9,
+    "search": 28,
+    "download": 43,
+    "renewableOrTransferable": false
+  },
+  "report": {
+    "officialClaims": 13,
+    "officialRecommendations": 5,
+    "originalFactsCorroboratedWithQualifications": 13,
+    "fullySupportedBySubmittedPassages": 4,
+    "compoundClaimsWithIncompleteSelections": 9,
+    "originalsArchived": 7,
+    "priorIndependentOriginalsByteIdentical": 6,
+    "officialOutputModified": false,
+    "independentSourceReviewSeparate": true
+  },
+  "gates": {
+    "exactPackageApprovalsOwnership": "passed",
+    "selectorsOnlyLivePath": "passed:26selector entries across2finish responses,0legacyquotes",
+    "durableRequiredDiscovery": "passed:2focused successful reserved searches",
+    "strictSavedPassageProvenance": "passed",
+    "independentFiveClaimReviewPerformed": "passed:13official claims reviewed against7original primary sources",
+    "fiveFullySupportedAsSubmittedAcrossFamilies": "not certified:4fully supported compound claims;9citation coverage gaps",
+    "recommendationQuality": "failed / needs revision",
+    "actualLaunchSshDisconnectedBeforeCompletion": "passed",
+    "sparkQuiescence": "passed; unitinactive/MainPID0/exit0/pending0",
+    "twoChecksummedCollections": "passed; byte-identical manuala/b, automatic coordinator collection also retained",
+    "oldJobsSpendingArtifactsPreserved": "passed:5remotejobs/logicalrecords and11811oldlocalfiles unchanged",
+    "disposableMacShutdown": "passed; exit0/processabsent/listenerclosed",
+    "noReplacementExpansionOrPersonalInstallation": "passed",
+    "fullRelease": "INCOMPLETE"
+  },
+  "findings": [
+    {
+      "severity": "material",
+      "id": "F1",
+      "subject": "Selected passages truncate supporting clauses",
+      "detail": "Nine compound factual claims require text outside their one submitted800-character selection. All13 have exact provenance and original-document corroboration, but onlyC3,C4,C11,C13 are fully supported by their submitted passages. At leastfive complete as-cited material claims spanning SQLite,RQ/Celery,Temporal cannot be certified. This is selection quality, not fabricated raw text; official citations are not repaired."
+    },
+    {
+      "severity": "material",
+      "id": "F2",
+      "subject": "RQ failure collection is treated as redelivery",
+      "detail": "Comparison2 and the contradictions paragraph treat RQ maintenance moving a job into FailedJobRegistry as redelivery/at-least-once execution. C7 and the original page establish failed-job collection, not automatic requeue/re-execution. A configured retry policy or application action must not be assumed."
+    },
+    {
+      "severity": "material",
+      "id": "F3",
+      "subject": "Local deduplication does not close the external-call crash gap",
+      "detail": "Comparison4 presents a provider-enforced idempotency key OR a local deduplication record in the job-state transaction as protection for costly requests. A local transaction cannot atomically cover an external effect: a crash after remote success but before local outcome persistence remains ambiguous. Recommendation5 correctly conditions its provider-key advice on provider support, but does not make the comparison equivalent/safe. Ambiguous calls need reconciliation/no blind retry, not an exactly-once claim."
+    },
+    {
+      "severity": "material",
+      "id": "F4",
+      "subject": "Recommendation premises and fencing remain incompletely established",
+      "detail": "SQLite simplicity is a plausible explicitly labelled inference for this scope. The only-no-separate-server comparison and the concrete IMMEDIATE/lease queue recipe are not established byC1-C4. The broker recommendation overstates supervision out of the box, despite recommending external managers. Temporal timers/signals/child-workflow and deployment-cost premises are not supported byC10/C11 selected evidence. Lease expiry alone is not stale-worker fencing; the report acknowledges gaps but does not supply the requested precise comparison."
+    }
+  ],
+  "collection": {
+    "manualCount": 2,
+    "allChecksumsIdentical": true,
+    "files": {
+      "claims.json": "113f74557424c9fb86832a3a58eb39d6554b7fbf3ac15ae48370c6fad213426a",
+      "collected.json": "86f746b263793f03b19d3b094898568ab4f3745a7c59dadfae6396f99903b7ea",
+      "manifest.json": "25daaad5341b6e956806576b762e075a2be0e436430ab5f083fe08322bd3c1bb",
+      "receipt.json": "e57e9ddd8fbf8eb0ef7a2766aa15600030177e24be998a721ed1e62036c1c0e2",
+      "report.md": "778053fb068652b31e58eea1c75635e651707b1f5a8b08004ca0a77ca2fec040",
+      "sources.json": "9f14aae0a898161f0c15205f63a61febd14e49ee50f0d948b791b3723e48cbc1"
+    },
+    "automaticCoordinatorCollectionAlsoRetained": true
+  },
+  "preservation": {
+    "oldRemoteJobs": 5,
+    "oldLocalFiles": 11811,
+    "existingProviderConfigUnchanged": true,
+    "remoteSourceInventoryUnchanged": true,
+    "quiescent": true,
+    "localCoordinatorStopped": true,
+    "packageInventoryUnchanged": true
+  },
+  "releaseBoundaries": {
+    "personalInstallation": false,
+    "replacementPilot": false,
+    "budgetIncrease": false,
+    "primaryMergePushPublication": false,
+    "repeatedCompletedProofs": false,
+    "runtimeTuningChanges": false
+  },
+  "evidence": {
+    "indexSHA256": "e07afe4f0d6dc9dc4ded5d279a0d608accbe94c834e1a72c07ef4ed7635294d8",
+    "artifactCount": 91,
+    "assessment": "CLAIM_ASSESSMENT.md",
+    "receipt": "RELEASE_RECEIPT.md",
+    "probesRetained": true
+  }
+}
