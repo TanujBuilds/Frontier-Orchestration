@@ -7,6 +7,7 @@ from pathlib import Path
 import time
 import uuid
 from urllib.parse import urlsplit, urljoin
+from research_review import policy_parameters, build_repair_proposal, digest as review_digest, encoded as review_encoded
 from research_state import BudgetExceeded, StateError, strict_policy
 from research_passages import make_passages, resolve_report
 from research_protocol import parse_action, validate_report, render_report, REPORT_SHAPE, FINISH_ACTION_EXAMPLE, completion_payload
@@ -339,7 +340,8 @@ class Worker:
         reserved=next((o for o in self.store.operations(job['id']) if o['id']==job['id']+':'+str(c['step'])+':model'),None)
         if reserved:return reserved['payload']
         strict=strict_policy(job['manifest'])
-        support=job['manifest'].get('research_policy',{}).get('version')==2
+        policy=policy_parameters(job['manifest'].get('research_policy'))
+        support=policy['support']
         catalog=[];catalog_chars=0
         for sid,source in list(c['sources'].items())[:50]:
             text=source['text'][:min(2000,24000-catalog_chars)];catalog_chars+=len(text)
@@ -406,6 +408,9 @@ class Worker:
             content['discovery']['instruction']='During exploration, perform a bounded search if unmet and capacity remains; otherwise finish partial with the unmet requirement. Final phases permit finish only.'
             if c['phase']!='explore':
                 content['candidate']=selector_presentation(c.get('draft'),passages)
+                if policy['requires_review'] and content['candidate'] is None and c.get('repair_proposal'):
+                    content['candidate']=selector_presentation(c['repair_proposal']['projection'],passages)
+                    content['repair_proposal']={k:c['repair_proposal'][k] for k in ('request','reportErrors','claimErrors','omittedClaims')}
                 content['instruction']='Return one finish action with every report field. Evidence entries must be closed selectors from this request. Remove unsupported claims or finish complete=false with gaps. No more searches or downloads.'
                 content['finalization']['instruction']='Use at most 8 focused claims and 1-2 offered selectors per supported claim; keep unanswered questions explicit.'
         if support:
@@ -542,13 +547,24 @@ class Worker:
                         self.store.ask(job['id'],action['question'])
                         return
                     elif action['action']=='finish':
-                        if strict_policy(job['manifest']):c['draft']=None
                         try: offered=json.loads(payload['messages'][-1]['content']).get('citation_passages',[])
                         except (ValueError,TypeError,AttributeError,KeyError,IndexError):offered=[]
+                        if policy_parameters(job['manifest'].get('research_policy'))['requires_review']:
+                            request_ref={'operationId':job['id']+':'+str(c['step']-1)+':model',
+                                'requestSha256':review_digest(payload),'resultSha256':review_digest(result),
+                                'offersSha256':review_digest(offered)}
+                            proposal=build_repair_proposal(action['report'],c['sources'],offered,request_ref)
+                            data=review_encoded(proposal);name='repairs/'+str(c['step']-1)+'-'+review_digest(proposal)+'.json'
+                            destination=self.store.job_dir(job['id'])/name
+                            if destination.is_symlink() or (destination.exists() and destination.read_text()!=data):raise StateError('Repair proposal artifact conflict')
+                            if not destination.exists():atomic(destination,data)
+                            c['repair_proposal']=proposal
+                            c.setdefault('repair_history',[]).append({'path':name,'sha256':hashlib.sha256(data.encode()).hexdigest(),'request':request_ref})
+                        if strict_policy(job['manifest']):c['draft']=None
                         strict=strict_policy(job['manifest'])
                         if strict and json.loads(payload['messages'][-1]['content']).get('research_policy')!=job['manifest']['research_policy']:
                             raise ValueError('Reserved request does not carry the approved research policy')
-                        if job['manifest'].get('research_policy',{}).get('version')==2:
+                        if policy_parameters(job['manifest'].get('research_policy'))['support']:
                             reserved_context=json.loads(payload['messages'][-1]['content'])
                             if (type(reserved_context.get('citation_catalog_version')) is not int
                                     or reserved_context['citation_catalog_version']!=2):
@@ -673,7 +689,7 @@ class Worker:
         if discovery is not None:
             receipt['discovery']=discovery
             receipt['canonical_reports']=copy.deepcopy(c.get('canonical_reports',{}))
-        if job['manifest'].get('research_policy',{}).get('version')==2:
+        if policy_parameters(job['manifest'].get('research_policy'))['support']:
             # Coordinator-owned metadata: never copy assertions from the report.
             receipt['quality']={'version':1,'citation_catalog_version':2,
                 'report_sha256':hashes['claims.json'],'source_artifact_sha256':hashes['sources.json'],
