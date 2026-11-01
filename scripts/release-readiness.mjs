@@ -10,6 +10,7 @@ import {isEntry} from '../src/harness/entry.mjs';
 const hash=b=>createHash('sha256').update(b).digest('hex');
 const POLICY={version:2,finish:'selectors_only',discovery:'search_required'};
 const GATES=['implementation','live_research_quality','personal_activation','installed_host_discovery','persistent_research_worker','physical_phone','installed_restart','active_policy_rollback'];
+const SKILLS=['frontier-harness','frontier-collaborate','frontier-deepseek-only','frontier-codex-only'];
 const STATUSES=['passed','failed','pending','unknown','not_applicable'];
 const contexts=new WeakMap();
 const MAX_JSON=1024*1024,MAX_ARTIFACT=8*1024*1024,MAX_TOTAL=64*1024*1024;
@@ -42,7 +43,7 @@ async function cleanPath(input,{absent=false}={}){
  need(await realpath(resolved)===resolved,'noncanonical_path');return resolved;
 }
 async function readBounded(file,max,budget){
- const target=await cleanPath(file);const h=await open(target,constants.O_RDONLY|constants.O_NOFOLLOW);
+ const target=await cleanPath(file);need((await lstat(target)).isFile(),'nonregular_file');const h=await open(target,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
  try{const info=await h.stat();need(info.isFile()&&info.size<=max,'nonregular_or_oversized_file');if(budget){budget.bytes+=info.size;need(budget.bytes<=MAX_TOTAL,'evidence_too_large');}
   // Fixed read ceiling also bounds files that grow after stat.
   const bytes=Buffer.alloc(Math.min(max+1,info.size+1));let used=0;while(used<bytes.length){const {bytesRead}=await h.read(bytes,used,bytes.length-used,null);if(!bytesRead)break;used+=bytesRead;}need(used===info.size,'file_changed_during_read');return bytes.subarray(0,used);
@@ -56,7 +57,7 @@ async function readRef(root,ref,budget,roles=false){
 }
 function assessment(raw,expected,artifacts){
  object(raw,['schema','kind','candidate','policy','status','reportSha256','sourceSha256s','reviewSha256','criteria']);need(raw.schema===1&&raw.kind==='independent-semantic-assessment','unsupported_assessment');binding(raw.candidate,expected);policy(raw.policy);need(['passed','failed','pending'].includes(raw.status),'invalid_assessment_status');sha(raw.reportSha256);sha(raw.reviewSha256);need(artifacts.filter(x=>x.role==='review').length===1&&artifacts.find(x=>x.role==='review').sha256===raw.reviewSha256,'stale_review_binding');list(raw.sourceSha256s);need(raw.sourceSha256s.length>0&&new Set(raw.sourceSha256s).size===raw.sourceSha256s.length,'invalid_assessment_sources');raw.sourceSha256s.forEach(sha);
- const reports=artifacts.filter(x=>x.role==='report'),sources=artifacts.filter(x=>x.role==='source');need(reports.length===1&&reports[0].sha256===raw.reportSha256&&sources.length===raw.sourceSha256s.length&&sources.every(x=>raw.sourceSha256s.includes(x.sha256)),'stale_report_source_binding');
+ const reports=artifacts.filter(x=>x.role==='report'),sources=artifacts.filter(x=>x.role==='source');need(reports.length===1&&reports[0].sha256===raw.reportSha256&&sources.length===raw.sourceSha256s.length&&new Set(sources.map(x=>x.sha256)).size===sources.length&&sources.every(x=>raw.sourceSha256s.includes(x.sha256)),'stale_report_source_binding');
  list(raw.criteria,32);need(raw.criteria.length>0,'missing_acceptance_criteria');const ids=new Set();for(const c of raw.criteria){object(c,['id','status']);identifier(c.id);need(!ids.has(c.id)&&['passed','failed','pending'].includes(c.status),'invalid_acceptance_criterion');ids.add(c.id);}
  need(raw.status!=='passed'||raw.criteria.every(c=>c.status==='passed'),'conflicting_assessment');return raw.status;
 }
@@ -91,15 +92,16 @@ export async function checkReadiness(options){
  const {candidate,expectedContentHash,expectedManifestSha256,evidenceIndex,receipt:receiptPath}=options;
  sha(expectedContentHash);sha(expectedManifestSha256);const root=await cleanPath(candidate);need((await lstat(root)).isDirectory(),'candidate_not_directory');
  const bytes=await readBounded(path.join(root,'package-manifest.json'),2*MAX_JSON);need(hash(bytes)===expectedManifestSha256,'manifest_pin_mismatch');const m=parseBoundedJson(bytes,2*MAX_JSON);
- need(m.schema===1&&m.layout==='shared-runtime-v1'&&m.sourceDirty===false&&m.nodeMajor===24&&m.sdkVersion==='1.32.2'&&m.dependenciesInstalled===true,'unsupported_candidate');need(m.contentHash===expectedContentHash,'content_pin_mismatch');need(/^[a-f0-9]{40}$/.test(m.sourceCommit),'invalid_source_commit');list(m.files,10000);need(m.files.length>0,'empty_inventory');let total=0;
+ need(m.schema===1&&m.layout==='shared-runtime-v1'&&m.sourceDirty===false&&m.nodeMajor===24&&m.sdkVersion==='1.32.2'&&m.dependenciesInstalled===true,'unsupported_candidate');need(Array.isArray(m.skills)&&m.skills.length===SKILLS.length&&SKILLS.every((x,i)=>m.skills[i]===x),'incomplete_skill_inventory');need(m.contentHash===expectedContentHash,'content_pin_mismatch');need(/^[a-f0-9]{40}$/.test(m.sourceCommit),'invalid_source_commit');list(m.files,10000);need(m.files.length>0,'empty_inventory');let total=0;
  for(const f of m.files){object(f,['path','bytes','sha256']);relative(f.path);sha(f.sha256);need(Number.isSafeInteger(f.bytes)&&f.bytes>=0&&f.bytes<=16*MAX_JSON,'invalid_package_size');total+=f.bytes;}need(total<=128*MAX_JSON,'package_too_large');
- for(const required of ['scripts/harness.mjs','runtime/src/harness/cli.mjs','runtime/package-lock.json','runtime/node_modules/@modelcontextprotocol/sdk/package.json'])need(m.files.some(f=>f.path===required),'incomplete_package');
+ for(const required of ['scripts/harness.mjs','runtime/src/harness/cli.mjs','runtime/package-lock.json','runtime/node_modules/@modelcontextprotocol/sdk/package.json',...SKILLS.map(n=>'skills/'+n+'/SKILL.md')])need(m.files.some(f=>f.path===required),'incomplete_package');
+ const sdk=await jsonFile(path.join(root,'runtime/node_modules/@modelcontextprotocol/sdk/package.json'),MAX_JSON);const lock=await jsonFile(path.join(root,'runtime/package-lock.json'),MAX_JSON);need(sdk.version==='1.32.2'&&lock.packages?.['node_modules/@modelcontextprotocol/sdk']?.version==='1.32.2','unsupported_installed_sdk');
  try{await verifyPackage(root);}catch{throw new ReadinessError('package_inventory_failed');}
  const expected={contentHash:expectedContentHash,manifestSha256:expectedManifestSha256,sourceCommit:m.sourceCommit};
  const protectedPaths=[root],budget={bytes:0},receipts=[],receiptHashes=[],ids=new Set();let seal={status:'pending'};
  async function accept(raw,file,bytes){const r=await receipt(raw,path.dirname(file),expected,budget);need(!ids.has(r.id),'duplicate_receipt_id');ids.add(r.id);receipts.push(r);receiptHashes.push(hash(bytes));}
  if(receiptPath){const file=await cleanPath(receiptPath);protectedPaths.push(path.dirname(file));const b=await readBounded(file,MAX_JSON,budget);await accept(parseBoundedJson(b),file,b);}
- if(evidenceIndex){const file=await cleanPath(evidenceIndex),dir=path.dirname(file);protectedPaths.push(dir);const index=await jsonFile(file,MAX_JSON,budget);need(index&&typeof index==='object','invalid_index');need(Object.keys(index).every(k=>['schema','receipts','seal'].includes(k))&&index.schema===1,'unsupported_index');list(index.receipts,32);const paths=new Set();for(const ref of index.receipts){need(!paths.has(ref.path),'duplicate_receipt_path');paths.add(ref.path);const b=await readRef(dir,ref,budget);await accept(parseBoundedJson(b),path.join(dir,ref.path),b);}if(index.seal)seal=await sealed(dir,index.seal,expected,budget);}
+ if(evidenceIndex){const file=await cleanPath(evidenceIndex),dir=path.dirname(file);protectedPaths.push(dir);const index=await jsonFile(file,MAX_JSON,budget);need(index&&typeof index==='object','invalid_index');need(Object.keys(index).every(k=>['schema','receipts','seal'].includes(k))&&index.schema===1,'unsupported_index');list(index.receipts,32);const paths=new Set();for(const ref of index.receipts){need(!paths.has(ref.path),'duplicate_receipt_path');paths.add(ref.path);const b=await readRef(dir,ref,budget);await accept(parseBoundedJson(b),path.join(dir,ref.path),b);}if(Object.hasOwn(index,'seal'))seal=await sealed(dir,index.seal,expected,budget);}
  const gates=Object.fromEntries(GATES.map(k=>[k,{status:'pending',reason:'missing_evidence'}]));const seen=new Set();for(const r of receipts)for(const [k,v] of Object.entries(r.gates)){need(!seen.has(k),'duplicate_or_conflicting_gate');seen.add(k);gates[k]=v;}
  const aggregate=names=>({status:names.some(k=>gates[k].status==='failed')?'failed':names.every(k=>gates[k].status==='passed')?'passed':'pending'});
  const report={schema:1,advisory:true,installationAuthority:false,state:'UNEXECUTED',candidate:expected,policy:POLICY,integrity:{status:'passed',files:m.files.length},canPrepare:true,gates,prePromotion:aggregate(['implementation','live_research_quality']),activation:aggregate(['personal_activation']),postActivation:aggregate(['installed_host_discovery','persistent_research_worker','physical_phone','installed_restart']),handoff:seal,receiptHashes,fullRelease:'INCOMPLETE',personalComponents:'NOT_INSPECTED',notice:'Checksums prove integrity, not authenticity or semantic truth. Declarations require human review. No installation is authorized.'};

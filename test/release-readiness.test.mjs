@@ -14,7 +14,7 @@ const policy={version:2,finish:'selectors_only',discovery:'search_required'};
 async function fixture(t){
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'readiness-fixture-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));
  const candidate=path.join(root,'candidate');await fs.mkdir(candidate);
- const files=[];for(const [name,body] of Object.entries({'scripts/harness.mjs':'throw Error("CANDIDATE MUST NEVER EXECUTE");','runtime/src/harness/cli.mjs':'throw Error("CANDIDATE MUST NEVER EXECUTE");','skills/frontier-harness/SKILL.md':'FIXTURE','runtime/package-lock.json':JSON.stringify({packages:{'node_modules/@modelcontextprotocol/sdk':{version:'1.32.2'}}}),'runtime/node_modules/@modelcontextprotocol/sdk/package.json':JSON.stringify({version:'1.32.2'})})){
+ const files=[];for(const [name,body] of Object.entries({'scripts/harness.mjs':'throw Error("CANDIDATE MUST NEVER EXECUTE");','runtime/src/harness/cli.mjs':'throw Error("CANDIDATE MUST NEVER EXECUTE");',...Object.fromEntries(['frontier-harness','frontier-collaborate','frontier-deepseek-only','frontier-codex-only'].map(n=>['skills/'+n+'/SKILL.md','FIXTURE'])),'runtime/package-lock.json':JSON.stringify({packages:{'node_modules/@modelcontextprotocol/sdk':{version:'1.32.2'}}}),'runtime/node_modules/@modelcontextprotocol/sdk/package.json':JSON.stringify({version:'1.32.2'})})){
   await fs.mkdir(path.dirname(path.join(candidate,name)),{recursive:true});await fs.writeFile(path.join(candidate,name),body);files.push({path:name,bytes:Buffer.byteLength(body),sha256:sha(body)});
  }
  const manifest={schema:1,layout:'shared-runtime-v1',skills:['frontier-harness','frontier-collaborate','frontier-deepseek-only','frontier-codex-only'],sourceCommit:'a'.repeat(40),sourceDirty:false,nodeMajor:24,sdkVersion:'1.32.2',dependenciesInstalled:true,files,contentHash:digest(files)};
@@ -136,4 +136,35 @@ test('real macOS var alias is accepted while unrelated parent symlink is refused
 });
 test('failed live semantic evidence remains failed rather than scheduler failure or passed provenance',async t=>{
  const f=await fixture(t),{checkReadiness}=await api();f.receipt.gates.push({name:'live_research_quality',status:'failed',applicability:'current',scope:'live',authority:'independent_native',artifacts:[f.receipt.gates[0].artifacts[0]]});await f.save();const r=await checkReadiness(f.opts);assert.equal(r.prePromotion.status,'failed');assert.equal(r.integrity.status,'passed');
+});
+// Reviewer reproduction: [A,A] cannot satisfy independently required sources [A,B].
+test('quality requires exact source hash set and rejects duplicate bodies hiding a missing source',async t=>{
+ const f=await fixture(t),{checkReadiness}=await api();const {source,assessment}=await addQuality(f);
+ const g=f.receipt.gates[1],a=JSON.parse(await fs.readFile(path.join(f.evidence,assessment.path)));a.sourceSha256s.push(sha('missing source B'));
+ const data=JSON.stringify(a);await fs.writeFile(path.join(f.evidence,assessment.path),data);Object.assign(g.artifacts.find(x=>x.role==='assessment'),{sha256:sha(data),bytes:Buffer.byteLength(data)});
+ const duplicate=await f.artifact('duplicate-source.txt',await fs.readFile(path.join(f.evidence,source.path),'utf8'),'source');g.artifacts.push(duplicate);await f.save();await assert.rejects(checkReadiness(f.opts));
+});
+test('nonregular FIFO manifest and receipt reject promptly without waiting for a writer',async t=>{
+ if(process.platform==='win32'){t.skip('POSIX FIFO');return;}const f=await fixture(t),fifo=path.join(f.root,'fifo-receipt');await execute('/usr/bin/mkfifo',[fifo]);
+ const args=['--candidate',f.candidate,'--expected-content-hash',f.binding.contentHash,'--expected-manifest-sha256',f.binding.manifestSha256,'--receipt',fifo];
+ let r=await execute(process.execPath,[fileURLToPath(script),...args],{timeout:1500}).then(()=>null,e=>e);assert.equal(r.killed,false,'must reject without external timeout');assert.equal(r.code,2);
+ await fs.rename(path.join(f.candidate,'package-manifest.json'),path.join(f.root,'saved-manifest'));await execute('/usr/bin/mkfifo',[path.join(f.candidate,'package-manifest.json')]);r=await execute(process.execPath,[fileURLToPath(script),...args],{timeout:1500}).then(()=>null,e=>e);assert.equal(r.killed,false);assert.equal(r.code,2);
+});
+test('candidate cannot prepare nonexistent four-sibling skills or pretend an unsupported installed SDK is supported',async t=>{
+ const f=await fixture(t),{checkReadiness}=await api();const missing=structuredClone(f.manifest);missing.skills=[];
+ const save=async m=>{m.contentHash=digest(m.files);const b=JSON.stringify(m);await fs.writeFile(path.join(f.candidate,'package-manifest.json'),b);return {...f.opts,receipt:undefined,expectedContentHash:m.contentHash,expectedManifestSha256:sha(b)};};
+ let options=await save(missing);await assert.rejects(checkReadiness(options));
+ const noSibling=structuredClone(f.manifest);noSibling.files=noSibling.files.filter(x=>!x.path.startsWith('skills/'));for(const n of f.manifest.files.filter(x=>x.path.startsWith('skills/')))await fs.rm(path.join(f.candidate,n.path));options=await save(noSibling);await assert.rejects(checkReadiness(options));
+ for(const n of f.manifest.files.filter(x=>x.path.startsWith('skills/')))await fs.writeFile(path.join(f.candidate,n.path),'FIXTURE');
+ const sdk=structuredClone(f.manifest);for(const n of sdk.files.filter(x=>/package(?:-lock)?\.json$/.test(x.path))){const text=n.path.endsWith('package-lock.json')?JSON.stringify({packages:{'node_modules/@modelcontextprotocol/sdk':{version:'0.0.0'}}}):JSON.stringify({version:'0.0.0'});await fs.writeFile(path.join(f.candidate,n.path),text);Object.assign(n,{sha256:sha(text),bytes:Buffer.byteLength(text)});}options=await save(sdk);await assert.rejects(checkReadiness(options));
+});
+test('explicit malformed optional seal cannot be silently ignored',async t=>{
+ const f=await fixture(t),{checkReadiness}=await api();for(const seal of [null,false,0,'']){const file=path.join(f.evidence,'index.json');await fs.writeFile(file,JSON.stringify({schema:1,receipts:[],seal}));await assert.rejects(checkReadiness({...f.opts,receipt:undefined,evidenceIndex:file}));}
+});
+test('a real mid-write staging failure preserves partial files and cannot be reused',async t=>{
+ const f=await fixture(t),out=path.join(f.root,'interrupted'),guard=path.join(f.root,'interrupt.mjs');
+ await fs.writeFile(guard,`import fs from 'node:fs/promises';import {syncBuiltinESMExports} from 'node:module';const original=fs.writeFile;fs.writeFile=async function(file,...args){if(String(file).endsWith('/launchagent.proposed.plist'))throw Error('SIMULATED_DISK_FAILURE');return original.call(this,file,...args);};syncBuiltinESMExports();`);
+ const args=['--candidate',f.candidate,'--expected-content-hash',f.binding.contentHash,'--expected-manifest-sha256',f.binding.manifestSha256,'--prepare','--output',out];
+ const result=await execute(process.execPath,['--import',guard,fileURLToPath(script),...args]).then(()=>null,e=>e);assert.equal(result.code,2);assert.ok((await fs.stat(path.join(out,'readiness.json'))).isFile());await assert.rejects(fs.stat(path.join(out,'staging-receipt.json')));
+ const retry=await execute(process.execPath,[fileURLToPath(script),...args]).then(()=>null,e=>e);assert.equal(retry.code,2);assert.match(retry.stderr,/output_already_exists/);
 });
