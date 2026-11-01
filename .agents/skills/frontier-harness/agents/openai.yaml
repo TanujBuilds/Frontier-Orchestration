@@ -1,7 +1,7 @@
 interface:
   display_name: "Frontier Harness"
-  short_description: "Coordinate bounded Codex and DeepSeek goals"
-  default_prompt: "Use $frontier-harness to coordinate this goal with scoped assignments and auditable evidence."
+  short_description: "Choose and coordinate bounded Codex and DeepSeek goals"
+  default_prompt: "Use $frontier-harness to choose a workflow if undecided, then prepare scoped work with auditable evidence."
 dependencies:
   tools:
     - type: "mcp"

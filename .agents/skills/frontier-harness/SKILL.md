@@ -1,9 +1,18 @@
 ---
 name: frontier-harness
-description: Use when preparing or selecting a Frontier Harness goal, inspecting its evidence, answering saved questions, managing controls, or choosing collaborative, DeepSeek-only, Codex-only, or bounded overnight work.
+description: Use when a substantial coding or public-source research outcome needs a workflow choice, or when preparing, continuing, inspecting, or controlling a Frontier Harness goal in collaborative, DeepSeek-only, Codex-only, or overnight review mode.
 ---
 
 # Frontier Harness
+
+For a new substantial outcome, read [onboarding](references/onboarding.md) before
+preparation. Use the explicit current choice, then the active goal's pinned mode,
+then an explicitly owner-saved project preference. If still undecided, ask once:
+“Which workflow: collaborative (recommended), DeepSeek-only, Codex-only, or
+overnight review?” Wait for the choice. Quick questions need an ordinary answer.
+Follow-ups keep their goal; a different explicit mode needs a supported transition
+or separately authorized goal, preserving spending. Loading instructions and
+choosing a mode authorize no dispatch.
 
 One installed `frontier-harness` MCP service owns new unified goals. Loading a
 skill does not dispatch work. Read [operations](references/operations.md) for
