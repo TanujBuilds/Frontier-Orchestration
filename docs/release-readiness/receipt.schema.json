@@ -28,24 +28,82 @@
       "additionalProperties": false
     },
     "policy": {
-      "type": "object",
-      "properties": {
-        "version": {
-          "const": 2
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "version": {
+              "const": 2
+            },
+            "finish": {
+              "const": "selectors_only"
+            },
+            "discovery": {
+              "const": "search_required"
+            }
+          },
+          "required": [
+            "version",
+            "finish",
+            "discovery"
+          ],
+          "additionalProperties": false
         },
-        "finish": {
-          "const": "selectors_only"
-        },
-        "discovery": {
-          "const": "search_required"
+        {
+          "type": "object",
+          "properties": {
+            "version": {
+              "const": 3
+            },
+            "finish": {
+              "const": "selectors_only"
+            },
+            "discovery": {
+              "const": "search_required"
+            },
+            "review": {
+              "type": "object",
+              "properties": {
+                "version": {
+                  "const": 1
+                },
+                "role": {
+                  "const": "independent_operator"
+                },
+                "maxRounds": {
+                  "const": 2
+                },
+                "maxRevisions": {
+                  "const": 1
+                },
+                "maxCorrectionModelCalls": {
+                  "const": 2
+                },
+                "rubricSha256": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              },
+              "required": [
+                "version",
+                "role",
+                "maxRounds",
+                "maxRevisions",
+                "maxCorrectionModelCalls",
+                "rubricSha256"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "version",
+            "finish",
+            "discovery",
+            "review"
+          ],
+          "additionalProperties": false
         }
-      },
-      "required": [
-        "version",
-        "finish",
-        "discovery"
-      ],
-      "additionalProperties": false
+      ]
     },
     "file": {
       "type": "object",

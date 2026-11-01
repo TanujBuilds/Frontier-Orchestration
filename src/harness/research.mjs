@@ -1,9 +1,14 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { normalizeTask } from './contracts.mjs';
+import {createHash} from 'node:crypto';
+import {mkdir,writeFile,readFile,lstat} from 'node:fs/promises';
+import {verifyProposal,verifyReviewedReceipt} from './research-review.mjs';
+export {verifyProposal,verifyReviewedReceipt} from './research-review.mjs';
+import { digest,normalizeTask } from './contracts.mjs';
 
 const bridge=fileURLToPath(new URL('../../.agents/skills/deep-research/scripts/harness_rpc.py',import.meta.url));
+const sha=s=>createHash('sha256').update(s).digest('hex');
 export class ResearchClient {
  constructor(config){this.config=config;}
  async call(request,collectOutput){
@@ -52,6 +57,13 @@ export class ResearchAdapter {
     if(remote.execution?.status==='uncertain'){c.markUncertain(task.id,'Remote model request outcome is uncertain',owner);return c.getTask(task.id);}
     return c.boundary(task.id,{...cp,nextPollAt:c.now()+(cfg.pollMs??1000)},owner,{quiescent:false});
    }
+   if(remote.status==='awaiting_semantic_review'){
+    if(task.spec.researchPolicy?.version!==3)throw Error('Unexpected reviewed research state');
+    const packet=verifyProposal(await this.rpc({command:'proposal_export',job:cp.remoteJobId}),task),dir=path.join(c.store.root,'research-proposals',task.id);await mkdir(dir,{recursive:true});
+    const file=path.join(dir,packet.descriptor.candidateHash+'.json'),data=JSON.stringify(packet);let old;try{const st=await lstat(file);if(st.isSymbolicLink())throw Error('Unsafe proposal file');old=await readFile(file,'utf8');}catch(e){if(e.code!=='ENOENT')throw e;}if(old!==undefined&&old!==data)throw Error('Proposal file conflict');if(old===undefined)await writeFile(file,data,{flag:'wx'});
+    const boundary=c.boundary(task.id,{...cp,nextPollAt:0,reviewCandidate:packet.descriptor},owner);if(boundary.status!=='running')return boundary;
+    c.store.tx(()=>{const current=c.owned(task.id,owner);current.status='awaiting_review';current.owner=null;current.result={proposalFile:file,proposalHash:sha(data),independentReview:'pending',reviewCandidate:packet.descriptor};c.store.put('task',current);c.emit('research.awaiting_review',task.goalId,task.id,packet.descriptor);});return c.getTask(task.id);
+   }
    if(['awaiting_supervisor','awaiting_user'].includes(remote.status)){
     const current=c.boundary(task.id,cp,owner);if(current.status!=='running')return current;
     const questions=await this.rpc({command:'questions',job:cp.remoteJobId});const q=questions.at(-1);return c.ask(task.id,q.question,{...cp,nextPollAt:0,remoteQuestionId:q.id},owner);
@@ -60,13 +72,40 @@ export class ResearchAdapter {
    if(['completed','partial'].includes(remote.status)){
     const packet=await this.rpc({command:'export',job:cp.remoteJobId}),collected=await this.collect(packet,path.join(c.store.root,'research-results'));
     if(!collected.checksums_verified)throw Error('Research collection lacked verified checksums');
-    const done=c.completeTask(task.id,{directory:collected.directory,checksumsVerified:true,remoteJobId:cp.remoteJobId,receiptStatus:remote.status,independentReview:'not_requested'},owner);
+    let reviewed=null;
+    if(task.spec.researchPolicy?.version===3&&remote.status==='completed'){
+     const receipt=JSON.parse(await readFile(path.join(collected.directory,'receipt.json'),'utf8'));reviewed=verifyReviewedReceipt(receipt,task);
+     const report=JSON.parse(await readFile(path.join(collected.directory,'claims.json'),'utf8'));if(digest(report)!==reviewed.reportSha256)throw Error('Accepted report content mismatch');
+    }
+    const done=c.completeTask(task.id,{directory:collected.directory,checksumsVerified:true,remoteJobId:cp.remoteJobId,receiptStatus:remote.status,independentReview:reviewed?'accepted':'not_requested',...(reviewed?{reviewBinding:reviewed}:{})},owner);
     if(remote.status==='partial')c.store.tx(()=>{const t=c.store.get('task',task.id);t.status='partial';c.store.put('task',t);});return c.getTask(done.id);
    }
    if(['blocked','failed'].includes(remote.status))throw Error(remote.reason??'Remote research failed');
    return c.boundary(task.id,{...cp,nextPollAt:c.now()+(cfg.pollMs??1000)},owner);
   }catch(e){if(c.getTask(task.id).status==='uncertain')return c.getTask(task.id);c.markUncertain(task.id,'Research contact/evidence uncertain: '+e.message,owner);return c.getTask(task.id);}
  }
+ async review(input,key){return this.worker.integration.effect(key,{op:'research.review',...input},async()=>{
+  const {c}=this.worker,t=c.getTask(input.taskId),g=c.getGoal(t.goalId),cp=t.checkpoint;
+  const replay=t.researchReviewTickets?.find(x=>input.action==='reserve'?x.reservationKey===key:x.submissionHash===digest({input,key}));
+  if(replay)return input.action==='reserve'?{id:replay.id,candidateHash:replay.candidateHash,rubricSha256:replay.rubricSha256,dispatchRequired:false}:replay.submissionResult;
+  c.liveGoal(g);c.liveTask(t);
+  if(t.spec.kind!=='research'||t.spec.actor!=='deepseek'||t.spec.researchPolicy?.version!==3||g.manifest.mode.id!=='collaborative'||t.status!=='awaiting_review'||t.owner||t.stopRequested||t.pauseRequested)throw Error('A quiescent reviewed research task is required');
+  const d=cp.reviewCandidate;if(input.candidateHash!==d?.candidateHash||input.rubricHash!==d?.rubricSha256)throw Error('Stale research review binding');
+  if(input.action==='reserve'){
+   const intent=c.store.command('research-intent-'+key,{op:'research.review.intent',...input},()=>{
+    const current=c.store.get('task',t.id);if(current.reviews>=Math.min(2,current.spec.limits.reviews))throw Error('Research review capacity exhausted');
+    const run=c.reserveReviewer({taskId:t.id},'research-native-'+key);current.reviews++;c.store.put('task',current);return run;
+   });
+   let result;try{result=await this.rpc({command:'review_reserve',job:cp.remoteJobId,candidateHash:input.candidateHash,rubricHash:input.rubricHash,idempotency_key:key});}catch(e){e.retryable=true;throw e;}
+   c.store.tx(()=>{const current=c.store.get('task',t.id);current.researchReviewTickets??=[];if(!current.researchReviewTickets.some(x=>x.id===result.id))current.researchReviewTickets.push({...result,nativeReservationId:intent.id,reservationKey:key});c.store.put('task',current);c.emit('research.review_reserved',t.goalId,t.id,{ticketId:result.id,candidateHash:input.candidateHash,nativeReservationId:intent.id});});return result;
+  }
+  const ticket=t.researchReviewTickets?.find(x=>x.id===input.ticketId);if(!ticket)throw Error('Unknown native research reservation');
+  let result;try{result=await this.rpc({command:'review_submit',job:cp.remoteJobId,...input,idempotency_key:key});}catch(e){e.retryable=true;throw e;}
+  c.store.tx(()=>{const current=c.store.get('task',t.id);if(current.status!=='awaiting_review')throw Error('Research review ownership changed');
+   const run=c.store.get('reviewer',ticket.nativeReservationId);run.status='completed';run.result={ticketId:ticket.id,decision:input.decision,candidateHash:input.candidateHash};c.store.put('reviewer',run);
+   const savedTicket=current.researchReviewTickets.find(x=>x.id===ticket.id);savedTicket.submissionHash=digest({input,key});savedTicket.submissionResult=result;
+   current.feedback.push({decision:input.decision,findings:input.findings,candidateHash:input.candidateHash,at:c.now()});current.reviewed=true;current.status=current.stopRequested?'stopped':current.pauseRequested?'paused':'queued';current.checkpoint={...current.checkpoint,nextPollAt:0};c.store.put('task',current);c.emit('research.review_submitted',t.goalId,t.id,{ticketId:ticket.id,decision:input.decision,candidateHash:input.candidateHash});});return result;
+ });}
  async reconcile(input,key){return this.worker.integration.effect(key,{op:'research.reconcile',...input},async()=>{
   const {c,owner}=this.worker,lease=c.store.get('lease','coordinator');
   if(lease.token!==owner||lease.pid!==process.pid)throw Error('Current coordinator lease required for reconciliation');
@@ -88,7 +127,7 @@ export class ResearchAdapter {
    for(const [kind,n]of Object.entries(remote.counters??{}))if(!Number.isInteger(n)||n<0||n<(current.remoteSpent?.[kind]??0))throw Error('Remote counters decreased or invalid');
    current.remoteSpent=remote.counters??{};current.checkpoint={...cp,nextPollAt:0};c.store.put('task',current);
   });
-  if(!remote.quiescent||!['suspended','stopped','completed','partial','blocked','failed','awaiting_supervisor','awaiting_user'].includes(remote.status))return c.getTask(t.id);
+  if(!remote.quiescent||!['suspended','stopped','completed','partial','blocked','failed','awaiting_supervisor','awaiting_user','awaiting_semantic_review'].includes(remote.status))return c.getTask(t.id);
   c.store.tx(()=>{const current=c.store.get('task',t.id);current.owner=owner;current.status='running';c.store.put('task',current);c.emit('research.reconciled',t.goalId,t.id,{remoteJobId:cp.remoteJobId,status:remote.status,counters:remote.counters});});
   return this.step(c.getTask(t.id),owner);
  });}

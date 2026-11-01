@@ -1,0 +1,17 @@
+# Offline research review lifecycle
+
+The approved offline implementation adds policy3/research@4/catalog2 for explicitly opted-in collaborative research. Absent policy, policy1, policy2 and deterministic operator research retain their previous contracts. Historical reports and allowances are not migrated. DeepSeek-only, Codex-only and overnight modes cannot opt into this contract.
+
+A malformed report now retains a separate bounded repair proposal with individually provenance-valid claim records, immutable operation/result/offer hashes, whole-report errors and rejected-claim errors. It is untrusted writer context. It cannot become a canonical candidate or grant acceptance.
+
+A fully valid, complete report becomes an immutable candidate at `awaiting_semantic_review`. It binds the manifest, canonical report, source snapshot, offered catalog, reserved model request/result and approved rubric. DeepSeek must be observed quiescent before the coordinator presents the candidate in its review inbox. The saved `proposal.json` is available through existing artifact tools.
+
+`research_review` is a mutating, closed reserve/submit union. Reserve takes taskId, candidateHash, rubricHash and idempotencyKey; it spends a native reviewer reservation before any operator dispatch. Submit adds ticketId, decision (accept/revise/reject), findings and coverage. Findings use unit/code/message/evidence. Evidence is optional and must be a selector actually offered to that candidate. Acceptance requires every descriptor unit exactly once and no findings. The tool launches no inference; the trusted operator must independently review the packet. Native reservations count separately from DeepSeek model/search/download operations and against existing goal/task reviewer limits.
+
+One revision returns the same job to correction, with at most two model calls and no new retrieval. Initial generation stops before consuming those two calls; all calls remain within the existing 20-call ceiling. A narrower model limit can leave insufficient generation capacity and produces an unaccepted result. The whole replacement needs the second independent review. Rejection, exhaustion and expiry preserve evidence and produce partial/unaccepted output. No model prose follows acceptance.
+
+A timely acceptance commits a local finalization intent. Restart can replay cached model results or that intent without new inference; it cannot refresh identities, deadlines or counters. A failed artifact write may be explicitly resumed after the deadline only for the already committed local intent and known quiescent ownership. Stop and ambiguous execution block review/correction. Generic task_review, question answers, model flags and progress reports cannot accept policy3 research.
+
+Policy3 readiness additionally requires a bound pre-final acceptance receipt and a separate independent live assessment for the exact final report/source artifacts. Policy2 readiness remains compatible. Fixture results never satisfy the live gate. Checksums prove binding and integrity; they do not prove reviewer independence, semantic truth or release acceptance.
+
+The 16 approved regression cases are mapped in REGRESSION_COVERAGE.json. Simulated verdicts establish mechanical behavior only. Native Codex-host discovery, real-model usefulness/entailment, live search/page behavior, deployment, installation, coding and physical phone acceptance remain outside these offline tests.

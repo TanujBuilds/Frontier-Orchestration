@@ -5,6 +5,8 @@ import {constants} from 'node:fs';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {verifyPackage,renderLaunchAgent} from '../src/harness/package.mjs';
+import {normalizeResearchPolicy,digest} from '../src/harness/contracts.mjs';
+import {verifyReviewedReceipt} from '../src/harness/research-review.mjs';
 import {isEntry} from '../src/harness/entry.mjs';
 
 const hash=b=>createHash('sha256').update(b).digest('hex');
@@ -20,7 +22,7 @@ function object(v,keys){need(v&&typeof v==='object'&&!Array.isArray(v),'invalid_
 function sha(v){need(typeof v==='string'&&/^[a-f0-9]{64}$/.test(v),'invalid_sha256');return v;}
 function identifier(v){need(typeof v==='string'&&/^[a-zA-Z0-9_-]{1,100}$/.test(v),'invalid_identifier');}
 function list(v,max=64){need(Array.isArray(v)&&v.length<=max,'invalid_array');}
-function policy(p){object(p,['version','finish','discovery']);need(p.version===2&&p.finish===POLICY.finish&&p.discovery===POLICY.discovery,'unsupported_policy');}
+function policy(p){if(p?.version===3){try{normalizeResearchPolicy(p);return;}catch{throw new ReadinessError('unsupported_policy');}}object(p,['version','finish','discovery']);need(p.version===2&&p.finish===POLICY.finish&&p.discovery===POLICY.discovery,'unsupported_policy');}
 function binding(b,expected){object(b,['contentHash','manifestSha256','sourceCommit']);sha(b.contentHash);sha(b.manifestSha256);need(/^[a-f0-9]{40}$/.test(b.sourceCommit),'invalid_source_commit');if(expected)need(Object.keys(b).every(k=>b[k]===expected[k]),'stale_candidate_binding');}
 function relative(v){need(typeof v==='string'&&v.length<=400&&!/[\x00-\x1f\x7f\\]/.test(v)&&!path.isAbsolute(v)&&v.split('/').length<=16&&v.split('/').every(x=>x&&x!=='.'&&x!=='..'),'unsafe_artifact_path');return v;}
 // Reject duplicate object keys and excessive depth before JSON.parse. Strings are
@@ -72,14 +74,28 @@ async function receipt(raw,root,expected,budget){
    if(g.name==='live_research_quality'){
     const indices=g.artifacts.flatMap((a,i)=>a.role==='assessment'?[i]:[]);need(indices.length<=1,'duplicate_assessment');
     if(g.scope!=='live'||g.authority!=='independent_native'||indices.length!==1||!g.artifacts.some(x=>x.role==='review')){status='pending';reason='independent_live_assessment_required';}
-    else {status=assessment(parseBoundedJson(data[indices[0]]),expected,g.artifacts);reason='bound_independent_assessment';}
+    else {
+     const independent=parseBoundedJson(data[indices[0]]);need(digest(independent.policy)===digest(raw.policy),'assessment_policy_mismatch');
+     status=assessment(independent,expected,g.artifacts);reason='bound_independent_assessment';
+     if(raw.policy.version===3){
+      const ri=g.artifacts.flatMap((a,i)=>a.role==='receipt'?[i]:[]);need(ri.length<=1,'duplicate_review_receipt');
+      if(ri.length!==1){status='pending';reason='pre_final_review_receipt_required';}
+      else {
+       const r=parseBoundedJson(data[ri[0]]),q=r.quality;
+       need(r.status==='completed'&&r.mode==='live','live_review_receipt_required');
+       try{verifyReviewedReceipt(r,{checkpoint:{remoteJobId:r.job_id,remoteHash:r.manifest_hash},spec:{researchPolicy:raw.policy}});}catch{throw new ReadinessError('invalid_pre_final_review_binding');}
+       need(q.report_sha256===independent.reportSha256&&independent.sourceSha256s.length===1&&q.source_artifact_sha256===independent.sourceSha256s[0],'stale_pre_final_artifacts');
+       const reportIndex=g.artifacts.findIndex(a=>a.role==='report');need(digest(parseBoundedJson(data[reportIndex],MAX_ARTIFACT))===q.review_binding.reportSha256,'stale_accepted_report');
+      }
+     }
+    }
    }
    if(!['implementation','live_research_quality','active_policy_rollback'].includes(g.name)&&g.scope!=='installed'){status='pending';reason='actual_installation_required';}
   }
   if(g.name==='active_policy_rollback'){status='pending';reason='active_policy2_downgrade_unsupported';}
   gates[g.name]={status,reason,scope:g.scope,authority:g.authority,applicability:g.applicability,artifacts:g.artifacts.map(a=>({sha256:a.sha256,role:a.role}))};
  }
- return {id:raw.id,gates};
+ return {id:raw.id,policy:raw.policy,gates};
 }
 async function sealed(root,s,expected,budget){
  object(s,['done','result','resultSha256','index']);const data={};for(const k of Object.keys(s))data[k]=await readRef(root,s[k],budget);
@@ -102,16 +118,18 @@ export async function checkReadiness(options){
  async function accept(raw,file,bytes){const r=await receipt(raw,path.dirname(file),expected,budget);need(!ids.has(r.id),'duplicate_receipt_id');ids.add(r.id);receipts.push(r);receiptHashes.push(hash(bytes));}
  if(receiptPath){const file=await cleanPath(receiptPath);protectedPaths.push(path.dirname(file));const b=await readBounded(file,MAX_JSON,budget);await accept(parseBoundedJson(b),file,b);}
  if(evidenceIndex){const file=await cleanPath(evidenceIndex),dir=path.dirname(file);protectedPaths.push(dir);const index=await jsonFile(file,MAX_JSON,budget);need(index&&typeof index==='object','invalid_index');need(Object.keys(index).every(k=>['schema','receipts','seal'].includes(k))&&index.schema===1,'unsupported_index');list(index.receipts,32);const paths=new Set();for(const ref of index.receipts){need(!paths.has(ref.path),'duplicate_receipt_path');paths.add(ref.path);const b=await readRef(dir,ref,budget);await accept(parseBoundedJson(b),path.join(dir,ref.path),b);}if(Object.hasOwn(index,'seal'))seal=await sealed(dir,index.seal,expected,budget);}
+ need(receipts.every(r=>digest(r.policy)===digest(receipts[0].policy)),'conflicting_receipt_policy');
+ const effectivePolicy=receipts[0]?.policy??POLICY;
  const gates=Object.fromEntries(GATES.map(k=>[k,{status:'pending',reason:'missing_evidence'}]));const seen=new Set();for(const r of receipts)for(const [k,v] of Object.entries(r.gates)){need(!seen.has(k),'duplicate_or_conflicting_gate');seen.add(k);gates[k]=v;}
  const aggregate=names=>({status:names.some(k=>gates[k].status==='failed')?'failed':names.every(k=>gates[k].status==='passed')?'passed':'pending'});
- const report={schema:1,advisory:true,installationAuthority:false,state:'UNEXECUTED',candidate:expected,policy:POLICY,integrity:{status:'passed',files:m.files.length},canPrepare:true,gates,prePromotion:aggregate(['implementation','live_research_quality']),activation:aggregate(['personal_activation']),postActivation:aggregate(['installed_host_discovery','persistent_research_worker','physical_phone','installed_restart']),handoff:seal,receiptHashes,fullRelease:'INCOMPLETE',personalComponents:'NOT_INSPECTED',notice:'Checksums prove integrity, not authenticity or semantic truth. Declarations require human review. No installation is authorized.'};
+ const report={schema:1,advisory:true,installationAuthority:false,state:'UNEXECUTED',candidate:expected,policy:effectivePolicy,integrity:{status:'passed',files:m.files.length},canPrepare:true,gates,prePromotion:aggregate(['implementation','live_research_quality']),activation:aggregate(['personal_activation']),postActivation:aggregate(['installed_host_discovery','persistent_research_worker','physical_phone','installed_restart']),handoff:seal,receiptHashes,fullRelease:'INCOMPLETE',personalComponents:'NOT_INSPECTED',notice:'Checksums prove integrity, not authenticity or semantic truth. Declarations require human review. No installation is authorized.'};
  const packageReferences=Object.fromEntries([['onboarding','skills/frontier-harness/references/personal-instructions-template.md'],['workerUnit','runtime/.agents/skills/deep-research/deploy/deep-research.service.template']].map(([name,file])=>{const item=m.files.find(x=>x.path===file);return [name,item?{status:'included',...item}:{status:'pending_missing_from_candidate',path:file}];}));
  contexts.set(report,{protectedPaths,packageReferences});return report;
 }
 export function renderPlan(report){
  need(contexts.has(report),'unchecked_report');
  const future={node:'/ABS/NODE24',version:'/ABS/IMMUTABLE/VERSION',state:'/ABS/PRIVATE/STATE',config:'/ABS/PRIVATE/provider-config.json',launcherConfig:'/ABS/PRIVATE/local-config.json',logs:'/ABS/PRIVATE/LOGS'};
- return {schema:1,state:'UNEXECUTED',advisory:true,installationAuthority:false,candidate:report.candidate,policy:POLICY,readiness:report,packageReferences:contexts.get(report).packageReferences,placeholders:future,manualApprovalRequired:true,activePolicyDowngrade:'BLOCKED_UNSUPPORTED',actions:['Review pins and evidence applicability; independently assess live semantic quality.','After separate authorization, resolve placeholders and private configs; preserve all existing bindings and CURRENT state.','Review proposed plist/MCP/skills together; never bootstrap this rehearsal.','Discover actual host tools after activation; verify physical phone, watcher and installed restart separately.']};
+ return {schema:1,state:'UNEXECUTED',advisory:true,installationAuthority:false,candidate:report.candidate,policy:report.policy,readiness:report,packageReferences:contexts.get(report).packageReferences,placeholders:future,manualApprovalRequired:true,activePolicyDowngrade:'BLOCKED_UNSUPPORTED',actions:['Review pins and evidence applicability; independently assess live semantic quality.','After separate authorization, resolve placeholders and private configs; preserve all existing bindings and CURRENT state.','Review proposed plist/MCP/skills together; never bootstrap this rehearsal.','Discover actual host tools after activation; verify physical phone, watcher and installed restart separately.']};
 }
 /** New directory only. Failure leaves partial files for inspection; never reused. */
 export async function prepareBundle({output,report,prepare=true}){

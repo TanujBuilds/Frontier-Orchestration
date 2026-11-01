@@ -1,0 +1,140 @@
+{
+  "schema": 1,
+  "scope": "OFFLINE_SIMULATED_FIXTURES",
+  "semanticLimits": "Curated fixture verdicts test lifecycle/binding, never an automated entailment or real-model quality oracle. Existing heldout subjects are consumed unchanged.",
+  "cases": [
+    {
+      "id": "actual_invalid_contradictions_recovery",
+      "tests": [
+        "test/research/test_proposal_recovery.py:ProposalRecoveryTests.test_actual_invalid_draft_reaches_next_request_as_repairable_claims"
+      ],
+      "assertions": "Current worker loses candidate/cards. Proposed path retains8bounded claim/evidence records, original selections including S007[3980:4052] and S004[5062:5758], explicit global errors, no canonical approval."
+    },
+    {
+      "id": "invalid_audit_after_valid_candidate",
+      "tests": [
+        "test/research/test_review_lifecycle.py:ReviewLifecycleTests.test_nonclaim_format_errors_do_not_reuse_previous_candidate"
+      ],
+      "assertions": "Retain both proposals and their operation/hash lineage; never silently finalize the older candidate or erase the new failure."
+    },
+    {
+      "id": "actual_antecedent_repair",
+      "tests": [
+        "test/research/test_review_edges.py:ReviewEdges.test_real_destination_and_antecedent_feedback_do_not_change_citations"
+      ],
+      "assertions": "Revision request carries finding and available selector references; only a newly generated report may select antecedent or narrow assertion. No automatic citation enlargement."
+    },
+    {
+      "id": "actual_rq_destination",
+      "tests": [
+        "test/research/test_review_edges.py:ReviewEdges.test_real_destination_and_antecedent_feedback_do_not_change_citations",
+        "test/research/test_proposal_recovery.py"
+      ],
+      "assertions": "Curated negative candidate cannot finalize; separately supported positive remains useful. Main tests review handling rather than hardcoded entailment."
+    },
+    {
+      "id": "cross_alternative_transfer",
+      "tests": [
+        "test/research/test_review_lifecycle.py:ReviewLifecycleTests.test_stale_acceptance_cannot_cover_revision_or_new_prose",
+        "test/research/test_review_edges.py:ReviewEdges.test_protected_fictional_alternatives_and_conditions_still_need_review"
+      ],
+      "assertions": "Relevant claim IDs alone do not waive negative review; revision separates alternatives/configuration or marks missing premise unknown; whole replacement is re-reviewed."
+    },
+    {
+      "id": "lost_retry_condition",
+      "tests": [
+        "test/research/test_review_edges.py:ReviewEdges.test_protected_fictional_alternatives_and_conditions_still_need_review",
+        "test/research/test_heldout_synthesis.py"
+      ],
+      "assertions": "Feedback targets lost condition; valid-shape output still waits for review; condition-preserving positive can be accepted by a bound fixture verdict."
+    },
+    {
+      "id": "nearby_unselected_fact",
+      "tests": [
+        "test/research/test_heldout_synthesis.py:HeldoutReconstruction.test_missing_selection_does_not_acquire_a_nearby_passage",
+        "test/research/test_review_edges.py:ReviewEdges.test_real_destination_and_antecedent_feedback_do_not_change_citations"
+      ],
+      "assertions": "Adjacent availability never mutates official selectors or grants support; only explicit new output selections count."
+    },
+    {
+      "id": "useful_positive_proposals",
+      "tests": [
+        "test/research/test_review_edges.py:ReviewEdges.test_useful_positive_conditional_proposal_needs_no_benchmark"
+      ],
+      "assertions": "No benchmark or implemented queue required; no empty/trivial report can satisfy semantic coverage; preserve supported facts while narrowing bad premises."
+    },
+    {
+      "id": "review_gate_binding",
+      "tests": [
+        "test/research/test_review_lifecycle.py:ReviewLifecycleTests.test_wrong_hash_incomplete_coverage_and_forged_flags_cannot_accept",
+        "test/research/test_review_edges.py:ReviewEdges.test_proposal_tamper_and_wrong_rubric_never_approve",
+        "test/harness-research-review.test.mjs"
+      ],
+      "assertions": "Reject without acceptance; idempotent replay returns same committed outcome; unrelated hash/identity cannot be substituted."
+    },
+    {
+      "id": "bounded_correction",
+      "tests": [
+        "test/research/test_review_lifecycle.py:ReviewLifecycleTests.test_correction_capacity_is_reserved_and_attempts_are_bounded",
+        "test/research/test_review_edges.py:ReviewEdges.test_initial_generation_reserves_two_correction_calls_inside_twenty",
+        "test/research/test_review_edges.py:ReviewEdges.test_review_reservation_exhaustion_no_refund_or_implicit_replacement"
+      ],
+      "assertions": "At most2review reservations/1semantic correction round/20totalDeepSeek requests; reject/exhaustion stays unaccepted, no fresh IDs, no refunds."
+    },
+    {
+      "id": "whole_replacement_review",
+      "tests": [
+        "test/research/test_review_lifecycle.py:ReviewLifecycleTests.test_same_job_correction_rechecks_full_replacement_and_keeps_counts",
+        "test/research/test_review_lifecycle.py:ReviewLifecycleTests.test_stale_acceptance_cannot_cover_revision_or_new_prose"
+      ],
+      "assertions": "Review1 sees the whole replacement and can reject it; no delta-only acceptance or post-acceptance model prose."
+    },
+    {
+      "id": "restart_matrix",
+      "tests": [
+        "test/research/test_review_edges.py",
+        "test/research/test_review_lifecycle.py:ReviewLifecycleTests.test_reservation_and_submission_replay_survive_restart_without_refund",
+        "test/harness-research-review-package.test.mjs",
+        "test/harness-research-review.test.mjs"
+      ],
+      "assertions": "Replay exact IDs/hashes/raw outcomes; no duplicated ambiguous requests, unchanged deadlines/counters, final report equals accepted candidate."
+    },
+    {
+      "id": "stop_deadline_unknown_owner",
+      "tests": [
+        "test/research/test_review_lifecycle.py:ReviewLifecycleTests.test_stop_deadline_and_unknown_execution_owner_block_review",
+        "test/research/test_review_lifecycle.py:ReviewLifecycleTests.test_deadline_wait_and_committed_accept_intent_replay",
+        "test/research/test_review_edges.py:ReviewEdges.test_pending_correction_owner_remains_uncertain_on_restart"
+      ],
+      "assertions": "No new review/correction after stop/deadline, no forced lease clearing; uncertain ownership blocks. Only already committed local finalization intent may replay."
+    },
+    {
+      "id": "mode_and_legacy_compatibility",
+      "tests": [
+        "test/research/test_review_protocol.py",
+        "test/harness-research-review-contract.test.mjs",
+        "test/harness-research-review.test.mjs",
+        "test/research/fixtures/legacy-premise-payload-hashes.json"
+      ],
+      "assertions": "Old bytes/hashes/terminal semantics unchanged; no hidden frontier fallback; generic task_review cannot bypass new research acceptance bindings."
+    },
+    {
+      "id": "wire_and_untrusted_input",
+      "tests": [
+        "test/research/test_review_edges.py:ReviewEdges.test_wire_unicode_and_oversized_untrusted_feedback_are_bounded",
+        "test/research/test_proposal_recovery.py",
+        "test/research/test_support_quality.py",
+        "test/harness-research-review.test.mjs"
+      ],
+      "assertions": "Keep196608wire/96offers/1000quotechars/10evidence entries and current parser/source caps; whole omissions explicit; no silent acceptance with incomplete context."
+    },
+    {
+      "id": "installed_fixture_contract",
+      "tests": [
+        "test/harness-research-review-package.test.mjs",
+        "test/release-readiness.test.mjs"
+      ],
+      "assertions": "Current-state restart/receipt replay and bytecode suppression hold; fixture result cannot satisfy live semantic gate."
+    }
+  ]
+}

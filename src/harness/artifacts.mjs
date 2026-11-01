@@ -14,6 +14,7 @@ export class Artifacts {
  public(record){const {file,...metadata}=record;return {...metadata,url:'/api/artifacts/'+record.id};}
  async list(taskId,{limit=1000}={}){
   const t=this.c.getTask(taskId),candidates=[];
+  if(t.result?.proposalFile)candidates.push({file:t.result.proposalFile,name:'proposal.json',type:'application/json'});
   if(t.result?.checksumsVerified&&t.result.directory)for(const name of reports){const file=path.join(t.result.directory,name);try{await lstat(file);candidates.push({file,name,type:'text/plain; charset=utf-8'});}catch(e){if(e.code!=='ENOENT')throw e;}}
   for(const check of [...(t.result?.checks??[]),...(t.integration?.checks??[])])for(const file of check.screenshots??[])if(typeof file==='string'&&file.endsWith('.png'))candidates.push({file,name:path.basename(file),type:'image/png'});
   if(candidates.length>limit)throw Error('Saved artifact catalog exceeds query limit');

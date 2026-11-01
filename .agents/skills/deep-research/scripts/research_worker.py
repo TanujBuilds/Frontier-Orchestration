@@ -539,7 +539,7 @@ class Worker:
                 if reviewed:
                     semantic=c.get('semantic',{})
                     used=job['counters']['model']-semantic.get('correctionStartModel',0)
-                    if (semantic.get('revisions') and used>=semantic['correctionAllowance']) or (not semantic.get('revisions') and job['counters']['model']>=limit-1):
+                    if (semantic.get('revisions') and used>=semantic['correctionAllowance']) or (not semantic.get('revisions') and job['counters']['model']>=max(0,limit-2)):
                         return self.finalize(job,c,'reserved correction capacity exhausted')
                 if self.scout_busy(): time.sleep(min(5,remaining)); continue
                 payload=self.model_payload(job,c)
@@ -724,6 +724,7 @@ class Worker:
                 accepted_candidate_hash=accepted['descriptor']['candidateHash'] if accepted else None,
                 review_binding=accepted['descriptor'] if accepted else None)
             receipt['independent_review']='accepted' if accepted else 'not_accepted'
+            receipt['semantic_finalization_intent_at']=c.get('semantic',{}).get('finalizationIntentAt')
             receipt['semantic_reviews']=copy.deepcopy(c.get('semantic',{}).get('tickets',[]))
         if job['manifest'].get('executor')=='operator':receipt['model_self_check']='not_run_operator_mode'
         atomic(directory/'receipt.json',json.dumps(receipt,indent=2))

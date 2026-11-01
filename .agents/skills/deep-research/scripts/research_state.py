@@ -454,7 +454,12 @@ class Store(ReviewLifecycle):
             if job['status'] not in ('stopped', 'blocked', 'failed', 'suspended'):
                 raise StateError('only stopped, blocked, or failed jobs can resume')
             if job['deadline'] is not None and now >= job['deadline']:
-                raise BudgetExceeded('the original research deadline has been reached')
+                if job['status'] not in ('failed','blocked') or not policy_parameters(job['manifest'].get('research_policy'))['requires_review']:
+                    raise BudgetExceeded('the original research deadline has been reached')
+                self.accepted_packet(job)  # Only committed local finalization, no renewed inference.
+                owner=db.execute('SELECT status FROM executions WHERE job_id=?',(job_id,)).fetchone()
+                pending=db.execute("SELECT 1 FROM operations WHERE job_id=? AND status='pending'",(job_id,)).fetchone()
+                if pending or (owner and owner['status']!='quiescent'):raise StateError('Uncertain finalization ownership')
             # Resume may only need cached-result replay or local finalization.
             # Every new external request still passes the per-kind reserve cap.
             db.execute("UPDATE jobs SET status='queued',reason=NULL,updated_at=? WHERE id=?", (now, job_id))
@@ -462,15 +467,19 @@ class Store(ReviewLifecycle):
             return self._get(db, job_id)
 
     def execution_start(self, job_id, token):
+        uncertain=False
         with self._db(transaction=True) as db:
             job = self._get(db, job_id)
             previous = db.execute('SELECT * FROM executions WHERE job_id=?', (job_id,)).fetchone()
             pending = db.execute("SELECT 1 FROM operations WHERE job_id=? AND kind='model' AND status='pending'", (job_id,)).fetchone()
             if job['manifest']['schema'] == 2 and previous and (previous['status'] == 'uncertain' or (previous['status'] == 'active' and pending)):
                 db.execute("UPDATE executions SET status='uncertain',updated_at=? WHERE job_id=?", (time.time(),job_id))
-                raise StateError('Ambiguous remote inference requires operator reconciliation')
-            db.execute('INSERT INTO executions VALUES(?,?,?,?,?) ON CONFLICT(job_id) DO UPDATE SET token=excluded.token,pid=excluded.pid,status=excluded.status,updated_at=excluded.updated_at',
+                if not policy_parameters(job['manifest'].get('research_policy'))['requires_review']:
+                    raise StateError('Ambiguous remote inference requires operator reconciliation')
+                uncertain=True
+            if not uncertain:db.execute('INSERT INTO executions VALUES(?,?,?,?,?) ON CONFLICT(job_id) DO UPDATE SET token=excluded.token,pid=excluded.pid,status=excluded.status,updated_at=excluded.updated_at',
                        (job_id,token,os.getpid(),'active',time.time()))
+        if uncertain:raise StateError('Ambiguous remote inference requires operator reconciliation')
 
     def execution_end(self, job_id, token):
         with self._db(transaction=True) as db:
