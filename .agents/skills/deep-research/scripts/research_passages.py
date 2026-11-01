@@ -63,16 +63,21 @@ def _boundary_passages(text,start,end,sid,digest):
     This deterministic heuristic handles common prose/list punctuation, not every
     language or code grammar. complete_unit describes boundaries, never support.
     """
-    segment=text[start:end];cuts=[]
-    for match in _BOUNDARY.finditer(segment):
-        stop=start+match.end()
-        if match.group()[0]=='.' and _ABBREVIATION.search(text[max(start,stop-16):stop]):continue
-        cuts.append((stop,True))
+    cuts=[];preceding_boundary=None
+    # Inspect the saved source around both edges: a window ending at "3." is
+    # not a sentence boundary when the same saved token continues as "3.14".
+    # Use the same punctuation/abbreviation rules for the left edge and cuts.
+    for match in _BOUNDARY.finditer(text):
+        stop=match.end()
+        if stop>end:break
+        if match.group()[0]=='.' and _ABBREVIATION.search(text[max(0,stop-16):stop]):continue
+        if stop<=start:preceding_boundary=stop
+        else:cuts.append((stop,True))
     if not cuts or cuts[-1][0]!=end:cuts.append((end,False))
     units=[];offset=start
     # A retained window can start in the middle of a unit. Conservatively label
-    # that first unit incomplete unless a preceding clear boundary is present.
-    left_ok=start==0 or bool(re.search(r'[.!?。！？]["\')\]]*\s*$|\n\s*\n$',text[max(0,start-80):start]))
+    # that first unit incomplete unless a source boundary precedes only space.
+    left_ok=start==0 or (preceding_boundary is not None and not text[preceding_boundary:start].strip())
     for stop,right_ok in cuts:
         if stop<=offset:continue
         complete=left_ok and right_ok

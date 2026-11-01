@@ -61,6 +61,25 @@ class BoundaryTests(unittest.TestCase):
   end=text.index('\n')+1;h=hashlib.sha256(text.encode()).hexdigest()
   offers=p.make_passages({'S001':{'text':text}},[{'source_id':'S001','start':0,'end':end,'text_sha256':h}],version=2)
   clipped=[o for o in offers if o['end']==end];self.assertTrue(clipped);self.assertTrue(all(not o['complete_unit'] for o in clipped))
+ def test_right_window_edge_uses_surrounding_source_not_clipped_token_eof(self):
+  for text,end in [('The minimum allowed setting is 3.14 units before operation.',33),('Use config.example.com for this setting.',19)]:
+   with self.subTest(text=text,end=end):
+    digest=hashlib.sha256(text.encode()).hexdigest();offers=p.make_passages({'S001':{'text':text}},[{'source_id':'S001','start':0,'end':end,'text_sha256':digest}],version=2)
+    exact=[o for o in offers if o['start']==0 and o['end']==end];self.assertTrue(exact)
+    for o in exact:self.assertEqual(o['text'],text[:end]);self.assertFalse(o['complete_unit'])
+ def test_left_window_edge_rejects_decimal_and_recognized_abbreviation_boundaries(self):
+  for text,start in [('The minimum allowed setting is 3.14 units before operation.',33),('Dr. Vega requires an enabled valve before operation.',4)]:
+   with self.subTest(text=text,start=start):
+    digest=hashlib.sha256(text.encode()).hexdigest();offers=p.make_passages({'S001':{'text':text}},[{'source_id':'S001','start':start,'end':len(text),'text_sha256':digest}],version=2)
+    exact=[o for o in offers if o['start']==start and o['end']==len(text)];self.assertTrue(exact)
+    for o in exact:self.assertEqual(o['text'],text[start:]);self.assertFalse(o['complete_unit'])
+ def test_genuine_source_sentence_boundaries_remain_complete_at_window_edges(self):
+  text='A complete first sentence. Another complete sentence follows.';boundary=text.index(' Another');digest=hashlib.sha256(text.encode()).hexdigest()
+  for start,end in [(0,boundary),(boundary+1,len(text))]:
+   with self.subTest(start=start,end=end):
+    offers=p.make_passages({'S001':{'text':text}},[{'source_id':'S001','start':start,'end':end,'text_sha256':digest}],version=2)
+    exact=[o for o in offers if o['start']==start and o['end']==end];self.assertTrue(exact)
+    for o in exact:self.assertEqual(o['text'],text[start:end]);self.assertTrue(o['complete_unit'])
  def test_multiple_selectors_require_each_exact_reserved_offer_and_same_source_hash(self):
   text='The first documented assertion is local. '+('Useful independent statement. '*40)+'The second assertion requires another passage.'
   sources={'S001':{'text':text}};offers=p.make_passages(sources,[],version=2);self.assertGreater(len(offers),1)
