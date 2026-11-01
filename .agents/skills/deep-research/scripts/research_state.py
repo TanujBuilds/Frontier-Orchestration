@@ -4,6 +4,7 @@ Only the worker performs external calls. It must reserve each operation before
 calling a provider, and treat an existing pending operation as spent and
 ambiguous rather than dispatching it again.
 """
+from research_review import normalize_review_policy
 from contextlib import contextmanager
 import fcntl
 import hashlib
@@ -77,10 +78,16 @@ def normalize_manifest(raw):
             extension['executor']=raw['executor']
     if 'research_policy' in raw:
         policy = raw['research_policy']
-        _keys(policy, tuple(RESEARCH_POLICY), 'research_policy')
-        if (type(policy.get('version')) is not int or policy.get('version') not in (1,2)
-                or policy != {**RESEARCH_POLICY,'version':policy['version']}):
-            raise StateError('unsupported research_policy; require closed version1 or version2 selector-only/search-required contract')
+        if isinstance(policy,dict) and policy.get('version') == 3:
+            try: policy=normalize_review_policy(policy)
+            except ValueError as error: raise StateError(str(error)) from error
+            if schema != 2 or extension.get('collaboration',{}).get('supervisor') != 'codex':
+                raise StateError('reviewed research requires explicit Codex collaboration')
+        else:
+            _keys(policy, tuple(RESEARCH_POLICY), 'research_policy')
+            if (type(policy.get('version')) is not int or policy.get('version') not in (1,2)
+                    or policy != {**RESEARCH_POLICY,'version':policy['version']}):
+                raise StateError('unsupported research_policy; require closed version1 or version2 selector-only/search-required contract')
         if extension.get('executor') == 'operator':
             raise StateError('operator research cannot select autonomous research_policy')
         extension['research_policy'] = dict(policy)
@@ -104,6 +111,8 @@ def normalize_manifest(raw):
     for name, value in normalized_limits.items():
         if type(value) is not int or value <= 0:
             raise StateError(f'limits.{name} must be a positive integer')
+    if extension.get('research_policy',{}).get('version')==3 and normalized_limits['model_calls']>20:
+        raise StateError('reviewed research cannot exceed twenty model calls')
     # Autonomous research reserves draft/audit/repair calls; operator jobs never
     # dispatch a model and retain the exact positive limit approved by the host.
     if extension.get('executor','deepseek') != 'operator' and normalized_limits['model_calls'] < 4:

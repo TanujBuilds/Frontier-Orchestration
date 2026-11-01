@@ -27,13 +27,15 @@ const taskCeilingsInputSchema=objectSchema(Object.fromEntries(Object.entries(TAS
  kind,objectSchema(Object.fromEntries(Object.entries(limits).map(([name,max])=>[name,{type:'integer',minimum:name==='questions'||name==='reviews'?0:1,maximum:max}]))),
 ])));
 export const researchPolicySchema=objectSchema({version:{type:'integer',enum:[1,2]},finish:{type:'string',enum:['selectors_only']},discovery:{type:'string',enum:['search_required']}},['version','finish','discovery']);
+export const reviewedResearchPolicySchema=objectSchema({version:{const:3,type:'integer'},finish:{const:'selectors_only',type:'string'},discovery:{const:'search_required',type:'string'},review:objectSchema({version:{const:1,type:'integer'},role:{const:'independent_operator',type:'string'},maxRounds:{const:2,type:'integer'},maxRevisions:{const:1,type:'integer'},maxCorrectionModelCalls:{const:2,type:'integer'},rubricSha256:{type:'string',pattern:'^[a-f0-9]{64}$'}},['version','role','maxRounds','maxRevisions','maxCorrectionModelCalls','rubricSha256'])},['version','finish','discovery','review']);
+const researchPolicyInputSchema={anyOf:[researchPolicySchema,reviewedResearchPolicySchema]};
 export const scopeInputSchema=objectSchema({seedUrls:stringsSchema,includeDomains:stringsSchema,excludeDomains:stringsSchema});
 export const goalInputSchema=objectSchema({
- submissionId:stringSchema,objective:stringSchema,acceptance:stringsSchema,mode:{...stringSchema,description:'Registered mode id; collaborative is the default.'},modeVersion:{type:'integer',minimum:1},environment:{type:'string',enum:['live','fixture']},scope:scopeInputSchema,researchPolicy:researchPolicySchema,
+ submissionId:stringSchema,objective:stringSchema,acceptance:stringsSchema,mode:{...stringSchema,description:'Registered mode id; collaborative is the default.'},modeVersion:{type:'integer',minimum:1},environment:{type:'string',enum:['live','fixture']},scope:scopeInputSchema,researchPolicy:researchPolicyInputSchema,
  limits:objectSchema({hours:{type:'integer',minimum:1,maximum:24},maxTasks:{type:'integer',minimum:1,maximum:100},reviewAgentRuns:{type:'integer',minimum:0,maximum:10},taskLimits:{...taskCeilingsInputSchema,description:'Optional per-kind assignment ceilings. Omitted task limits inherit these values; explicit task limits may only narrow them.'}}),
  project:{anyOf:[{type:'null'},objectSchema({repo:{...stringSchema,description:'Absolute clean committed repository root.'},baseCommit:{...stringSchema,description:'Exact40-character Git base revision.'},readPaths:stringsSchema,writePaths:stringsSchema,checks:{type:'array',items:objectSchema({id:stringSchema,argv:stringsSchema,timeoutMs:{type:'integer',minimum:100,maximum:600000},screenshots:stringsSchema,env:{type:'object'}},['id','argv'])}},['repo','baseCommit','readPaths','writePaths','checks'])]},
 },['submissionId','objective','acceptance']);
-export const taskInputSchema=objectSchema({submissionId:stringSchema,kind:{type:'string',enum:['coding','research','consult','learning']},actor:{type:'string',enum:['codex','deepseek']},objective:stringSchema,context:stringSchema,acceptance:stringsSchema,dependsOn:stringsSchema,priority:{type:'string',enum:['blocking','normal','background']},permissions:objectSchema({readPaths:stringsSchema,writePaths:stringsSchema,checks:stringsSchema},['readPaths','writePaths','checks']),scope:scopeInputSchema,researchPolicy:researchPolicySchema,limits:{type:'object'}},['submissionId','kind','objective','acceptance']);
+export const taskInputSchema=objectSchema({submissionId:stringSchema,kind:{type:'string',enum:['coding','research','consult','learning']},actor:{type:'string',enum:['codex','deepseek']},objective:stringSchema,context:stringSchema,acceptance:stringsSchema,dependsOn:stringsSchema,priority:{type:'string',enum:['blocking','normal','background']},permissions:objectSchema({readPaths:stringsSchema,writePaths:stringsSchema,checks:stringsSchema},['readPaths','writePaths','checks']),scope:scopeInputSchema,researchPolicy:researchPolicyInputSchema,limits:{type:'object'}},['submissionId','kind','objective','acceptance']);
 const baseModes=[
  {id:'collaborative',version:1,planner:'codex',actors:['codex','deepseek'],review:'operator',capabilities:['coding','research','consult','learning']},
  {id:'deepseek_only',version:1,planner:'deepseek',actors:['deepseek'],review:'checks',capabilities:['coding','research','consult','learning']},
@@ -59,6 +61,7 @@ export class Registry {
   const supportResearch=clone(research);supportResearch.version=3;
   supportResearch.inputSchema.properties.researchPolicy.properties.version.enum=[2];
   this.capabilities.set('research@3',supportResearch);
+  const reviewedResearch=clone(supportResearch);reviewedResearch.version=4;reviewedResearch.inputSchema.properties.researchPolicy=clone(reviewedResearchPolicySchema);this.capabilities.set('research@4',reviewedResearch);
   for(const m of baseModes)this.registerMode(m);
  }
  registerMode(raw){
@@ -90,6 +93,12 @@ export function sourceScope(raw={}) {
  return clone(scope);
 }
 export function normalizeResearchPolicy(raw){
+ if(raw?.version===3){
+  keys(raw,['version','finish','discovery','review'],'research policy');const r=raw.review;
+  keys(r,['version','role','maxRounds','maxRevisions','maxCorrectionModelCalls','rubricSha256'],'review policy');
+  if(raw.finish!=='selectors_only'||raw.discovery!=='search_required'||r.version!==1||r.role!=='independent_operator'||r.maxRounds!==2||r.maxRevisions!==1||r.maxCorrectionModelCalls!==2||typeof r.rubricSha256!=='string'||!/^[a-f0-9]{64}$/.test(r.rubricSha256))throw Error('Unsupported independent review contract');
+  return clone(raw);
+ }
  keys(raw,['version','finish','discovery'],'research policy');
  if(![1,2].includes(raw.version)||raw.finish!=='selectors_only'||raw.discovery!=='search_required')throw Error('Unsupported research policy');
  return clone(raw);
@@ -98,6 +107,7 @@ export function normalizeGoal(raw,registry=new Registry()){
  keys(raw,['submissionId','objective','acceptance','project','mode','modeVersion','scope','limits','environment','researchPolicy'],'goal');
  const environment=raw.environment??'live';if(!['live','fixture'].includes(environment))throw Error('Invalid execution environment');
  const mode=registry.mode(raw.mode,raw.modeVersion),policy=Object.hasOwn(raw,'researchPolicy')?normalizeResearchPolicy(raw.researchPolicy):undefined;
+ if(policy?.version===3&&mode.id!=='collaborative')throw Error('Reviewed research requires collaborative mode');
  if(policy&&(!mode.capabilities.includes('research')||!mode.actors.includes('deepseek')))throw Error('Research policy requires autonomous research capability');
  const limits={hours:8,maxTasks:10,reviewAgentRuns:mode.review==='operator'?2:0,...raw.limits};
  if(raw.limits)keys(raw.limits,['hours','maxTasks','reviewAgentRuns','taskLimits'],'goal limits');

@@ -1,0 +1,82 @@
+Offline implementation approved November 1, 2026. The live-validation proposal remains UNAPPROVED and must not be activated. Original approval is retained in the private authority ledger.
+
+# Offline root-cause and architecture review — November 1, 2026
+
+**Recommendation: preserve repairable proposals across schema failures, and add an explicit, bounded independent-review/correction gate before semantic finalization.** Another general prompt paragraph or passage-boundary tweak does not close the demonstrated failure path. This is a proposal, not implementation or live-spending authority.
+
+The repository remains at517829a28d5e4c7bd11bd506ff1c8d24977c9a9a; runtime/candidate source remains d725d4c9f6b1266b1c664a10d2f4b03395bec592. No product code, official report/citation, task identity, counter, deadline, gate, installation or runtime was changed. This review used local saved evidence and12focused fixture tests only. No provider, search, download, SSH, native host session or installation was invoked. The supervising chat is not free; its usage is separate from zero external execution.
+
+## Confirmed execution path
+
+The decisive new fact is that the latest live audit did not receive the claim-card reconstruction that passed the offline tests.
+
+| Run / actual reservation | Candidate and projection supplied to audit | Offers / actual HTTP JSON bytes | Observed outcome |
+|---|---|---|---|
+| Earlier support-quality a8106c31…:15:model | candidate null;12prior messages |77offers | First finish had a contradictions schema error; audit produced a provenance-valid but semantically rejected report. |
+| Usability22e615cc…:19:model | full9-claim candidate;9joined cards;5prior messages |93offers /191332bytes | Previous claim/conclusion join was present; material citation and attribution errors survived. |
+| Latestf4b8dd51…:21:model | candidate null; synthesis_review null;0prior messages |95offers /137433bytes | New reconstruction metadata was present, but there were no claim cards to reconstruct from. Final8-claim report remained semantically rejected. |
+
+The latest first finish is reservationf4b8dd51…:20:model, not an independently accepted draft. Its claims/selectors resolve mechanically, but validate_report returns exactly two `contradictions: invalid text` errors because that section contains strings instead of the required objects. The worker clears `c['draft']` on every strict finish (research_worker.py:545) and stores a replacement only when the entire report passes validation (:568). A non-claim formatting error therefore discards otherwise usable claim/evidence input. The phase advances to audit. model_payload then clears history (:418), so its remaining copy of the raw finish is removed too. The audit sees the question, sources, all95offers and generic format-error messages, but no candidate or reconstruction cards.
+
+This is not context trimming: the latest audit is59175bytes below the196608-byte wire ceiling; it records zero citation-offer omissions, and neither candidate nor synthesis projection was removed by the size trimmer. Four read windows were omitted, but each passage needed for the reported C4/C8/P1 defects was still offered. Six shared source bodies and extracted texts are byte-identical between the latest run and each of the two preceding runs. Source drift does not explain these failures. See SAVED_INPUT_COMPARISON.json and SOURCE_IDENTITY_COMPARISON.json for exact hashes and reservations.
+
+## Concrete regressions in the latest report
+
+- C4 originally selected S007[3980:4052], the short sentence naming the FailedJobRegistry destination. The audit output dropped that selector, kept S007[3223:3980], and still asserted the destination. Both ranges were available in the actual audit request.
+- The initial C8 selected S004[5062:5758], containing the crash-scenario antecedent, together with its continuation and retry-policy passage. The final C8 added the specific successful-Activity/crash-before-notification assertion while dropping the antecedent range. Its remaining S004[5758:6525] begins with an anaphoric continuation. The preceding offer remained available.
+- P1 cites C3 for Redis-backed registries. C3's selected S006[0:674] describes registry states; the Redis example is in the next offered range, starting674. Another claim selecting a Redis example would not silently repair P1's actual cited C3 chain.
+- R2 again groups RQ and Celery under a shared worker/registry/retry/deployment premise. The cited RQ facts support RQ. The Celery selections cover acknowledgement, idempotency and child-loss behavior; they do not establish the joint registry/Redis/process-manager assertion.
+- P3 drops the retry-policy qualification even though C8 and the selected Temporal passage retain it. R1/G3 add service/deployment comparison premises not established by their selected evidence. A labelled qualitative proposal requires no benchmark or queue implementation, but its asserted factual reasons still need support or explicit hypothetical assumptions.
+
+These are failures of the exact submitted claims and selected evidence. The full originals corroborate some underlying facts; they do not retroactively enlarge a selection. The latest independent review still accepts six material facts across all families and R3 as a useful conditional proposal. Those positives and the unchanged whole-report rejection both stand.
+
+## Why the repairs were insufficient
+
+**Confirmed software defect:** all-or-nothing report validation controls availability of repair context. The new history removal makes the malformed-draft path lose its last copy of usable claims. A reconstruction-version flag is not evidence that a nonempty reconstruction was delivered.
+
+**Confirmed contract limitation:** the final shape still permits unrestricted factual clauses in claim text, comparisons, recommendations and gaps. validate_report checks IDs, sizes, quote membership, labels and reference membership. It does not check entailment, alternative attribution or preservation of conditions. complete_unit is a punctuation/window-boundary heuristic, not a semantic antecedent guarantee. A valid claim ID cannot certify an extra premise attached to its conclusion.
+
+**Confirmed lifecycle gap:** a mechanically valid audit sets next=finalize. Semantic findings do not enter `c['errors']`. finalize writes completed artifacts with independent semantic review pending. The Mac ResearchAdapter collects them and calls completeTask without reviewRequired, so the task becomes accepted for protocol/transport before independent review. The release-readiness gate correctly blocks promotion later, but by then the research job is terminal. Its eight unused calls cannot be spent on corrective feedback under the old approval.
+
+**Inference, not established model causation:** losing the draft removes focused correction context and the final same-model audit is not an independent critic. This is a plausible contributor to regeneration and selection regression. The logs cannot reveal the model's internal attention or prove that retaining cards would have prevented R2 or C8. The older valid-draft audit already demonstrates that a full join and extensive instructions alone are insufficient. Similar wording may reflect the question's grouped alternatives or learned associations, but neither is a proven internal cause.
+
+## What the passing tests establish
+
+| Evidence | Establishes | Does not establish |
+|---|---|---|
+| Existing actual-input reconstruction tests | Valid seeded draft is projected; old synthesis shadows removed; all old93offers/cards fit; selectors stay separate from adjacent context | Latest malformed draft reaches this path; model selects the right adjacent passage; final prose is supported |
+| Three protected heldout tests | Exact conditional/negated text and subjects remain distinct in the representation; no automatic support promotion | A model understands or obeys that representation |
+| Strict selector/canonicalization tests | Actual reserved membership, source hashes and exact slices; malformed or forged selectors reject | Selected text entails every factual clause |
+| Unsupported-output test | Unsupported prose cannot mint review approval through model flags; quality stays pending | Unsupported prose is prevented from reaching protocol completed—the test explicitly permits that lifecycle status |
+| Recovery, wire and installed-package suites | Counters/reservations/deadlines, restart/replay, bounded payloads and source/package isolation | Research semantic quality, reviewer effectiveness, phone acceptance or release readiness |
+| Source review and green aggregate suites | Reviewed implementation satisfies its tested structural contract | A live generated report has passed independent semantic acceptance |
+
+Fresh offline rerun here:8reconstruction tests,3heldouts and1unsupported-output contract test passed. No broad suite was repeated or recertified. Testing presentation was useful; treating it as a substitute for behavioral validation would be a category error. The saved live failure remains the behavior evidence.
+
+## Smallest complete structural proposal
+
+Three alternatives were considered. A recovery-only patch fixes the confirmed loss of context but leaves the older valid-draft semantic failures possible. A new per-alternative/per-premise report schema improves explicitness but still cannot certify its own model-supplied labels and adds substantial compatibility work. The recommended middle option is **recoverable proposals plus a bounded pre-finalization review gate**, retaining the current report shape and deterministic provenance checks.
+
+1. Separate raw repair proposal from fully validated canonical candidate. Persist an operation/result/offer-bound proposal reference before whole-report validation. Derive a bounded allowlisted projection of individually well-formed claim/selector records even when an unrelated section is malformed. Preserve the full raw output as immutable evidence; keep global and per-claim errors explicit. Do not turn salvage into an official valid report or silently promote adjacent passages. A prior valid candidate may remain available as history, but cannot become the active accepted result after a newer failed revision without an exact valid acceptance transition.
+2. After local schema/provenance/discovery checks pass, freeze the exact candidate and enter awaiting_semantic_review while the original job remains nonterminal and quiescent. Independent review must see the entire candidate's material prose, its actual selections, relevant saved originals, the fixed rubric and configuration/antecedent context. No new retrieval is allowed in correction phases.
+3. Reserve an explicitly approved independent-review ticket before invoking a reviewer. The trusted coordinator binds manifest, candidate, source artifact, reserved-offer catalog and rubric hashes. Reviewer/source/model flags are proposals, never authorization. An authenticated operator submits accept/revise/reject under the reserved ticket. Findings name exact units and missing/incorrect premises, not general advice. Native usage remains separate and is not called free or one inference.
+4. Permit one same-job corrective round within the original DeepSeek20-call ceiling and original deadline. The model—not the reviewer—produces the replacement report. Preserve every candidate, failure and feedback record. The corrected whole report must pass local checks and receive a second independent review of its exact bytes. Review all material prose again because correction may introduce new assertions. If the first candidate passes, skip correction and the second review.
+5. Commit finalization only for the current exact accepted candidate. No semantic text generation follows acceptance. A stale acceptance, missing coverage, rejected revision, unavailable reviewer, exhausted budget, unknown execution ownership or expired deadline leaves quality unaccepted and promotion blocked. Purely local replay of an already committed finalization intent may recover without new inference; a deadline cannot authorize a new review or correction.
+
+Reuse the coordinator, request journal, canonical report files, existing model/reader adapters and observer events. Add no scheduler, new provider, truth oracle, model-runtime change or always-on Codex supervisor. Do not implement this by changing only reviewRequired: the remote job is already terminal at that point. Do not reuse generic task_review revise unchanged either: it resets checkpoint.phase to attempt, which is a coding convention and does not deliver research feedback to a nonterminal remote proposal. Zero question allowance must stay zero; semantic reviews need their own approved budget, not a hidden ask_supervisor route.
+
+Lifecycle/acceptance semantics change, so use a fresh explicit opt-in contract, proposed policy3/research@4 with catalog2 and the existing report format. Version-specific normalization must preserve legacy, policy1/research@2 and policy2/research@3 exact hashes, reserved payloads and terminal meanings. Collaborative mode only initially; DeepSeek-only must not acquire a Codex fallback. The review policy/rubric/caps become part of new goal/task/remote approval hashes. No old goal is upgraded or reopened. The new capability mapping must be explicit; catalog version must not be inferred from policy number.
+
+## Proposed validation budget—unapproved
+
+This is a future validation-only envelope after separately approved implementation, not permission to execute anything now:
+
+- One fresh4-hour parent window; no extension/reset. One independent Sol source-review assignment≤10minutes after local checks; one fresh Sol host fixture session≤10minutes proving the new review mutation path with zero DeepSeek inference. A native session/assignment can contain multiple inference steps; capture available usage and leave unknown accounting unknown.
+- Then exactly one new research validation job≤7200seconds, capped by remaining parent time minus15minutes cleanup. Same public question/source scope and fixed whole-report rubric.20DeepSeek requests total including all retries, drafts, schema repairs and feedback correction;30searches/50downloads;0planner/0questions. No installation or coding pilot in this envelope.
+- At most17exploration requests; early finish remains permitted. Keep three final-call slots. Reach a schema-valid proposal before spending the last available feedback-correction request; if that cannot be done, stop unaccepted. At most one semantic corrective round, with at most two DeepSeek calls after review0 (correction plus one schema repair if capacity remains), always inside20. A schema repair before review0 may leave only one correction call. Unused calls never transfer.
+- At most two independent Sol semantic review assignments≤10minutes each, included inside the original research deadline: review0 and, only after correction, review1. These are newly approved bounded reviews—not the old zero automatic-review allowance and not hidden paid calls. Main explicitly dispatches them; no background Codex loop. Thus validation allows at most four new native review/test contexts total: source1, host1, semantic2. It authorizes zero such contexts today.
+- Reserve every provider/reviewer operation before send. Ambiguous outcomes remain spent. Same IDs through retries/restarts; two terminal collections must match, sources/raw requests retained, and actual quiescence verified. No replacement pilot. Any package-affecting change after freeze invalidates that candidate's promotion evidence and stops the run.
+
+Offline tests must include the actual malformed-draft route and scripted reviewer outcomes. They prove the gate/state machine—not the semantic correctness of a reviewer. The one future live run must demonstrate that real findings reach DeepSeek while correction is still authorized and that the resulting report actually passes the unchanged whole-report rubric. If review0 has no material findings, correction is skipped; a scripted fixture covers correction mechanics but is not called live correction efficacy.
+
+Current failed reports, selections, identities, counters, original deadlines and gates remain unchanged. Current unused8and9model-call ceilings stay closed. No conditional installation authority is revived by this proposal. Implementation and all future validation need explicit approval.
