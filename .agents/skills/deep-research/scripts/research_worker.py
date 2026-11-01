@@ -195,6 +195,72 @@ def synthesis_review(report, offered):
     return result
 
 
+
+def reconstruction_review(report, offered):
+    """Evidence-first final-phase context, not a semantic support decision.
+
+    Unlike the historical conclusion join, show every atomic claim and no old
+    synthesis prose. Touching offers are unselected context references only: a
+    model must explicitly select them through the unchanged report contract.
+    Whole cards may be omitted under pressure, never sliced at a qualifier.
+    """
+    if not isinstance(report,dict) or not isinstance(report.get('claims'),list):return None
+    result={'conclusions':[],'claims':{},'unavailable_claim_ids':[],
+            'omitted_conclusions':0,'omitted_claims':0,'omitted_unavailable_claim_ids':0,
+            'interpretation':'Untrusted atomic claims and exact selected passages, not semantic support. '
+                'adjacent_offers are unselected context, NOT evidence for the claim. '
+                'Inspect their current citation_passages text and explicitly select sufficient offers '
+                'or narrow the claim. Rebuild conclusions from corrected claims; no prior synthesis '
+                'is endorsed. Omitted claims remain gaps, not established facts.'}
+    claim_ids={c['id'] for c in report['claims'] if isinstance(c,dict) and isinstance(c.get('id'),str)}
+    for section in ('comparisons','recommendations','contradictions'):
+        entries=report.get(section,[])
+        if not isinstance(entries,list):continue
+        for entry in entries:
+            refs=entry.get('claim_ids',[]) if isinstance(entry,dict) else []
+            if not isinstance(refs,list):continue
+            for ref in refs:
+                if isinstance(ref,str) and ref not in claim_ids and ref not in result['unavailable_claim_ids']:
+                    candidate={**result,'unavailable_claim_ids':result['unavailable_claim_ids']+[ref]}
+                    if len(json.dumps(candidate).encode())>32700:result['omitted_unavailable_claim_ids']+=1
+                    else:result=candidate
+    for claim in report['claims']:
+        if not isinstance(claim,dict) or not isinstance(claim.get('id'),str):
+            result['omitted_claims']+=1;continue
+        ref=claim['id'];selected=[];unavailable=0
+        entries=claim.get('evidence',[])
+        if not isinstance(entries,list):entries=[None]
+        for evidence in entries:
+            if not isinstance(evidence,dict):unavailable+=1;continue
+            selection={'source_id':evidence.get('source_id'),**evidence['selection']} if isinstance(evidence.get('selection'),dict) else evidence
+            matches=[p for p in offered if all(k in selection and type(p.get(k)) is type(selection[k]) and p.get(k)==selection[k] for k in SELECTOR_FIELDS)]
+            if len(matches)!=1:unavailable+=1;continue
+            p=matches[0];selected.append({**{k:p[k] for k in SELECTOR_FIELDS},'text':p['text']})
+        adjacent=[]
+        for p in selected:
+            for other in offered:
+                if (other.get('source_id')==p['source_id'] and other.get('text_sha256')==p['text_sha256']
+                        and (other.get('end')==p['start'] or other.get('start')==p['end'])):
+                    selector={k:other[k] for k in SELECTOR_FIELDS}
+                    if selector not in adjacent and not any(all(s[k]==selector[k] for k in SELECTOR_FIELDS) for s in selected):
+                        adjacent.append(selector)
+        card={'text':claim.get('text'),'kind':claim.get('kind'),'selected_passages':selected,
+              'unavailable_selections':unavailable,'adjacent_offers':adjacent}
+        candidate={**result,'claims':{**result['claims'],ref:card}}
+        if ref in result['claims'] or len(json.dumps(candidate).encode())>32700:
+            result['omitted_claims']+=1
+        else:result=candidate
+    return result
+
+
+def reconstruction_candidate(report):
+    """Allowlist atomic input fields; no synthesis or model approval shadows."""
+    if not isinstance(report,dict):return None
+    return {'claims':[{k:c[k] for k in ('id','kind','text','evidence') if k in c}
+                      for c in report['claims']],
+            'unanswered':copy.deepcopy(report.get('unanswered',[]))}
+
+
 def selector_presentation(report,offered):
     """Present internal drafts as current offered selectors, never canonical evidence."""
     if not isinstance(report,dict):return None
@@ -346,8 +412,20 @@ class Worker:
             content['citation_catalog_version']=2
             content['support_guidance']=support_guidance(c['phase'])
             if c['phase']!='explore':
-                content['synthesis_review']=synthesis_review(content.get('candidate'),passages)
-                content['finalization']['instruction']='Prefer 5-8 atomic material claims if sufficient, within the existing 10-entry evidence limit. Check atomic claims against selected passages, then every synthesis factual premise against actual cited claim text AND its selected passages. Keep per-alternative features and enabling conditions; narrow the offending sentence or state a conditional proposal and gaps. Do not assert unverified suitability. Return only the existing finish/report shape; no review ledger or extra fields.'
+                # Reconstruct rather than repeatedly editing an anchored synthesis.
+                # History otherwise contains the same old report as candidate and
+                # can reintroduce removed conclusions through a shadow copy.
+                history.clear()
+                if len(json.dumps(content.get('candidate')).encode())>196608:
+                    content['candidate']=None
+                    content['context_bounds']['omissions'].append('Candidate omitted; use retained passages or report explicit gaps')
+                content['synthesis_review']=reconstruction_review(content.get('candidate'),passages)
+                content['candidate']=reconstruction_candidate(content.get('candidate'))
+                content['synthesis_reconstruction']={'version':1,
+                    'removed_draft_fields':['title','complete','summary','comparisons','recommendations','contradictions'],
+                    'history_retained':False,
+                    'authority':'Model-proposed reconstruction only; no support, source or approval flags establish acceptance.'}
+                content['finalization']['instruction']='Rebuild the existing full finish/report shape from the atomic candidate and synthesis_review cards. First correct every atomic claim against its selected passages. Adjacent offers are unselected context, not support: explicitly select them if needed for an antecedent or configuration, otherwise narrow the claim or record a gap. Then compose new comparisons and a useful conditional recommendation from corrected factual premises, keeping each alternative and its settings separate. Preserve supported material coverage and clearly labelled untested design proposals. No old synthesis is supplied or endorsed; no comparative property follows from mere mechanism documentation. Use 5-8 atomic material claims when sufficient, within the unchanged 10-entry evidence limit. Return no ledger or extra fields.'
         extra=''
 
         if job['manifest'].get('collaboration',{}).get('supervisor','none')!='none':
