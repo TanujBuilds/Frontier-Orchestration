@@ -7,6 +7,7 @@ import {createHash} from 'node:crypto';
 import {verifyPackage,renderLaunchAgent} from '../src/harness/package.mjs';
 import {normalizeResearchPolicy,digest} from '../src/harness/contracts.mjs';
 import {verifyRemoteReviewEvidence} from '../src/harness/research-review.mjs';
+import {readResearchAuthority,researchAuthorityPath,ReleaseAuthorityError} from '../src/harness/release-authority.mjs';
 import {isEntry} from '../src/harness/entry.mjs';
 
 const hash=b=>createHash('sha256').update(b).digest('hex');
@@ -63,7 +64,8 @@ function assessment(raw,expected,artifacts){
  list(raw.criteria,32);need(raw.criteria.length>0,'missing_acceptance_criteria');const ids=new Set();for(const c of raw.criteria){object(c,['id','status']);identifier(c.id);need(!ids.has(c.id)&&['passed','failed','pending'].includes(c.status),'invalid_acceptance_criterion');ids.add(c.id);}
  need(raw.status!=='passed'||raw.criteria.every(c=>c.status==='passed'),'conflicting_assessment');return raw.status;
 }
-async function receipt(raw,root,expected,budget){
+async function receipt(raw,root,expected,budget,authority){
+ if(authority)need(raw?.policy?.version===3,'incompatible_authority_policy');
  object(raw,['schema','id','candidate','policy','gates']);need(raw.schema===1,'unsupported_receipt_schema');identifier(raw.id);binding(raw.candidate,expected);policy(raw.policy);list(raw.gates,GATES.length);const seen=new Set(),gates={};
  for(const g of raw.gates){object(g,['name','status','applicability','scope','authority','artifacts']);need(GATES.includes(g.name)&&!seen.has(g.name),'duplicate_or_unknown_gate');seen.add(g.name);need(STATUSES.includes(g.status)&&['current','historical','not_applicable'].includes(g.applicability)&&['offline','fixture','live','installed'].includes(g.scope)&&['independent_native','operator','coordinator','model'].includes(g.authority),'invalid_gate');need((g.status==='not_applicable')===(g.applicability==='not_applicable'),'invalid_applicability');
   list(g.artifacts,32);const paths=new Set(),data=[];for(const ref of g.artifacts){need(!paths.has(ref.path),'duplicate_artifact');paths.add(ref.path);data.push(await readRef(root,ref,budget,true));}
@@ -71,28 +73,39 @@ async function receipt(raw,root,expected,budget){
   if(status==='passed'){
    if(g.artifacts.length===0||!['independent_native','operator'].includes(g.authority)){status='pending';reason='independent_evidence_required';}
    if(g.name==='implementation'&&!['offline','live'].includes(g.scope)){status='pending';reason='fixture_only';}
-   if(g.name==='live_research_quality'){
-    const indices=g.artifacts.flatMap((a,i)=>a.role==='assessment'?[i]:[]);need(indices.length<=1,'duplicate_assessment');
-    if(g.scope!=='live'||g.authority!=='independent_native'||indices.length!==1||!g.artifacts.some(x=>x.role==='review')){status='pending';reason='independent_live_assessment_required';}
-    else {
-     const independent=parseBoundedJson(data[indices[0]]);need(digest(independent.policy)===digest(raw.policy),'assessment_policy_mismatch');
-     status=assessment(independent,expected,g.artifacts);reason='bound_independent_assessment';
-     if(raw.policy.version===3){
-      const ri=g.artifacts.flatMap((a,i)=>a.role==='receipt'?[i]:[]);need(ri.length<=1,'duplicate_review_receipt');
-      if(ri.length!==1){if(status!=='failed'){status='pending';reason='pre_final_review_receipt_required';}}
-      else {
-       const r=parseBoundedJson(data[ri[0]]),q=r.quality;
-       need(r.status==='completed'&&r.mode==='live','live_review_receipt_required');
-       try{verifyRemoteReviewEvidence(r,{checkpoint:{remoteJobId:r.job_id,remoteHash:r.manifest_hash},spec:{researchPolicy:raw.policy}});}catch{throw new ReadinessError('invalid_pre_final_review_binding');}
-       need(q.report_sha256===independent.reportSha256&&independent.sourceSha256s.length===1&&q.source_artifact_sha256===independent.sourceSha256s[0],'stale_pre_final_artifacts');
-       const reportIndex=g.artifacts.findIndex(a=>a.role==='report'),sourceIndex=g.artifacts.findIndex(a=>a.role==='source');need(hash(data[reportIndex])===q.review_binding.reportSha256&&hash(data[sourceIndex])===q.review_binding.sourcesSha256,'stale_accepted_report_or_sources');
-       // This standalone checker has no trusted coordinator database or reviewer rows.
-       if(status!=='failed'){status='pending';reason='authoritative_local_acceptance_required';}
+   if(!['implementation','live_research_quality','active_policy_rollback'].includes(g.name)&&g.scope!=='installed'){status='pending';reason='actual_installation_required';}
+  }
+  if(g.name==='live_research_quality'&&(status==='passed'||authority)){
+   const declared=status,indices=g.artifacts.flatMap((a,i)=>a.role==='assessment'?[i]:[]);need(indices.length<=1,'duplicate_assessment');
+   let assessed=null,qualityReason='independent_live_assessment_required';
+   if(indices.length===1&&(authority||(g.scope==='live'&&g.authority==='independent_native'&&g.artifacts.some(x=>x.role==='review')))){
+    const independent=parseBoundedJson(data[indices[0]]);need(digest(independent.policy)===digest(raw.policy),'assessment_policy_mismatch');
+    assessed=assessment(independent,expected,g.artifacts);qualityReason='bound_independent_assessment';
+    if(raw.policy.version===3){
+     const ri=g.artifacts.flatMap((a,i)=>a.role==='receipt'?[i]:[]);need(ri.length<=1,'duplicate_review_receipt');
+     if(ri.length!==1){if(assessed!=='failed'){assessed='pending';qualityReason='pre_final_review_receipt_required';}}
+     else {
+      const r=parseBoundedJson(data[ri[0]]),q=r.quality;
+      need(r.status==='completed'&&r.mode==='live','live_review_receipt_required');
+      try{verifyRemoteReviewEvidence(r,{checkpoint:{remoteJobId:r.job_id,remoteHash:r.manifest_hash},spec:{researchPolicy:raw.policy}});}catch{throw new ReadinessError('invalid_pre_final_review_binding');}
+      need(q.report_sha256===independent.reportSha256&&independent.sourceSha256s.length===1&&q.source_artifact_sha256===independent.sourceSha256s[0],'stale_pre_final_artifacts');
+      const reportIndex=g.artifacts.findIndex(a=>a.role==='report'),sourceIndex=g.artifacts.findIndex(a=>a.role==='source');need(hash(data[reportIndex])===q.review_binding.reportSha256&&hash(data[sourceIndex])===q.review_binding.sourcesSha256,'stale_accepted_report_or_sources');
+      let proof;
+      if(authority){
+       need(!authority.proof,'duplicate_authority_evidence');
+       proof=await readResearchAuthority({stateRoot:authority.stateRoot,taskId:authority.taskId,receipt:r,policy:raw.policy,reportBytes:data[reportIndex],sourceBytes:data[sourceIndex]});authority.proof=proof;
       }
+      if(assessed!=='failed'&&proof?.status!=='verified'){assessed='pending';qualityReason=proof?.reason??'authoritative_local_acceptance_required';}
      }
     }
    }
-   if(!['implementation','live_research_quality','active_policy_rollback'].includes(g.name)&&g.scope!=='installed'){status='pending';reason='actual_installation_required';}
+   // Failure dominates; explicit authority only removes the local-approval blocker.
+   if(g.status==='failed'||assessed==='failed'){status='failed';reason=assessed==='failed'?'bound_independent_assessment':reason;}
+   else if(declared==='passed'||g.status==='passed'){
+    if(g.applicability!=='current'){status='pending';reason='not_current_applicability';}
+    else if(g.scope!=='live'||g.authority!=='independent_native'){status='pending';reason='independent_live_assessment_required';}
+    else {status=assessed??'pending';reason=qualityReason;}
+   }
   }
   if(g.name==='active_policy_rollback'){status='pending';reason='active_policy2_downgrade_unsupported';}
   gates[g.name]={status,reason,scope:g.scope,authority:g.authority,applicability:g.applicability,artifacts:g.artifacts.map(a=>({sha256:a.sha256,role:a.role}))};
@@ -107,7 +120,10 @@ async function sealed(root,s,expected,budget){
 }
 /** Verify explicit immutable inputs. No environment/private config is read. */
 export async function checkReadiness(options){
- const {candidate,expectedContentHash,expectedManifestSha256,evidenceIndex,receipt:receiptPath}=options;
+ const {candidate,expectedContentHash,expectedManifestSha256,evidenceIndex,receipt:receiptPath,coordinatorStateRoot,coordinatorTaskId}=options;
+ const suppliedRoot=Object.hasOwn(options,'coordinatorStateRoot'),suppliedTask=Object.hasOwn(options,'coordinatorTaskId');need(suppliedRoot===suppliedTask,'authority_selectors_must_be_paired');
+ let authority,authorityRoot;
+ if(suppliedRoot){identifier(coordinatorTaskId);authorityRoot=(await researchAuthorityPath(coordinatorStateRoot)).root;authority={stateRoot:authorityRoot,taskId:coordinatorTaskId,proof:null};}
  sha(expectedContentHash);sha(expectedManifestSha256);const root=await cleanPath(candidate);need((await lstat(root)).isDirectory(),'candidate_not_directory');
  const bytes=await readBounded(path.join(root,'package-manifest.json'),2*MAX_JSON);need(hash(bytes)===expectedManifestSha256,'manifest_pin_mismatch');const m=parseBoundedJson(bytes,2*MAX_JSON);
  need(m.schema===1&&m.layout==='shared-runtime-v1'&&m.sourceDirty===false&&m.nodeMajor===24&&m.sdkVersion==='1.32.2'&&m.dependenciesInstalled===true,'unsupported_candidate');need(Array.isArray(m.skills)&&m.skills.length===SKILLS.length&&SKILLS.every((x,i)=>m.skills[i]===x),'incomplete_skill_inventory');need(m.contentHash===expectedContentHash,'content_pin_mismatch');need(/^[a-f0-9]{40}$/.test(m.sourceCommit),'invalid_source_commit');list(m.files,10000);need(m.files.length>0,'empty_inventory');let total=0;
@@ -116,15 +132,16 @@ export async function checkReadiness(options){
  const sdk=await jsonFile(path.join(root,'runtime/node_modules/@modelcontextprotocol/sdk/package.json'),MAX_JSON);const lock=await jsonFile(path.join(root,'runtime/package-lock.json'),MAX_JSON);need(sdk.version==='1.32.2'&&lock.packages?.['node_modules/@modelcontextprotocol/sdk']?.version==='1.32.2','unsupported_installed_sdk');
  try{await verifyPackage(root);}catch{throw new ReadinessError('package_inventory_failed');}
  const expected={contentHash:expectedContentHash,manifestSha256:expectedManifestSha256,sourceCommit:m.sourceCommit};
- const protectedPaths=[root],budget={bytes:0},receipts=[],receiptHashes=[],ids=new Set();let seal={status:'pending'};
- async function accept(raw,file,bytes){const r=await receipt(raw,path.dirname(file),expected,budget);need(!ids.has(r.id),'duplicate_receipt_id');ids.add(r.id);receipts.push(r);receiptHashes.push(hash(bytes));}
+ const protectedPaths=[root,...(authorityRoot?[authorityRoot]:[])],budget={bytes:0},receipts=[],receiptHashes=[],ids=new Set();let seal={status:'pending'};
+ async function accept(raw,file,bytes){const r=await receipt(raw,path.dirname(file),expected,budget,authority);need(!ids.has(r.id),'duplicate_receipt_id');ids.add(r.id);receipts.push(r);receiptHashes.push(hash(bytes));}
  if(receiptPath){const file=await cleanPath(receiptPath);protectedPaths.push(path.dirname(file));const b=await readBounded(file,MAX_JSON,budget);await accept(parseBoundedJson(b),file,b);}
  if(evidenceIndex){const file=await cleanPath(evidenceIndex),dir=path.dirname(file);protectedPaths.push(dir);const index=await jsonFile(file,MAX_JSON,budget);need(index&&typeof index==='object','invalid_index');need(Object.keys(index).every(k=>['schema','receipts','seal'].includes(k))&&index.schema===1,'unsupported_index');list(index.receipts,32);const paths=new Set();for(const ref of index.receipts){need(!paths.has(ref.path),'duplicate_receipt_path');paths.add(ref.path);const b=await readRef(dir,ref,budget);await accept(parseBoundedJson(b),path.join(dir,ref.path),b);}if(Object.hasOwn(index,'seal'))seal=await sealed(dir,index.seal,expected,budget);}
  need(receipts.every(r=>digest(r.policy)===digest(receipts[0].policy)),'conflicting_receipt_policy');
  const effectivePolicy=receipts[0]?.policy??POLICY;
+ if(authority){need(effectivePolicy.version===3,'incompatible_authority_policy');need(authority.proof,'authority_evidence_required');}
  const gates=Object.fromEntries(GATES.map(k=>[k,{status:'pending',reason:'missing_evidence'}]));const seen=new Set();for(const r of receipts)for(const [k,v] of Object.entries(r.gates)){need(!seen.has(k),'duplicate_or_conflicting_gate');seen.add(k);gates[k]=v;}
  const aggregate=names=>({status:names.some(k=>gates[k].status==='failed')?'failed':names.every(k=>gates[k].status==='passed')?'passed':'pending'});
- const report={schema:1,advisory:true,installationAuthority:false,state:'UNEXECUTED',candidate:expected,policy:effectivePolicy,integrity:{status:'passed',files:m.files.length},canPrepare:true,gates,prePromotion:aggregate(['implementation','live_research_quality']),activation:aggregate(['personal_activation']),postActivation:aggregate(['installed_host_discovery','persistent_research_worker','physical_phone','installed_restart']),handoff:seal,receiptHashes,fullRelease:'INCOMPLETE',personalComponents:'NOT_INSPECTED',notice:'Checksums prove integrity, not authenticity or semantic truth. Declarations require human review. No installation is authorized.'};
+ const report={schema:1,advisory:true,installationAuthority:false,state:'UNEXECUTED',candidate:expected,policy:effectivePolicy,integrity:{status:'passed',files:m.files.length},canPrepare:true,gates,prePromotion:aggregate(['implementation','live_research_quality']),activation:aggregate(['personal_activation']),postActivation:aggregate(['installed_host_discovery','persistent_research_worker','physical_phone','installed_restart']),handoff:seal,receiptHashes,fullRelease:'INCOMPLETE',personalComponents:'NOT_INSPECTED',...(authority?{localAuthority:authority.proof}:{}),notice:'Checksums prove integrity, not authenticity or semantic truth. Declarations require human review. No installation is authorized.'};
  const packageReferences=Object.fromEntries([['onboarding','skills/frontier-harness/references/personal-instructions-template.md'],['workerUnit','runtime/.agents/skills/deep-research/deploy/deep-research.service.template']].map(([name,file])=>{const item=m.files.find(x=>x.path===file);return [name,item?{status:'included',...item}:{status:'pending_missing_from_candidate',path:file}];}));
  contexts.set(report,{protectedPaths,packageReferences});return report;
 }
@@ -159,12 +176,12 @@ export async function prepareBundle({output,report,prepare=true}){
  const inventory=[];for(const [name,value] of Object.entries(files)){await writeFile(path.join(dest,name),value,{flag:'wx',mode:0o600});inventory.push({path:name,bytes:Buffer.byteLength(value),sha256:hash(value)});}
  const staging={schema:1,state:'UNEXECUTED',complete:true,candidate:report.candidate,installationAuthority:false,files:inventory};await writeFile(path.join(dest,'staging-receipt.json'),pretty(staging),{flag:'wx',mode:0o600});return staging;
 }
-const HELP=`Offline release-readiness (Node24). No network, service controls or installation.\nUsage: node scripts/release-readiness.mjs --candidate DIR --expected-content-hash SHA256 --expected-manifest-sha256 SHA256 [--receipt FILE] [--evidence-index FILE] [--output NEW_DIR] [--prepare]\n--prepare requires --output and renders UNEXECUTED proposals only.\nExit 0: advisory pre-promotion evidence sufficient; 3: valid check with pending/failed gates; 2: invalid input or staging failure. Missing live proof never passes. No --install, --apply, --force or gate bypass.\n`;
+const HELP=`Offline release-readiness (Node24). No network, service controls or installation.\nUsage: node scripts/release-readiness.mjs --candidate DIR --expected-content-hash SHA256 --expected-manifest-sha256 SHA256 [--receipt FILE] [--evidence-index FILE] [--coordinator-state-root DIR --coordinator-task-id ID] [--output NEW_DIR] [--prepare]\n--prepare requires --output and renders UNEXECUTED proposals only.\nExit 0: advisory pre-promotion evidence sufficient; 3: valid check with pending/failed gates; 2: invalid input or staging failure. Missing live proof never passes. No --install, --apply, --force or gate bypass.\n`;
 export async function main(argv=process.argv.slice(2)){
  if(argv.includes('--help')){process.stdout.write(HELP);return 0;}
- const names={'--candidate':'candidate','--expected-content-hash':'expectedContentHash','--expected-manifest-sha256':'expectedManifestSha256','--receipt':'receipt','--evidence-index':'evidenceIndex','--output':'output'};const options={};let prepare=false;
+ const names={'--candidate':'candidate','--expected-content-hash':'expectedContentHash','--expected-manifest-sha256':'expectedManifestSha256','--receipt':'receipt','--evidence-index':'evidenceIndex','--output':'output','--coordinator-state-root':'coordinatorStateRoot','--coordinator-task-id':'coordinatorTaskId'};const options={};let prepare=false;
  while(argv.length){const flag=argv.shift();if(flag==='--prepare'){need(!prepare,'duplicate_flag');prepare=true;continue;}need(names[flag]&&!Object.hasOwn(options,names[flag])&&argv.length>0&&!argv[0].startsWith('--'),'invalid_or_duplicate_option');options[names[flag]]=argv.shift();}
  need(!prepare||options.output,'prepare_requires_output');const report=await checkReadiness(options);if(options.output)await prepareBundle({output:options.output,report,prepare});
  process.stdout.write(JSON.stringify(report)+'\n');process.stderr.write(`Offline advisory: integrity passed; pre-promotion ${report.prePromotion.status}; activation ${report.activation.status}; post-activation ${report.postActivation.status}. Full release INCOMPLETE; installation authority NONE.\n`);return report.prePromotion.status==='passed'?0:3;
 }
-if(isEntry(import.meta.url))main().then(code=>{process.exitCode=code;}).catch(error=>{process.stderr.write('Offline readiness rejected: '+(error instanceof ReadinessError?error.code:'local_io_or_validation_failure')+'. No installation action taken.\n');process.exitCode=2;});
+if(isEntry(import.meta.url))main().then(code=>{process.exitCode=code;}).catch(error=>{process.stderr.write('Offline readiness rejected: '+(error instanceof ReadinessError||error instanceof ReleaseAuthorityError?error.code:'local_io_or_validation_failure')+'. No installation action taken.\n');process.exitCode=2;});

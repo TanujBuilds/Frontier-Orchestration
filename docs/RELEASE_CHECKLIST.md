@@ -55,3 +55,47 @@ owner/Linger/idle/restart; CURRENT state/accounting/key-hash comparison; install
 CSV task/checks/review/integration; private route; physical phone PENDING until
 owner test. Include exact evidence hashes, retained failures and remaining budgets/
 deadline. Report native usage UNKNOWN unless the host exposes actual accounting.
+
+### Explicit local acceptance snapshot (policy3)
+
+The source-only offline checker accepts the paired selectors
+`--coordinator-state-root DIR --coordinator-task-id ID` (programmatic options
+`coordinatorStateRoot` and `coordinatorTaskId`). Supply an absolute trusted local
+state directory and one exact research task ID, alongside the existing immutable
+candidate pins and independently assessed evidence. Neither selector is inferred
+from receipts, candidate contents, exports, environment variables or a home path.
+
+The checker opens only `DIR/harness.sqlite3` read-only, verifies schema1 and reads
+one transaction containing the selected task, linked goal and accepted native
+reviewer. Each selected JSON row is bounded to1MiB before decoding; busy waiting
+is limited to1000ms. It does not construct the coordinator/store, initialize or
+migrate state, change permissions, checkpoint WAL, reserve work or spend budget.
+WAL commits remain visible with the writer open. SQLite can coordinate ephemeral
+SHM read locks; this is not a promise that SHM bytes remain untouched.
+
+A terminal accepted task must match its activated goal/version/hash, original
+parent/child deadline, collaborative policy3 and stored environment. The local
+intent, acknowledged ticket, completed reviewer, remote receipt and exact supplied
+report/source bytes must agree. Historical acceptance can be inspected after its
+deadline; inspection never extends that deadline or authorizes new work. Database
+result directories are not followed. A saved checker export is not authority on
+another run: verification reads a fresh explicitly selected snapshot each time.
+
+Missing state or incomplete local approval remains pending. Malformed or
+inconsistent explicit input exits2; known independent semantic failure stays
+failed. Only matching live local acceptance plus every existing independent
+assessment/candidate/artifact check can remove the missing-local-authority blocker.
+Stored fixture state cannot become live evidence by relabeling a receipt. Synthetic
+prospective-live tests demonstrate routing mechanics only. With no selectors,
+policy3 continues to require authoritative local acceptance. Exit0 means sufficient
+advisory pre-promotion evidence,3 means valid pending/failed gates and2 means
+invalid input. Output/preparation cannot overlap trusted state or protected inputs.
+
+Every result remains `advisory:true`, `installationAuthority:false` and full
+release `INCOMPLETE`. Local rows approve exact artifacts; they do not attest the
+executable runtime/package that produced them, authenticate a hostile same-user
+owner, or certify semantic truth. Candidate applicability still needs externally
+pinned package identity and exact independent assessment. Actual host/live
+provenance and installation/workflow/phone gates remain separate. Candidate code
+is data to this trusted source checker. The helper is bundled under runtime/src;
+the source-only checker itself is not shipped by the current packager.
