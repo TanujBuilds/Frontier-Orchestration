@@ -70,7 +70,10 @@ export class ResearchAdapter {
    }
    if(['suspended','stopped'].includes(remote.status))return c.boundary(task.id,{...cp,remotePaused:true,nextPollAt:0},owner);
    if(['completed','partial'].includes(remote.status)){
-    const packet=await this.rpc({command:'export',job:cp.remoteJobId}),collected=await this.collect(packet,path.join(c.store.root,'research-results'));
+    const packet=await this.rpc({command:'export',job:cp.remoteJobId});
+    if(task.spec.researchPolicy?.version===3&&remote.status==='completed'&&(remote.id!==cp.remoteJobId||remote.manifest_hash!==cp.remoteHash||packet.job?.id!==cp.remoteJobId||packet.job?.manifest_hash!==cp.remoteHash||packet.job?.status!=='completed'||packet.job?.manifest?.mode!==cp.manifest?.mode||packet.job?.deadline!==Math.floor(task.deadline/1000)))throw Error('Research export envelope identity/original deadline mismatch');
+    const collected=await this.collect(packet,path.join(c.store.root,'research-results'));
+    if(task.spec.researchPolicy?.version===3&&remote.status==='completed'&&(collected.job_id!==cp.remoteJobId||collected.status!=='completed'))throw Error('Research collection identity mismatch');
     if(!collected.checksums_verified)throw Error('Research collection lacked verified checksums');
     let reviewed=null;
     if(task.spec.researchPolicy?.version===3&&remote.status==='completed'){

@@ -13,7 +13,7 @@ const command=c.store.command.bind(c.store);c.store.command=(key,...args)=>{if(k
 const a=new ResearchAdapter(w,{rpc:async r=>{
  if(r.command==='status')return state.remote;
  if(r.command==='yield')return {};
- if(r.command==='export')return {};
+ if(r.command==='export')return {job:{id:'remote',manifest_hash:state.packet.descriptor.manifestHash,status:'completed',deadline:Math.floor(c.getTask(state.taskId).deadline/1000),manifest:{mode:'fixture'}}};
  if(r.command==='review_reserve'){
   die('afterReservation');let ticket=state.tickets.find(t=>t.key===r.idempotency_key),old=!!ticket;
   if(!ticket){ticket={id:'ticket-0',key:r.idempotency_key,binding:{candidateHash:r.candidateHash,rubricSha256:r.rubricHash}};state.tickets.push(ticket);state.reserveDispatches++;writeFileSync(stateFile,JSON.stringify(state));}
@@ -29,8 +29,8 @@ const a=new ResearchAdapter(w,{rpc:async r=>{
  throw Error('Unexpected '+r.command);
 },collect:async()=>{
  die('beforeCollection');const directory=path.join(root,'collected');mkdirSync(directory,{recursive:true});const task=c.getTask(state.taskId),d=state.packet.descriptor;
- const receipt={deadline:task.deadline/1000,semantic_finalization_intent_at:(task.deadline-1000)/1000,quality:{independent_semantic_review:'passed',accepted_candidate_hash:d.candidateHash,review_binding:d,report_sha256:d.reportSha256,source_artifact_sha256:d.sourcesSha256},semantic_reviews:state.tickets};
- writeFileSync(path.join(directory,'receipt.json'),JSON.stringify(receipt));writeFileSync(path.join(directory,'claims.json'),state.packet.canonical.report);writeFileSync(path.join(directory,'sources.json'),state.packet.canonical.sources);die('afterCollectionBeforeCompletion');return {directory,checksums_verified:true};
+ const receipt={job_id:'remote',manifest_hash:d.manifestHash,status:'completed',mode:'fixture',deadline:Math.floor(task.deadline/1000),semantic_finalization_intent_at:(task.deadline-1000)/1000,quality:{independent_semantic_review:'passed',accepted_candidate_hash:d.candidateHash,review_binding:d,report_sha256:d.reportSha256,source_artifact_sha256:d.sourcesSha256},semantic_reviews:state.tickets};
+ writeFileSync(path.join(directory,'receipt.json'),JSON.stringify(receipt));writeFileSync(path.join(directory,'claims.json'),state.packet.canonical.report);writeFileSync(path.join(directory,'sources.json'),state.packet.canonical.sources);die('afterCollectionBeforeCompletion');return {directory,job_id:'remote',status:'completed',checksums_verified:true};
 }});
 const complete=c.completeTask.bind(c);c.completeTask=(...args)=>{const result=complete(...args);die('afterCompletion');return result;};
 const input={taskId:state.taskId,candidateHash:state.packet.descriptor.candidateHash,rubricHash:state.packet.descriptor.rubricSha256};

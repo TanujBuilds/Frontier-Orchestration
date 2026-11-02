@@ -27,7 +27,7 @@ test('review union is an MCP object schema and alternate controls cannot accept 
 });
 test('proposal checks reject changed report, source and offer bytes',async()=>{
  const {verifyProposal}=await import('../src/harness/research-review.mjs'),{digest}=await import('../src/harness/contracts.mjs');
- const canonical={report:'{}',sources:'{}',offers:'[]'},sha=(await import('node:crypto')).createHash;const h=s=>sha('sha256').update(s).digest('hex');const d={jobId:'remote',manifestHash:'a'.repeat(64),rubricSha256:policy.review.rubricSha256,reportSha256:h('{}'),sourcesSha256:h('{}'),offersSha256:h('[]')};d.candidateHash=digest(d);const task={checkpoint:{remoteJobId:'remote',remoteHash:'a'.repeat(64)},spec:{researchPolicy:policy}};
+ const canonical={report:JSON.stringify({title:'Fixture',complete:true,claims:[],summary:[],comparisons:[],recommendations:[],contradictions:[],unanswered:[]}),sources:'{}',offers:'[]'},sha=(await import('node:crypto')).createHash;const h=s=>sha('sha256').update(s).digest('hex');const d={version:1,jobId:'remote',manifestHash:'a'.repeat(64),rubricSha256:policy.review.rubricSha256,reportSha256:h(canonical.report),sourcesSha256:h('{}'),offersSha256:h('[]'),request:{operationId:'op',requestSha256:'b'.repeat(64),resultSha256:'c'.repeat(64),offersSha256:h('[]')},units:['title']};d.candidateHash=digest(d);const task={checkpoint:{remoteJobId:'remote',remoteHash:'a'.repeat(64)},spec:{researchPolicy:policy}};
  verifyProposal({descriptor:d,canonical},task);for(const key of Object.keys(canonical))assert.throws(()=>verifyProposal({descriptor:d,canonical:{...canonical,[key]:canonical[key]+' '}},task),/checksum/);
 });
 test('lost review RPC reply remains spent and retry recovers the same reservation',async t=>{
