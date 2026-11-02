@@ -13,5 +13,5 @@ if(!runtime){for(const candidate of [path.join(directory,'runtime'),path.resolve
  }
 }
 if(!runtime)throw Error('Shared packaged runtime unavailable; preserve configuration and install a complete version bundle');
-if(!args.includes('--root')&&!args.includes('--help')&&args.length){if(!config.dataDir)throw Error('Provide --root STATE_DIR or configure private local-config.json dataDir');args.push('--root',config.dataDir);}
-const {main}=await import(pathToFileURL(path.join(runtime,'src/harness/cli.mjs')).href);await main(args);
+if(args[0]!=='wait'&&!args.includes('--root')&&!args.includes('--help')&&args.length){if(!config.dataDir)throw Error('Provide --root STATE_DIR or configure private local-config.json dataDir');args.push('--root',config.dataDir);}
+const action=args[0];const {main}=await import(pathToFileURL(path.join(runtime,'src/harness/cli.mjs')).href);try{await main(args);}catch(error){if(action!=='wait')throw error;console.error('Invalid wait input');process.exitCode=2;}
