@@ -1,0 +1,96 @@
+{
+  "schema": 1,
+  "date": "2026-11-02",
+  "status": "offline_and_actual_host_passed_live_blocked_unactivated",
+  "fullRelease": "INCOMPLETE",
+  "base": "20038eac2a377b7f3ae47b4932bf10f016ed8690",
+  "runtimeSource": "b9eb5dd4ce6870035dcb904fe1de7b6d5a75f9e9",
+  "commits": [
+    "2b7130fefb8c1498f2c5885bf62cfda6eea8c88e",
+    "b9eb5dd4ce6870035dcb904fe1de7b6d5a75f9e9"
+  ],
+  "candidate": {
+    "sourceCommit": "b9eb5dd4ce6870035dcb904fe1de7b6d5a75f9e9",
+    "contentHash": "53f0edd5b6202e78920ace7b3426a98881b6aec24f25c2bdcc9cfc4e47a4b606",
+    "manifestSha256": "770d1d859fa3004a8cb4cbde07df84844539160faf668da66182641ccc14c4c8",
+    "files": 3774,
+    "at": "2026-11-02T18:44:25.974303+00:00"
+  },
+  "checks": {
+    "status": "passed",
+    "sourceReview": "SOURCE_REVIEW.md",
+    "finalRecheck": "FINAL_RECHECK.md",
+    "sourcePython": 236,
+    "browser": [
+      1280,
+      390
+    ],
+    "packageFiles": 3774,
+    "frozenWait": 25,
+    "frozenPython": 236,
+    "frozenAuthority": 90,
+    "frozenSdk": 1,
+    "syntheticReadiness": 3,
+    "actualNativeHost": {
+      "seconds": 27.738,
+      "mcpCalls": 6,
+      "eventsWait": 0,
+      "apiCalls": 7,
+      "coordinatorInference": 0
+    },
+    "candidate": {
+      "sourceCommit": "b9eb5dd4ce6870035dcb904fe1de7b6d5a75f9e9",
+      "contentHash": "53f0edd5b6202e78920ace7b3426a98881b6aec24f25c2bdcc9cfc4e47a4b606",
+      "manifestSha256": "770d1d859fa3004a8cb4cbde07df84844539160faf668da66182641ccc14c4c8",
+      "files": 3774,
+      "at": "2026-11-02T18:44:25.974303+00:00"
+    }
+  },
+  "phaseStates": {
+    "A": "passed",
+    "B": "passed",
+    "C": "blocked_unactivated",
+    "D": "blocked_not_entered",
+    "E": "complete"
+  },
+  "live": {
+    "status": "blocked_unactivated",
+    "reason": "Sparks offline; owner will restore availability after returning home. No pause or schedule requested.",
+    "connectivity": "C/results/CONNECTIVITY_DIAGNOSTIC.json",
+    "proposal": "LIVE_PROPOSAL.json",
+    "goalHash": "81a7174145281ec4e5006bd579015d4a7af33ea20bfb01174fae42b5439d14c1",
+    "taskHash": "44aaba4db1e9d4985cedec0be35cf72ee35079a356bc9776596ce856784fb92b",
+    "operationalModelCeiling": 18,
+    "closedUnusedOriginalSlots": 2,
+    "researchJobs": 0,
+    "reservations": 0,
+    "DeepSeekCalls": 0,
+    "searches": 0,
+    "downloads": 0,
+    "remoteStaging": false,
+    "semanticReviewContexts": 0,
+    "liveAllowanceConsumed": false
+  },
+  "installation": false,
+  "nativeHostUsage": [
+    {
+      "input_tokens": 226800,
+      "cached_input_tokens": 205440,
+      "cache_write_input_tokens": 0,
+      "output_tokens": 761,
+      "reasoning_output_tokens": 21
+    }
+  ],
+  "billing": "unknown",
+  "historicalFilesPreserved": 29071,
+  "historicalCandidateFilesPreserved": 3772,
+  "sourceReviewFindingsResolved": 2,
+  "finalRecheckMaterialFindings": 0,
+  "portableEvidenceExcludes": [
+    "credentials",
+    "private configuration",
+    "connection files",
+    "state databases"
+  ],
+  "remaining": "Restore Spark availability; recheck current ownership/runtime/time envelope before the sole approved unactivated live pilot. Original parent deadline must not reset."
+}
