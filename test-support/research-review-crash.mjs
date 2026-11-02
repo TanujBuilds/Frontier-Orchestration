@@ -1,9 +1,9 @@
 // Disposable process-death driver. Every boundary uses actual SIGKILL and SQLite.
 import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
 import path from 'node:path';
-import {Coordinator} from '../../src/harness/coordinator.mjs';
-import {Worker} from '../../src/harness/worker.mjs';
-import {ResearchAdapter} from '../../src/harness/research.mjs';
+import {Coordinator} from '../src/harness/coordinator.mjs';
+import {Worker} from '../src/harness/worker.mjs';
+import {ResearchAdapter} from '../src/harness/research.mjs';
 const [root,point,action]=process.argv.slice(2),stateFile=path.join(root,'remote.json'),state=JSON.parse(readFileSync(stateFile)),c=new Coordinator({root}),owner='child-'+process.pid;
 c.acquireWorker(owner);
 const w=new Worker({c,owner,config:{research:{pollMs:0}}});let armed=false;

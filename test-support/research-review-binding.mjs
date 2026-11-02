@@ -4,10 +4,10 @@ import {createHash} from 'node:crypto';
 import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {Coordinator} from '../../src/harness/coordinator.mjs';
-import {Worker} from '../../src/harness/worker.mjs';
-import {ResearchAdapter} from '../../src/harness/research.mjs';
-import {digest} from '../../src/harness/contracts.mjs';
+import {Coordinator} from '../src/harness/coordinator.mjs';
+import {Worker} from '../src/harness/worker.mjs';
+import {ResearchAdapter} from '../src/harness/research.mjs';
+import {digest} from '../src/harness/contracts.mjs';
 const sha=s=>createHash('sha256').update(s).digest('hex');
 export const policy={version:3,finish:'selectors_only',discovery:'search_required',review:{version:1,role:'independent_operator',maxRounds:2,maxRevisions:1,maxCorrectionModelCalls:2,rubricSha256:'a'.repeat(64)}};
 export async function fixture(t,{root,now}={}){

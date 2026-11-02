@@ -8,7 +8,7 @@ import {Coordinator} from '../src/harness/coordinator.mjs';
 import {Worker} from '../src/harness/worker.mjs';
 import {ResearchAdapter} from '../src/harness/research.mjs';
 import {digest} from '../src/harness/contracts.mjs';
-import {fixture,policy} from './fixtures/research-review-binding.mjs';
+import {fixture,policy} from '../test-support/research-review-binding.mjs';
 test('valid_local_acceptance_still_completes through actual adapter collection',async t=>{
  const f=await fixture(t),before=f.c.getTask(f.task.id);await f.accept();await f.collect();const after=f.c.getTask(f.task.id);assert.equal(after.status,'accepted');assert.equal(after.deadline,before.deadline);assert.equal(after.reviews,1);assert.deepEqual(after.spent,before.spent);
 });
