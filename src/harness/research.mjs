@@ -56,8 +56,8 @@ export class ResearchAdapter {
    const observe=async()=>{
     const remote=await this.rpc({command:'status',job:cp.remoteJobId});
     if((remote.manifest_hash&&remote.manifest_hash!==cp.remoteHash)||(pausedCursor&&(remote.id!==cp.remoteJobId||remote.manifest_hash!==cp.remoteHash)))throw Error('Research manifest identity mismatch');
-    if(remote.execution?.status==='uncertain')throw Error('Remote model request outcome is uncertain');
     c.store.tx(()=>{const current=c.owned(task.id,owner);for(const [kind,n] of Object.entries(remote.counters??{})){if(n<(current.remoteSpent?.[kind]??0))throw Error('Remote counters decreased');}current.remoteSpent=remote.counters??{};c.store.put('task',current);});
+    if(remote.execution?.status==='uncertain')throw Error('Remote model request outcome is uncertain');
     return remote;
    };
    let remote=await observe();

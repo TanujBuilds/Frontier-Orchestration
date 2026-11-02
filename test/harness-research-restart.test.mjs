@@ -141,3 +141,10 @@ test('paused identity verification survives cursor clearing before a late contro
  f.a.rpc=async request=>{if(request.command==='status'&&first){first=false;f.c.control({taskId:f.task.id,action:'pause'},'pause');}if(request.command==='yield'){f.remote.status='suspended';f.remote.id='wrong-job';return {};}return rpc(request);};
  await f.a.step(f.c.getTask(f.task.id),'owner');assert.equal(f.c.getTask(f.task.id).status,'uncertain');
 });
+
+test('uncertain execution retains newly observed spending before failing closed',async t=>{
+ const f=await fixture(t);await f.accept();const before=f.c.getTask(f.task.id);f.remote.status='suspended';f.remote.quiescent=false;f.remote.execution={status:'uncertain'};f.remote.counters.model=3;
+ f.c.store.tx(()=>{const task=f.c.store.get('task',f.task.id);task.checkpoint.remotePaused=true;f.c.store.put('task',task);});
+ f.c.claimNext('owner');await f.a.step(f.c.getTask(f.task.id),'owner');const after=f.c.getTask(f.task.id);
+ assert.equal(after.status,'uncertain');assert.equal(after.remoteSpent.model,3);assert.equal(after.spent.model,3);assert.equal(after.deadline,before.deadline);assert.deepEqual(after.researchReviewAcceptance,before.researchReviewAcceptance);assert.equal(f.calls.some(x=>x.command==='resume'),false);
+});

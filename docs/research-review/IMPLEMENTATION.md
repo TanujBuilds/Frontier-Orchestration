@@ -48,6 +48,8 @@ The additional 24-case repair matrix is in `LOCAL_ACCEPTANCE_REGRESSION_COVERAGE
 
 A current, bound failed independent assessment stays failed in both the quality gate and pre-promotion result, including when policy3 lacks a receipt or trusted local approval. Receipt integrity checks still apply when evidence is supplied. Otherwise passed/pending policy3 evidence remains pending without authoritative local acceptance. Policy2 behavior is unchanged. These fixtures prove mechanics, not live semantic quality or installation readiness.
 
+Verified monotonic remote counters are persisted even when the same observation reports uncertain execution; rejecting ambiguous work must not erase newly observed spending. No resume or acceptance is permitted by that accounting update.
+
 ## Source review resolution
 
 The single independent source review found three additional binding gaps. Proposal descriptors now require the exact supported version1 fields, bounded hash/request references, matching offered-catalog lineage and a unique exact unit list derived from the canonical report's claims and section entries. The report bytes are parsed to enumerate units, never reserialized for acceptance. Reserve acknowledgments are a closed four-field wire object; extra source bodies and coordinator-owned fields cannot enter a local ticket. Completed status/export/collection and receipt envelopes must match the local job/manifest/mode and original deadline; the expected Python deadline is `floor(local milliseconds / 1000)`, matching the reserved manifest's `not_after`. Receipt status must be completed, and finalization must precede that original deadline. These checks preserve the approved report format and semantic rubric.
