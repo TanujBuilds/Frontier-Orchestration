@@ -79,7 +79,7 @@ async function receipt(raw,root,expected,budget){
      status=assessment(independent,expected,g.artifacts);reason='bound_independent_assessment';
      if(raw.policy.version===3){
       const ri=g.artifacts.flatMap((a,i)=>a.role==='receipt'?[i]:[]);need(ri.length<=1,'duplicate_review_receipt');
-      if(ri.length!==1){status='pending';reason='pre_final_review_receipt_required';}
+      if(ri.length!==1){if(status!=='failed'){status='pending';reason='pre_final_review_receipt_required';}}
       else {
        const r=parseBoundedJson(data[ri[0]]),q=r.quality;
        need(r.status==='completed'&&r.mode==='live','live_review_receipt_required');
@@ -87,7 +87,7 @@ async function receipt(raw,root,expected,budget){
        need(q.report_sha256===independent.reportSha256&&independent.sourceSha256s.length===1&&q.source_artifact_sha256===independent.sourceSha256s[0],'stale_pre_final_artifacts');
        const reportIndex=g.artifacts.findIndex(a=>a.role==='report'),sourceIndex=g.artifacts.findIndex(a=>a.role==='source');need(hash(data[reportIndex])===q.review_binding.reportSha256&&hash(data[sourceIndex])===q.review_binding.sourcesSha256,'stale_accepted_report_or_sources');
        // This standalone checker has no trusted coordinator database or reviewer rows.
-       status='pending';reason='authoritative_local_acceptance_required';
+       if(status!=='failed'){status='pending';reason='authoritative_local_acceptance_required';}
       }
      }
     }

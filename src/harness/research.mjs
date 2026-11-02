@@ -49,10 +49,32 @@ export class ResearchAdapter {
    }
    if(task.stopRequested||task.pauseRequested||task.yieldRequested){
     await this.rpc({command:task.stopRequested?'stop':'yield',job:cp.remoteJobId});
-   }else if(cp.remotePaused){await this.rpc({command:'resume',job:cp.remoteJobId});cp.remotePaused=false;}
-   const remote=await this.rpc({command:'status',job:cp.remoteJobId});
-   if(remote.manifest_hash&&remote.manifest_hash!==cp.remoteHash)throw Error('Research manifest identity mismatch');
-   c.store.tx(()=>{const current=c.owned(task.id,owner);for(const [kind,n] of Object.entries(remote.counters??{})){if(n<(current.remoteSpent?.[kind]??0))throw Error('Remote counters decreased');}current.remoteSpent=remote.counters??{};c.store.put('task',current);});
+   }
+   const observe=async()=>{
+    const remote=await this.rpc({command:'status',job:cp.remoteJobId});
+    if((remote.manifest_hash&&remote.manifest_hash!==cp.remoteHash)||(cp.remotePaused&&(remote.id!==cp.remoteJobId||remote.manifest_hash!==cp.remoteHash)))throw Error('Research manifest identity mismatch');
+    if(remote.execution?.status==='uncertain')throw Error('Remote model request outcome is uncertain');
+    c.store.tx(()=>{const current=c.owned(task.id,owner);for(const [kind,n] of Object.entries(remote.counters??{})){if(n<(current.remoteSpent?.[kind]??0))throw Error('Remote counters decreased');}current.remoteSpent=remote.counters??{};c.store.put('task',current);});
+    return remote;
+   };
+   let remote=await observe();
+   // A saved pause cursor records past contact, not the backend's current state.
+   // Terminal work may have finished while this coordinator was unavailable.
+   if(cp.remotePaused&&remote.quiescent&&!task.stopRequested&&!task.pauseRequested&&!task.yieldRequested){
+    if(['suspended','stopped','blocked','failed'].includes(remote.status)){
+     c.liveTask(task);
+     try{await this.rpc({command:'resume',job:cp.remoteJobId});}
+     catch(error){
+      remote=await observe();
+      if(!remote.quiescent||!['completed','partial'].includes(remote.status))throw error;
+     }
+     if(!['completed','partial'].includes(remote.status))remote=await observe();
+    }
+    if(remote.quiescent){
+     cp.remotePaused=false;
+     c.store.tx(()=>{const current=c.owned(task.id,owner);current.checkpoint={...current.checkpoint,remotePaused:false};c.store.put('task',current);});
+    }
+   }
    if(!remote.quiescent){
     if(remote.execution?.status==='uncertain'){c.markUncertain(task.id,'Remote model request outcome is uncertain',owner);return c.getTask(task.id);}
     return c.boundary(task.id,{...cp,nextPollAt:c.now()+(cfg.pollMs??1000)},owner,{quiescent:false});

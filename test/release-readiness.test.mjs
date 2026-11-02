@@ -192,3 +192,21 @@ test('policy3 requires pre-final review receipt and fixture evidence never grant
  worker.quality.source_artifact_sha256='c'.repeat(64);Object.assign(gate.artifacts.at(-1),await f.artifact('worker-receipt.json',worker,'receipt'));await f.save();await assert.rejects(checkReadiness(f.opts));worker.quality.source_artifact_sha256=sourceRef.sha256;Object.assign(gate.artifacts.at(-1),await f.artifact('worker-receipt.json',worker,'receipt'));
  gate.scope='fixture';await f.save();assert.equal((await checkReadiness(f.opts)).gates.live_research_quality.status,'pending');gate.scope='live';worker.semantic_finalization_intent_at=101;Object.assign(gate.artifacts.at(-1),await f.artifact('worker-receipt.json',worker,'receipt'));await f.save();await assert.rejects(checkReadiness(f.opts));
 });
+
+for(const version of [2,3])for(const status of ['passed','pending','failed'])for(const withReceipt of [false,true])test(`policy${version} bound ${status} assessment stays visible with receipt=${withReceipt}`,async t=>{
+ const f=await fixture(t),{checkReadiness}=await api();await addQuality(f);
+ const selected=version===2?policy:{version:3,finish:'selectors_only',discovery:'search_required',review:{version:1,role:'independent_operator',maxRounds:2,maxRevisions:1,maxCorrectionModelCalls:2,rubricSha256:'a'.repeat(64)}};
+ f.receipt.policy=selected;const gate=f.receipt.gates[1],assessmentRef=gate.artifacts.find(x=>x.role==='assessment'),a=JSON.parse(await fs.readFile(path.join(f.evidence,assessmentRef.path)));
+ const report={title:'Fixture report',complete:true,claims:[],summary:[],comparisons:[],recommendations:[],contradictions:[],unanswered:[]};
+ const reportRef=await f.artifact('claims.json',canonical(report),'report'),sourceRef=await f.artifact('sources.json',canonical({text:'Exact fixture source'}),'source');
+ gate.artifacts=gate.artifacts.map(x=>x.role==='report'?reportRef:x.role==='source'?sourceRef:x);
+ a.policy=selected;a.status=status;a.criteria[0].status=status;a.reportSha256=reportRef.sha256;a.sourceSha256s=[sourceRef.sha256];Object.assign(assessmentRef,await f.artifact('assessment.json',a,'assessment'));
+ if(withReceipt){
+  const d={version:1,jobId:'fixture-job',manifestHash:'b'.repeat(64),rubricSha256:'a'.repeat(64),reportSha256:reportRef.sha256,sourcesSha256:sourceRef.sha256,offersSha256:'d'.repeat(64),request:{operationId:'fixture:0:model',requestSha256:'e'.repeat(64),resultSha256:'f'.repeat(64),offersSha256:'d'.repeat(64)},units:['title']};d.candidateHash=digest(d);
+  const worker={job_id:d.jobId,manifest_hash:d.manifestHash,status:'completed',mode:'live',deadline:100,semantic_finalization_intent_at:90,quality:{independent_semantic_review:'passed',accepted_candidate_hash:d.candidateHash,review_binding:d,report_sha256:reportRef.sha256,source_artifact_sha256:sourceRef.sha256},semantic_reviews:[{id:'ticket',binding:{candidateHash:d.candidateHash,rubricSha256:d.rubricSha256},submission:{ticketId:'ticket',candidateHash:d.candidateHash,rubricSha256:d.rubricSha256,decision:'accept',findings:[],coverage:d.units}}]};
+  gate.artifacts.push(await f.artifact('worker-receipt.json',worker,'receipt'));
+ }
+ await f.save();const result=await checkReadiness(f.opts),want=version===3&&status!=='failed'?'pending':status;
+ assert.equal(result.gates.live_research_quality.status,want);assert.equal(result.prePromotion.status,want);assert.equal(result.installationAuthority,false);
+ if(status==='failed')assert.equal(result.gates.live_research_quality.reason,'bound_independent_assessment');
+});
