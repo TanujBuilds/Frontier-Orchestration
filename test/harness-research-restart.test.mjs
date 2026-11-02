@@ -90,7 +90,7 @@ test('paused cursor does not authorize resume after the original deadline',async
  let now=Date.now();const f=await fixture(t,{now:()=>now});await f.accept();f.remote.status='suspended';
  f.c.store.tx(()=>{const task=f.c.store.get('task',f.task.id);task.checkpoint.remotePaused=true;f.c.store.put('task',task);});
  f.c.claimNext('owner');const deadline=f.c.getTask(f.task.id).deadline;now=deadline;
- await f.a.step(f.c.getTask(f.task.id),'owner');assert.equal(f.calls.some(x=>x.command==='resume'),false);assert.notEqual(f.c.getTask(f.task.id).status,'accepted');assert.equal(f.c.getTask(f.task.id).deadline,deadline);
+ await f.a.step(f.c.getTask(f.task.id),'owner');assert.equal(f.calls.some(x=>x.command==='resume'),false);assert.equal(f.c.getTask(f.task.id).status,'partial');assert.equal(f.c.getTask(f.task.id).deadline,deadline);
 });
 
 test('a terminal status observed after a failed resume cannot override uncertain execution',async t=>{
@@ -98,4 +98,46 @@ test('a terminal status observed after a failed resume cannot override uncertain
  f.c.store.tx(()=>{const task=f.c.store.get('task',f.task.id);task.checkpoint.remotePaused=true;f.c.store.put('task',task);});
  const rpc=f.a.rpc;f.a.rpc=async request=>{if(request.command==='resume'){f.remote.status='completed';f.remote.execution={status:'uncertain'};throw Error('Resume reply lost');}return rpc(request);};
  f.c.claimNext('owner');await f.a.step(f.c.getTask(f.task.id),'owner');assert.equal(f.c.getTask(f.task.id).status,'uncertain');
+});
+
+for(const control of ['pause','stop','yield'])test(`${control} arriving during status observation takes effect before resume`,async t=>{
+ const f=await fixture(t);await f.accept();f.remote.status='suspended';
+ f.c.store.tx(()=>{const task=f.c.store.get('task',f.task.id);task.checkpoint.remotePaused=true;f.c.store.put('task',task);});
+ f.c.claimNext('owner');const before=f.c.getTask(f.task.id),rpc=f.a.rpc,commands=[];let first=true;
+ f.a.rpc=async request=>{
+  commands.push(request.command);
+  if(request.command==='status'&&first){first=false;if(control==='yield')f.c.submitTask({goalId:f.g.id,submissionId:'blocking',kind:'consult',objective:'Fixture priority yield only',acceptance:['Never dispatch'],priority:'blocking'},'blocking');else f.c.control({taskId:f.task.id,action:control},control);}
+  if(request.command==='resume'){f.remote.status='queued';return {};}
+  return rpc(request);
+ };
+ await f.a.step(before,'owner');const after=f.c.getTask(f.task.id);
+ assert.equal(after.status,{pause:'paused',stop:'stopped',yield:'suspended'}[control],after.reason);assert.equal(after.owner,null);assert.equal(commands.includes('resume'),false);assert.equal(f.remote.status,'suspended');assert.equal(after.checkpoint.remotePaused,true);
+ assert.deepEqual(after.spent,before.spent);assert.equal(after.deadline,before.deadline);assert.deepEqual(after.researchReviewAcceptance,before.researchReviewAcceptance);
+ if(control!=='yield'){f.c.control({taskId:f.task.id,action:'resume'},'manual-resume');assert.equal(f.c.getTask(f.task.id).status,'queued');}
+});
+
+for(const stage of ['queued observation','resume reply'])for(const control of ['pause','stop','yield'])test(`${control} during ${stage} durably suspends remote work before releasing ownership`,async t=>{
+ const f=await fixture(t);await f.accept();f.remote.status=stage==='queued observation'?'queued':'suspended';
+ f.c.store.tx(()=>{const task=f.c.store.get('task',f.task.id);task.checkpoint.remotePaused=true;f.c.store.put('task',task);});
+ f.c.claimNext('owner');const before=f.c.getTask(f.task.id),rpc=f.a.rpc,commands=[];let injected=false;
+ const inject=()=>{injected=true;if(control==='yield')f.c.submitTask({goalId:f.g.id,submissionId:'blocking',kind:'consult',objective:'Fixture priority yield only',acceptance:['Never dispatch'],priority:'blocking'},'blocking');else f.c.control({taskId:f.task.id,action:control},control);};
+ f.a.rpc=async request=>{
+  commands.push(request.command);
+  if(request.command==='status'&&!injected&&stage==='queued observation')inject();
+  if(request.command==='resume'){f.remote.status='queued';inject();return {};}
+  if(request.command==='yield'||request.command==='stop'){f.remote.status=request.command==='stop'?'stopped':'suspended';return {};}
+  return rpc(request);
+ };
+ await f.a.step(before,'owner');const after=f.c.getTask(f.task.id);
+ assert.equal(after.status,{pause:'paused',stop:'stopped',yield:'suspended'}[control],after.reason);assert.equal(after.owner,null);
+ assert.equal(f.remote.status,control==='stop'?'stopped':'suspended');assert.equal(after.checkpoint.remotePaused,true);assert.equal(commands.includes(control==='stop'?'stop':'yield'),true);
+ assert.deepEqual(after.spent,before.spent);assert.equal(after.deadline,before.deadline);assert.deepEqual(after.researchReviewAcceptance,before.researchReviewAcceptance);
+});
+
+test('paused identity verification survives cursor clearing before a late control response',async t=>{
+ const f=await fixture(t);await f.accept();f.remote.status='queued';
+ f.c.store.tx(()=>{const task=f.c.store.get('task',f.task.id);task.checkpoint.remotePaused=true;f.c.store.put('task',task);});
+ f.c.claimNext('owner');const rpc=f.a.rpc;let first=true;
+ f.a.rpc=async request=>{if(request.command==='status'&&first){first=false;f.c.control({taskId:f.task.id,action:'pause'},'pause');}if(request.command==='yield'){f.remote.status='suspended';f.remote.id='wrong-job';return {};}return rpc(request);};
+ await f.a.step(f.c.getTask(f.task.id),'owner');assert.equal(f.c.getTask(f.task.id).status,'uncertain');
 });

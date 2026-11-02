@@ -47,12 +47,15 @@ export class ResearchAdapter {
    if(task.answers.length>(cp.answeredCount??0)){
     const answer=task.answers.at(-1);await this.rpc({command:'answer',job:cp.remoteJobId,answer:answer.text,responder:answer.responder,question_id:cp.remoteQuestionId});cp.answeredCount=task.answers.length;
    }
+   let controlSent=null;
    if(task.stopRequested||task.pauseRequested||task.yieldRequested){
-    await this.rpc({command:task.stopRequested?'stop':'yield',job:cp.remoteJobId});
+    controlSent=task.stopRequested?'stop':'yield';
+    await this.rpc({command:controlSent,job:cp.remoteJobId});
    }
+   const pausedCursor=cp.remotePaused;
    const observe=async()=>{
     const remote=await this.rpc({command:'status',job:cp.remoteJobId});
-    if((remote.manifest_hash&&remote.manifest_hash!==cp.remoteHash)||(cp.remotePaused&&(remote.id!==cp.remoteJobId||remote.manifest_hash!==cp.remoteHash)))throw Error('Research manifest identity mismatch');
+    if((remote.manifest_hash&&remote.manifest_hash!==cp.remoteHash)||(pausedCursor&&(remote.id!==cp.remoteJobId||remote.manifest_hash!==cp.remoteHash)))throw Error('Research manifest identity mismatch');
     if(remote.execution?.status==='uncertain')throw Error('Remote model request outcome is uncertain');
     c.store.tx(()=>{const current=c.owned(task.id,owner);for(const [kind,n] of Object.entries(remote.counters??{})){if(n<(current.remoteSpent?.[kind]??0))throw Error('Remote counters decreased');}current.remoteSpent=remote.counters??{};c.store.put('task',current);});
     return remote;
@@ -62,7 +65,11 @@ export class ResearchAdapter {
    // Terminal work may have finished while this coordinator was unavailable.
    if(cp.remotePaused&&remote.quiescent&&!task.stopRequested&&!task.pauseRequested&&!task.yieldRequested){
     if(['suspended','stopped','blocked','failed'].includes(remote.status)){
-     c.liveTask(task);
+     // Controls/deadlines may have changed during the status RPC. Apply the
+     // current quiescent boundary before authorizing any backend transition.
+     const boundary=c.boundary(task.id,cp,owner);
+     if(boundary.status!=='running')return boundary;
+     c.liveTask(boundary);
      try{await this.rpc({command:'resume',job:cp.remoteJobId});}
      catch(error){
       remote=await observe();
@@ -74,6 +81,13 @@ export class ResearchAdapter {
      cp.remotePaused=false;
      c.store.tx(()=>{const current=c.owned(task.id,owner);current.checkpoint={...current.checkpoint,remotePaused:false};c.store.put('task',current);});
     }
+   }
+   // A control can also arrive while resume/status is in flight. Queued work
+   // is runnable despite quiescence: suspend it remotely before releasing us.
+   const current=c.owned(task.id,owner),goal=c.store.get('goal',current.goalId);
+   const control=current.stopRequested||goal.status==='stopped'?'stop':current.pauseRequested||current.yieldRequested||goal.status==='paused'?'yield':null;
+   if(control&&control!==controlSent&&['queued','running'].includes(remote.status)){
+    await this.rpc({command:control,job:cp.remoteJobId});remote=await observe();
    }
    if(!remote.quiescent){
     if(remote.execution?.status==='uncertain'){c.markUncertain(task.id,'Remote model request outcome is uncertain',owner);return c.getTask(task.id);}
