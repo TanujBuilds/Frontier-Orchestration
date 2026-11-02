@@ -6,7 +6,7 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {verifyPackage,renderLaunchAgent} from '../src/harness/package.mjs';
 import {normalizeResearchPolicy,digest} from '../src/harness/contracts.mjs';
-import {verifyReviewedReceipt} from '../src/harness/research-review.mjs';
+import {verifyRemoteReviewEvidence} from '../src/harness/research-review.mjs';
 import {isEntry} from '../src/harness/entry.mjs';
 
 const hash=b=>createHash('sha256').update(b).digest('hex');
@@ -83,9 +83,11 @@ async function receipt(raw,root,expected,budget){
       else {
        const r=parseBoundedJson(data[ri[0]]),q=r.quality;
        need(r.status==='completed'&&r.mode==='live','live_review_receipt_required');
-       try{verifyReviewedReceipt(r,{checkpoint:{remoteJobId:r.job_id,remoteHash:r.manifest_hash},spec:{researchPolicy:raw.policy}});}catch{throw new ReadinessError('invalid_pre_final_review_binding');}
+       try{verifyRemoteReviewEvidence(r,{checkpoint:{remoteJobId:r.job_id,remoteHash:r.manifest_hash},spec:{researchPolicy:raw.policy}});}catch{throw new ReadinessError('invalid_pre_final_review_binding');}
        need(q.report_sha256===independent.reportSha256&&independent.sourceSha256s.length===1&&q.source_artifact_sha256===independent.sourceSha256s[0],'stale_pre_final_artifacts');
        const reportIndex=g.artifacts.findIndex(a=>a.role==='report'),sourceIndex=g.artifacts.findIndex(a=>a.role==='source');need(hash(data[reportIndex])===q.review_binding.reportSha256&&hash(data[sourceIndex])===q.review_binding.sourcesSha256,'stale_accepted_report_or_sources');
+       // This standalone checker has no trusted coordinator database or reviewer rows.
+       status='pending';reason='authoritative_local_acceptance_required';
       }
      }
     }

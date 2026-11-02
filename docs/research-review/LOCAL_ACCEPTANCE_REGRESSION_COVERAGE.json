@@ -1,0 +1,102 @@
+{
+  "version": 1,
+  "scope": "offline local acceptance repair",
+  "cases": [
+    {
+      "id": "R01",
+      "coverage": "parent baseline/helper-red.log; supplied REPRO_RECEIPT_BINDING.mjs"
+    },
+    {
+      "id": "R02",
+      "coverage": "harness-research-review-binding: returned_candidate_differs_from_local_acceptance"
+    },
+    {
+      "id": "R03",
+      "coverage": "harness-research-review-binding: valid_local_acceptance_still_completes"
+    },
+    {
+      "id": "R04",
+      "coverage": "harness-research-review-binding: fabricated_remote_ticket_without_local_acceptance"
+    },
+    {
+      "id": "R05",
+      "coverage": "harness-research-review-binding: local authority pending/revise/reject"
+    },
+    {
+      "id": "R06",
+      "coverage": "harness-research-review-binding: local authority identity and reviewer matrix"
+    },
+    {
+      "id": "R07",
+      "coverage": "harness-research-review-binding: full accepted descriptor matrix"
+    },
+    {
+      "id": "R08",
+      "coverage": "harness-research-review-binding: accepted actual bytes matrix"
+    },
+    {
+      "id": "R09",
+      "coverage": "harness-research-review-binding: coverage/findings and returned ticket matrix"
+    },
+    {
+      "id": "R10",
+      "coverage": "harness-research-review-binding: reserve acknowledgment matrix"
+    },
+    {
+      "id": "R11",
+      "coverage": "harness-research-review-binding: submit acknowledgment matrix"
+    },
+    {
+      "id": "R12",
+      "coverage": "harness-research-review: public review mutation same-job correction"
+    },
+    {
+      "id": "R13",
+      "coverage": "harness-research-review-binding: same-key replay conflicts"
+    },
+    {
+      "id": "R14",
+      "coverage": "harness-research-review-crash: beforeReservation/beforeSubmitIntent/afterSubmitIntent"
+    },
+    {
+      "id": "R15",
+      "coverage": "harness-research-review-binding: pending submit intent lost reply; crash remoteSaved"
+    },
+    {
+      "id": "R16",
+      "coverage": "harness-research-review-crash: afterAckBeforeCommit"
+    },
+    {
+      "id": "R17",
+      "coverage": "harness-research-review-crash: afterLocalCommit/beforeCollection/afterCollectionBeforeCompletion/afterCompletion"
+    },
+    {
+      "id": "R18",
+      "coverage": "harness-research-review-binding: paused/stopped/expired/uncertain boundaries"
+    },
+    {
+      "id": "R19",
+      "coverage": "harness-research-review-binding: missing authority; no migration supported"
+    },
+    {
+      "id": "R20",
+      "coverage": "full existing Node/Python suites plus policy/mode fixtures"
+    },
+    {
+      "id": "R21",
+      "coverage": "harness-research-review-binding: coordinator forged binding and atomic partial"
+    },
+    {
+      "id": "R22",
+      "coverage": "harness-research-review-package: CLI/SDK positive correction/accepted commit restart/forged collection/terminal replay"
+    },
+    {
+      "id": "R23",
+      "coverage": "harness-research-review-binding: 32KiB; package inventory and parent preservation"
+    },
+    {
+      "id": "R24",
+      "coverage": "parent fresh Node/Python/offline observer logs"
+    }
+  ]
+}

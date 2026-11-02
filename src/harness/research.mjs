@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {createHash} from 'node:crypto';
 import {mkdir,writeFile,readFile,lstat} from 'node:fs/promises';
-import {verifyProposal,verifyReviewedReceipt,verifyAcceptedArtifacts} from './research-review.mjs';
+import {verifyProposal,verifyReviewedReceipt,verifyAcceptedArtifacts,verifyReviewVerdict,verifyReserveAck,verifySubmitAck,verifyLocalAcceptance} from './research-review.mjs';
 export {verifyProposal,verifyReviewedReceipt} from './research-review.mjs';
 import { digest,normalizeTask } from './contracts.mjs';
 
@@ -74,7 +74,7 @@ export class ResearchAdapter {
     if(!collected.checksums_verified)throw Error('Research collection lacked verified checksums');
     let reviewed=null;
     if(task.spec.researchPolicy?.version===3&&remote.status==='completed'){
-     const receipt=JSON.parse(await readFile(path.join(collected.directory,'receipt.json'),'utf8'));reviewed=verifyReviewedReceipt(receipt,task);
+     const receipt=JSON.parse(await readFile(path.join(collected.directory,'receipt.json'),'utf8'));reviewed=verifyReviewedReceipt(receipt,task,id=>c.store.maybe('reviewer',id));
      const [report,sources]=await Promise.all(['claims.json','sources.json'].map(file=>readFile(path.join(collected.directory,file))));verifyAcceptedArtifacts(reviewed,report,sources);
     }
     const done=c.completeTask(task.id,{directory:collected.directory,checksumsVerified:true,remoteJobId:cp.remoteJobId,receiptStatus:remote.status,independentReview:reviewed?'accepted':'not_requested',...(reviewed?{reviewBinding:reviewed}:{})},owner);
@@ -84,7 +84,7 @@ export class ResearchAdapter {
    return c.boundary(task.id,{...cp,nextPollAt:c.now()+(cfg.pollMs??1000)},owner);
   }catch(e){if(c.getTask(task.id).status==='uncertain')return c.getTask(task.id);c.markUncertain(task.id,'Research contact/evidence uncertain: '+e.message,owner);return c.getTask(task.id);}
  }
- async review(input,key){return this.worker.integration.effect(key,{op:'research.review',...input},async()=>{
+ async review(input,key){input=structuredClone(input);if(Buffer.byteLength(JSON.stringify(input))>32768)throw Error('Research review input exceeds bound');return this.worker.integration.effect(key,{op:'research.review',...input},async()=>{
   const {c}=this.worker,t=c.getTask(input.taskId),g=c.getGoal(t.goalId),cp=t.checkpoint;
   const replay=t.researchReviewTickets?.find(x=>input.action==='reserve'?x.reservationKey===key:x.submissionHash===digest({input,key}));
   if(replay)return input.action==='reserve'?{id:replay.id,candidateHash:replay.candidateHash,rubricSha256:replay.rubricSha256,dispatchRequired:false}:replay.submissionResult;
@@ -94,17 +94,35 @@ export class ResearchAdapter {
   if(input.action==='reserve'){
    const intent=c.store.command('research-intent-'+key,{op:'research.review.intent',...input},()=>{
     const current=c.store.get('task',t.id);if(current.reviews>=Math.min(2,current.spec.limits.reviews))throw Error('Research review capacity exhausted');
-    const run=c.reserveReviewer({taskId:t.id},'research-native-'+key);current.reviews++;c.store.put('task',current);return run;
+    const run=c.reserveReviewer({taskId:t.id},'research-native-'+key);current.reviews++;c.store.put('task',current);return {...run,descriptor:structuredClone(d),jobId:cp.remoteJobId,manifestHash:cp.remoteHash};
    });
    let result;try{result=await this.rpc({command:'review_reserve',job:cp.remoteJobId,candidateHash:input.candidateHash,rubricHash:input.rubricHash,idempotency_key:key});}catch(e){e.retryable=true;throw e;}
-   c.store.tx(()=>{const current=c.store.get('task',t.id);current.researchReviewTickets??=[];if(!current.researchReviewTickets.some(x=>x.id===result.id))current.researchReviewTickets.push({...result,nativeReservationId:intent.id,reservationKey:key});c.store.put('task',current);c.emit('research.review_reserved',t.goalId,t.id,{ticketId:result.id,candidateHash:input.candidateHash,nativeReservationId:intent.id});});return result;
+   verifyReserveAck(result,d);
+   c.store.tx(()=>{const current=c.liveTask(t),run=c.store.get('reviewer',intent.id);if(current.status!=='awaiting_review'||current.owner||digest(current.checkpoint.reviewCandidate)!==digest(intent.descriptor)||run.status!=='reserved'||run.goalId!==t.goalId||run.taskId!==t.id||current.researchReviewTickets?.some(x=>x.id===result.id))throw Error('Research reserve acknowledgment ownership/ticket mismatch');current.researchReviewTickets??=[];current.researchReviewTickets.push({...result,version:1,goalId:t.goalId,taskId:t.id,jobId:cp.remoteJobId,manifestHash:cp.remoteHash,descriptor:structuredClone(d),nativeReservationId:intent.id,reservationKey:key,reservedAt:intent.at});c.store.put('task',current);c.emit('research.review_reserved',t.goalId,t.id,{ticketId:result.id,candidateHash:input.candidateHash,nativeReservationId:intent.id});});return result;
   }
   const ticket=t.researchReviewTickets?.find(x=>x.id===input.ticketId);if(!ticket)throw Error('Unknown native research reservation');
-  let result;try{result=await this.rpc({command:'review_submit',job:cp.remoteJobId,...input,idempotency_key:key});}catch(e){e.retryable=true;throw e;}
-  c.store.tx(()=>{const current=c.store.get('task',t.id);if(current.status!=='awaiting_review')throw Error('Research review ownership changed');
-   const run=c.store.get('reviewer',ticket.nativeReservationId);run.status='completed';run.result={ticketId:ticket.id,decision:input.decision,candidateHash:input.candidateHash};c.store.put('reviewer',run);
-   const savedTicket=current.researchReviewTickets.find(x=>x.id===ticket.id);savedTicket.submissionHash=digest({input,key});savedTicket.submissionResult=result;
-   current.feedback.push({decision:input.decision,findings:input.findings,candidateHash:input.candidateHash,at:c.now()});current.reviewed=true;current.status=current.stopRequested?'stopped':current.pauseRequested?'paused':'queued';current.checkpoint={...current.checkpoint,nextPollAt:0};c.store.put('task',current);c.emit('research.review_submitted',t.goalId,t.id,{ticketId:ticket.id,decision:input.decision,candidateHash:input.candidateHash});});return result;
+  if(input.action!=='submit'||ticket.candidateHash!==d.candidateHash||ticket.rubricSha256!==d.rubricSha256||digest(ticket.descriptor)!==digest(d)||ticket.goalId!==t.goalId||ticket.taskId!==t.id||ticket.jobId!==cp.remoteJobId||ticket.manifestHash!==cp.remoteHash)throw Error('Research review ticket binding mismatch');
+  verifyReviewVerdict(input,d);
+  const intent=c.store.command('research-submit-intent-'+key,{op:'research.review.submit.intent',input,key},()=>{
+   const current=c.liveTask(t),saved=current.researchReviewTickets.find(x=>x.id===ticket.id),run=c.store.get('reviewer',ticket.nativeReservationId);
+   if(saved.submissionIntent||run.status!=='reserved'||run.goalId!==t.goalId||run.taskId!==t.id)throw Error('Research reviewer reservation is not available');
+   saved.submissionIntent={version:1,state:'pending',goalId:t.goalId,taskId:t.id,jobId:cp.remoteJobId,manifestHash:cp.remoteHash,descriptor:structuredClone(d),ticketId:ticket.id,nativeReservationId:run.id,submissionKey:key,input:structuredClone(input),inputHash:digest({input,key}),intentAt:c.now()};
+   c.store.put('task',current);return saved.submissionIntent;
+  });
+  let result;try{result=await this.rpc({command:'review_submit',job:cp.remoteJobId,...intent.input,idempotency_key:key});}catch(e){e.retryable=true;throw e;}
+  verifySubmitAck(result,intent);
+  c.store.tx(()=>{const current=c.liveTask(t);if(current.status!=='awaiting_review'||current.owner)throw Error('Research review ownership changed');
+   const savedTicket=current.researchReviewTickets.find(x=>x.id===ticket.id),run=c.store.get('reviewer',ticket.nativeReservationId);
+   if(run.status!=='reserved'||run.goalId!==t.goalId||run.taskId!==t.id||digest(savedTicket.submissionIntent)!==digest(intent)||digest(current.checkpoint.reviewCandidate)!==digest(intent.descriptor))throw Error('Research review intent/reservation changed');
+   const acknowledged={...intent,state:'acknowledged',acknowledgedAt:c.now(),acknowledgment:result};
+   savedTicket.submissionIntent=acknowledged;savedTicket.submissionHash=intent.inputHash;savedTicket.submissionResult=result;
+   run.status='completed';run.result={ticketId:ticket.id,decision:intent.input.decision,candidateHash:intent.input.candidateHash,submissionHash:intent.inputHash};c.store.put('reviewer',run);
+   if(intent.input.decision==='accept'){
+    if(current.researchReviewAcceptance)throw Error('Local research acceptance is already frozen');
+    current.researchReviewAcceptance={...acknowledged,state:'accepted'};
+    verifyLocalAcceptance(current,id=>c.store.maybe('reviewer',id));
+   }
+   current.feedback.push({decision:input.decision,findings:input.findings,candidateHash:input.candidateHash,at:c.now()});current.reviewed=true;current.status='queued';current.checkpoint={...current.checkpoint,nextPollAt:0};c.store.put('task',current);c.emit('research.review_submitted',t.goalId,t.id,{ticketId:ticket.id,decision:input.decision,candidateHash:input.candidateHash});});return result;
  });}
  async reconcile(input,key){return this.worker.integration.effect(key,{op:'research.reconcile',...input},async()=>{
   const {c,owner}=this.worker,lease=c.store.get('lease','coordinator');
