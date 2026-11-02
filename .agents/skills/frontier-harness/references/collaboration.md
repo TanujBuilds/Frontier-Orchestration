@@ -16,7 +16,9 @@ native task; it does not edit another writer's checkout.
    actor `codex`, role `implementer` (or explorer), optional hostAgentId and
    `{requested,resolved}` model metadata. Omit unresolved metadata rather than
    invent it. Start registers before dispatch and returns `native.agentId`.
-3. Inspect its returned operation through `operation_get` until completed.
+3. Observe its returned operation with the deterministic CLI `wait --root STATE
+   --operation ID` described in [operations](operations.md). Recheck actual state
+   after events; return when ready/attention rather than model-polling unchanged results.
    Give a host worker the actual absolute `result.native.worktree`, task ID,
    assigned files, checks, acceptance, deadline and shared role instructions.
    Dispatch writes only after successful reservation. If host correlation is

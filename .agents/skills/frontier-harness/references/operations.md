@@ -36,6 +36,41 @@ locked MCP dependencies are required. A service configuration file does not prov
 host tools are loaded; refresh/restart may be needed, followed by actual discovery.
 MCP result availability does not guarantee native chat wakeup.
 
+## Deterministic observation
+
+After launching work, run one bounded observer process using the exact state root:
+
+```sh
+node /ABS/VERSION/scripts/harness.mjs wait --root /ABS/PRIVATE/STATE --task TASK_ID --timeout-ms 30000
+node /ABS/VERSION/scripts/harness.mjs wait --root /ABS/PRIVATE/STATE --operation OPERATION_ID --timeout-ms 30000
+```
+
+The root is mandatory; task and operation are mutually exclusive. Timeout is
+1..300000ms, default30000. The process checks authoritative task/operation state
+first, then internally long-polls events and rechecks state after each batch or
+empty timeout. An already ready task needs no event. Events never establish
+acceptance. Empty polls have a250ms minimum gap; at most40 API requests and one
+original helper deadline bound a run. `checks` counts all API requests; cursor
+advances monotonically. Output contains only version, target/id, outcome, actual
+known status (null if unavailable/unsupported), cursor, observedAt, checks,
+lastEventSeq and an optional fixed reason code. No report or connection bytes.
+
+Exit0 means ready for action: accepted, review/question/native-ready or integration
+ready; it does not itself mean accepted/integrated. Exit3 means attention, timeout
+or cancellation; exit2 means invalid input, unavailable or unsupported state.
+SIGINT/SIGTERM cancel the observer only. No pause/resume/stop/reassignment, new
+worker, service startup, deadline reset or mutation is performed. The connection
+must be authenticated HTTP127.0.0.1 with no credentials/path/query/hash surprises.
+A viewer credential denied task_get remains denied; do not expand its rights.
+
+If the shell returns a process session, wait through supported host process tools
+without rediscovering catalogs or repeatedly checking unchanged MCP state. A later
+observer invocation remains subject to the parent's original authority/deadline.
+A host with no process facility may use one events_wait of at most30000ms, then
+check actual task/operation state and report saved pending work before returning.
+Do not loop model calls or claim an inactive chat will wake automatically. Native
+fixtures need external wall-clock/tool-call caps; prompt-only caps are cooperative.
+
 ## Exact preparation and identity
 
 Example input uses placeholders; resolve the approved clean committed repository,

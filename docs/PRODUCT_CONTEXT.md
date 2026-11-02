@@ -8,7 +8,10 @@ scoped delegation, native candidate worktrees, four pinned modes and bounded
 learning. In opt-in collaborative mode, main Codex and native implementers may
 write substantial work in separately owned candidates while DeepSeek executes
 sequentially. Main Codex reviews and serializes integration. The read-only
-observer shows reported native progress and captured worker activity.
+observer shows reported native progress and captured worker activity. The harness
+CLI provides a bounded observation-only `wait` process for task/operation state,
+so long waits run outside model turns. Events are hints; saved task state remains
+authoritative. An inactive Codex chat does not wake itself on an MCP event.
 
 The review-only role rules below describe the preserved legacy overnight
 workflow. They do not prohibit native implementation in an explicitly approved

@@ -34,9 +34,11 @@ submission IDs, mutation keys, task IDs, deadlines, spent requests and failures.
 | Explicit bounded background review or historical jobs | [Compatibility](references/compatibility.md) |
 
 Never silently switch modes. Main Codex supervises collaborative goals only while
-its chat is active. MCP events do not create a new native turn. Use `events_wait`
-with the saved cursor and at most30000ms; do independent useful work between
-updates. Notify on results, blockers, decisions or completion, not unchanged state.
+its chat is active. MCP events do not create a new native turn. After a launch, use one deterministic `wait --root STATE --task ID` (or
+`--operation ID`) invocation; see [operations](references/operations.md). Waiting
+inside that process makes no model calls. A host process/session may be awaited
+through its supported process tooling. Do not loop model turns over unchanged
+MCP results. Notify on results, blockers, decisions or completion.
 No always-on Codex supervisor is installed.
 
 Inspect `goal_get`, `task_get`, `queue_get`, `questions_list`, `task_evidence` and
