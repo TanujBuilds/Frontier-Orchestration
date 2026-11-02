@@ -66,12 +66,16 @@ candidate pins and independently assessed evidence. Neither selector is inferred
 from receipts, candidate contents, exports, environment variables or a home path.
 
 The checker opens only `DIR/harness.sqlite3` read-only, verifies schema1 and reads
-one transaction containing the selected task, linked goal and accepted native
-reviewer. Each selected JSON row is bounded to1MiB before decoding; busy waiting
+one transaction containing the selected task, its relevant approved goal generation
+and accepted native reviewer. Bounded exact-key metadata projections select the
+current versus historical generation and validate the persisted predecessor
+deadline cap after revisions; no unrelated full goal rows are decoded. Each selected JSON row is bounded to1MiB before decoding; busy waiting
 is limited to1000ms. It does not construct the coordinator/store, initialize or
 migrate state, change permissions, checkpoint WAL, reserve work or spend budget.
 WAL commits remain visible with the writer open. SQLite can coordinate ephemeral
-SHM read locks; this is not a promise that SHM bytes remain untouched.
+SHM read locks, and may create previously absent empty WAL/SHM sidecars and
+metadata even with readOnly:true. Main/database contents remain read-only; this
+is not a promise of zero filesystem effects or immutable SHM bytes.
 
 A terminal accepted task must match its activated goal/version/hash, original
 parent/child deadline, collaborative policy3 and stored environment. The local

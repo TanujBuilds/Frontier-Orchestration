@@ -2,7 +2,12 @@
 
 `readResearchAuthority({stateRoot, taskId, receipt, policy, reportBytes,
 sourceBytes})` in `src/harness/release-authority.mjs` performs a fresh bounded
-SQLite snapshot without constructing Store or Coordinator. It returns either
+SQLite snapshot without constructing Store or Coordinator. The selected approved
+goal generation may be an exact goal_history record when a later goal revision
+retains accepted older work. Bounded exact-key ancillary metadata projections
+check the current goal link/version and (for revised approvals) the immediately
+preceding persisted deadline cap. Only task, relevant approved goal and reviewer
+are decoded as full rows. It returns either
 `{status:'pending', reason, runtimeAttested:false}` for unavailable/incomplete
 local approval, or a verified version1 proof with goal/task IDs and hashes,
 selected environment, accepted ticket/reviewer IDs and report/source/candidate
@@ -16,7 +21,10 @@ state directory is an explicit trusted operator input, not an untrusted receipt
 locator or cryptographic identity mechanism. Schema1 is supported; rows exceeding
 1MiB fail before JSON decode. A read transaction covers schema and all three
 selected records, including uncheckpointed WAL commits, with a1000ms busy timeout.
-Connections roll back and close on success and validation failure. A killed reader
+Connections roll back and close on success and validation failure. SQLite may
+create previously absent empty WAL/SHM sidecars and metadata for read-only WAL
+coordination; read-only SQL/database-content checks do not promise zero filesystem
+effects. A killed reader
 releases locks through normal process cleanup; it has no SQL write authority.
 
 The source checker exposes paired `coordinatorStateRoot`/`coordinatorTaskId`

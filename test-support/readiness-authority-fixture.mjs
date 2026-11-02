@@ -2,10 +2,13 @@
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import {fixture,policy} from './research-review-binding.mjs';
+import {Goals} from '../src/harness/goals.mjs';
 import {readinessFixture} from './readiness-fixture.mjs';
 export {policy};
-export async function acceptedFixture(t,{environment='live',now}={}){
- const f=await fixture(t,{environment,now});await f.accept();await f.collect();
+export async function acceptedFixture(t,{environment='live',now,revisionHours}={}){
+ const f=await fixture(t,{environment,now});
+ if(revisionHours){for(const hours of revisionHours)reviseFixtureGoal(f,hours);new Goals(f.c).rebind({taskId:f.task.id},'rebind-fixture');}
+ await f.accept();await f.collect();
  const task=f.c.getTask(f.task.id);if(task.status!=='accepted')throw Error('Fixture collection failed: '+JSON.stringify(task));
  const receipt=JSON.parse(await fs.readFile(path.join(task.result.directory,'receipt.json')));
  return {...f,receipt,args:{stateRoot:f.root,taskId:task.id,receipt,policy,reportBytes:Buffer.from(f.packet.canonical.report),sourceBytes:Buffer.from(f.packet.canonical.sources)}};
@@ -17,4 +20,9 @@ export async function checkerFixture(t,{environment='live',status='passed'}={}){
  const worker=await r.artifact('worker.json',f.receipt,'receipt');
  r.receipt.gates.push({name:'live_research_quality',status:'passed',applicability:'current',scope:'live',authority:'independent_native',artifacts:[report,source,review,assessment,worker]});await r.save();
  return {...f,r,opts:{...r.opts,coordinatorStateRoot:f.root,coordinatorTaskId:f.task.id}};
+}
+
+export function reviseFixtureGoal(f,hours){
+ const goals=new Goals(f.c),g=f.c.getGoal(f.g.id),manifest={submissionId:g.manifest.submissionId,objective:'Revised objective '+g.version,acceptance:g.manifest.acceptance,environment:g.manifest.environment,researchPolicy:g.manifest.researchPolicy,limits:{...g.manifest.limits,hours:hours??g.manifest.limits.hours}};
+ const revision=goals.prepareRevision({goalId:g.id,expectedHash:g.hash,manifest},'prepare-revision-'+g.version);return goals.activateRevision({revisionId:revision.id,hash:revision.hash},'activate-revision-'+g.version);
 }

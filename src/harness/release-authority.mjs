@@ -46,11 +46,34 @@ export async function readResearchAuthority({stateRoot,taskId,receipt,policy,rep
    let value;try{value=JSON.parse(row.data);}catch{throw new ReleaseAuthorityError('malformed_authority_row');}
    need(value&&typeof value==='object'&&!Array.isArray(value)&&value.id===key,'malformed_authority_record');return value;
   };
+  // Ancillary exact-key metadata only: never decode an extra full goal row.
+  // The size CASE runs before SQLite JSON extraction as well as JS decoding.
+  const project=db.prepare(`SELECT length(CAST(data AS BLOB)) AS bytes,
+   CASE WHEN length(CAST(data AS BLOB))<=? THEN CASE WHEN json_valid(data)
+    THEN json_array(json_extract(data,'$.id'),json_extract(data,'$.goalId'),json_extract(data,'$.version'),json_extract(data,'$.activatedAt'),json_extract(data,'$.deadline')) END END AS metadata
+   FROM records WHERE kind=? AND id=?`);
+  const metadata=(kind,key)=>{
+   need(id(key),'invalid_authority_record_id');const row=project.get(MAX_ROW,kind,key);if(!row)return null;
+   need(Number.isSafeInteger(row.bytes)&&row.bytes<=MAX_ROW,'authority_row_too_large');
+   need(typeof row.metadata==='string','malformed_authority_row');const [recordId,goalId,version,activatedAt,deadline]=JSON.parse(row.metadata);
+   need(recordId===key&&Number.isSafeInteger(version)&&version>=1,'malformed_authority_record');return {goalId,version,activatedAt,deadline};
+  };
   const task=load('task',taskId);if(!task)return pending('authority_task_missing');
   need(task.spec?.kind==='research'&&task.spec.actor==='deepseek'&&same(task.spec.researchPolicy,policy)&&task.hash===digest(task.spec),'authority_task_binding_mismatch');
-  const goal=load('goal',task.goalId);if(!goal)return pending('authority_goal_missing');
+  const current=metadata('goal',task.goalId);if(!current)return pending('authority_goal_missing');
+  need(Number.isSafeInteger(task.goalVersion)&&task.goalVersion>=1&&task.goalVersion<=current.version,'authority_goal_version_mismatch');
+  const historical=task.goalVersion<current.version;
+  const goal=load(historical?'goal_history':'goal',historical?`${task.goalId}-${task.goalVersion}`:task.goalId);
+  if(!goal)return pending('authority_goal_history_missing');
+  need(!historical||goal.goalId===task.goalId,'authority_goal_history_mismatch');
+  let approvedDeadline=goal.activatedAt+goal.manifest?.limits?.hours*3600000;
+  if(goal.version>1){
+   const previous=metadata('goal_history',`${task.goalId}-${goal.version-1}`);if(!previous)return pending('authority_goal_predecessor_missing');
+   need(previous.goalId===task.goalId&&previous.version===goal.version-1&&previous.activatedAt===goal.activatedAt&&time(previous.deadline)&&previous.deadline>previous.activatedAt,'authority_goal_predecessor_mismatch');
+   approvedDeadline=Math.min(previous.deadline,approvedDeadline);
+  }
   need(goal.manifest?.schema===1&&goal.manifest.mode?.id==='collaborative'&&goal.manifest.mode.review==='operator'&&goal.manifest.mode.actors?.includes('deepseek')&&goal.manifest.mode.actors?.includes('codex')&&goal.manifest.mode.capabilities?.includes('research')&&goal.manifest.capabilities?.some(c=>c.id==='research'&&c.version===4&&c.actors?.includes('deepseek'))&&same(goal.manifest.researchPolicy,policy)&&goal.hash===digest(goal.manifest)&&Number.isSafeInteger(goal.version)&&goal.version>=1&&task.goalVersion===goal.version,'authority_goal_binding_mismatch');
-  need(['active','paused','stopped','completed','partial'].includes(goal.status)&&time(goal.activatedAt)&&time(goal.deadline)&&goal.deadline===goal.activatedAt+goal.manifest.limits?.hours*3600000&&time(task.createdAt)&&task.createdAt>=goal.activatedAt&&time(task.startedAt)&&task.startedAt>=task.createdAt&&time(task.deadline)&&task.deadline===Math.min(goal.deadline,task.startedAt+task.spec.limits?.seconds*1000),'authority_approval_deadline_mismatch');
+  need(['active','paused','stopped','completed','partial'].includes(goal.status)&&time(goal.activatedAt)&&time(goal.deadline)&&goal.deadline>goal.activatedAt&&goal.deadline===approvedDeadline&&time(task.createdAt)&&task.createdAt>=goal.activatedAt&&time(task.startedAt)&&task.startedAt>=task.createdAt&&time(task.deadline)&&task.deadline===Math.min(goal.deadline,task.startedAt+task.spec.limits?.seconds*1000),'authority_approval_deadline_mismatch');
   const environment=goal.manifest.environment;
   need(['live','fixture'].includes(environment)&&task.checkpoint?.manifest?.mode===environment&&receipt?.mode===environment,'authority_environment_mismatch');
   need(task.status==='accepted'&&task.owner===null&&!task.pauseRequested&&!task.stopRequested&&!task.yieldRequested&&!task.checkpoint.remotePaused&&(!task.executionActor||task.executionActor==='deepseek'),'authority_task_not_terminal_accepted');
@@ -68,7 +91,7 @@ export async function readResearchAuthority({stateRoot,taskId,receipt,policy,rep
   const descriptor=verifyReviewedReceipt(receipt,task,key=>key===reviewer.id?reviewer:null);
   verifyAcceptedArtifacts(descriptor,reportBytes,sourceBytes);
   need(same(result.reviewBinding,descriptor),'authority_result_binding_mismatch');
-  return {status:'verified',reason:'accepted_local_research_snapshot',version:1,taskId:task.id,goalId:goal.id,goalVersion:goal.version,goalHash:goal.hash,taskHash:task.hash,environment,ticketId:a.ticketId,nativeReservationId:reviewer.id,candidateHash:descriptor.candidateHash,reportSha256:descriptor.reportSha256,sourcesSha256:descriptor.sourcesSha256,runtimeAttested:false};
+  return {status:'verified',reason:'accepted_local_research_snapshot',version:1,taskId:task.id,goalId:task.goalId,goalVersion:goal.version,goalHash:goal.hash,taskHash:task.hash,environment,ticketId:a.ticketId,nativeReservationId:reviewer.id,candidateHash:descriptor.candidateHash,reportSha256:descriptor.reportSha256,sourcesSha256:descriptor.sourcesSha256,runtimeAttested:false};
  }catch(e){if(e instanceof ReleaseAuthorityError)throw e;throw new ReleaseAuthorityError('invalid_authority_snapshot');}
  finally{if(db){try{if(transaction)db.exec('ROLLBACK');}finally{db.close();}}}
 }

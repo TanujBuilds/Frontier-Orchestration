@@ -7,7 +7,8 @@ import {DatabaseSync} from 'node:sqlite';
 import {spawn,spawnSync} from 'node:child_process';
 import {once} from 'node:events';
 import {fileURLToPath} from 'node:url';
-import {acceptedFixture,checkerFixture,policy} from '../test-support/readiness-authority-fixture.mjs';
+import {acceptedFixture,checkerFixture,policy,reviseFixtureGoal} from '../test-support/readiness-authority-fixture.mjs';
+import {Goals} from '../src/harness/goals.mjs';
 import {digest} from '../src/harness/contracts.mjs';
 import {checkReadiness,prepareBundle} from '../scripts/release-readiness.mjs';
 const reader=async args=>(await import('../src/harness/release-authority.mjs')).readResearchAuthority(args);
@@ -117,3 +118,25 @@ for(const [label,change]of [
  ['saved paused remote cursor',v=>v.checkpoint.remotePaused=true],
  ['native execution owner',v=>v.executionActor='codex']
 ])test(`R13 terminal acceptance rejects unresolved ${label}`,async t=>{const f=await acceptedFixture(t);mutate(f,'task',change);await assert.rejects(reader(f.args));});
+
+test('R14 accepted old goal generation survives actual revision finalization and expiry',async t=>{
+ const f=await acceptedFixture(t,{now:()=>Date.now()-10*3600000});reviseFixtureGoal(f);new Goals(f.c).finalize({goalId:f.g.id,summary:'Accepted older generation remains complete'},'finalize-fixture');assert.equal(f.c.getGoal(f.g.id).version,2);assert.equal(f.c.getTask(f.task.id).goalVersion,1);const proof=await reader(f.args);assert.equal(proof.status,'verified');assert.equal(proof.goalVersion,1);assert.equal(proof.goalId,f.g.id);
+});
+for(const hours of [[12],[4,12]])test(`R14 supported revised hours ${hours.join(' to ')} preserve original deadline cap`,async t=>{
+ const f=await acceptedFixture(t,{revisionHours:hours});const g=f.c.getGoal(f.g.id);assert.equal(g.deadline-g.activatedAt,(hours[0]===4?4:8)*3600000);assert.equal(g.manifest.limits.hours,12);assert.equal(f.c.getTask(f.task.id).goalVersion,hours.length+1);assert.equal((await reader(f.args)).status,'verified');
+});
+for(const label of ['identity','logical goal','version','hash','deadline','missing current','missing history','oversized current','oversized predecessor'])test(`R12 historical generation rejects ${label}`,async t=>{
+ const f=await acceptedFixture(t);reviseFixtureGoal(f);const key=f.g.id+'-1',db=f.c.store.db,v=f.c.store.get('goal_history',key);
+ if(label==='identity')v.id='wrong';if(label==='logical goal')v.goalId='wrong';if(label==='version')v.version=2;if(label==='hash')v.hash='f'.repeat(64);if(label==='deadline')v.deadline++;
+ if(label.startsWith('missing'))db.prepare('DELETE FROM records WHERE kind=? AND id=?').run(label==='missing current'?'goal':'goal_history',label==='missing current'?f.g.id:key);
+ else if(label==='oversized current')db.prepare('UPDATE records SET data=? WHERE kind=? AND id=?').run(' '.repeat(1024*1024+1),'goal',f.g.id);
+ else if(label==='oversized predecessor'){const current=f.c.store.get('goal',f.g.id);const task=f.c.store.get('task',f.task.id);task.goalVersion=current.version;f.c.store.put('task',task);db.prepare('UPDATE records SET data=? WHERE kind=? AND id=?').run(' '.repeat(1024*1024+1),'goal_history',key);}
+ else db.prepare('UPDATE records SET data=? WHERE kind=? AND id=?').run(JSON.stringify(v),'goal_history',key);
+ if(label.startsWith('missing'))assert.equal((await reader(f.args)).status,'pending');else await assert.rejects(reader(f.args));
+});
+test('R12 revised goal cannot expand persisted predecessor deadline',async t=>{const f=await acceptedFixture(t,{revisionHours:[12]});mutate(f,'goal',v=>v.deadline++);await assert.rejects(reader(f.args));});
+for(const label of ['missing','identity','logical goal','version','activation','deadline'])test(`R12 revised predecessor metadata validates ${label}`,async t=>{
+ const f=await acceptedFixture(t,{revisionHours:[12]}),key=f.g.id+'-1',v=f.c.store.get('goal_history',key),db=f.c.store.db;
+ if(label==='missing')db.prepare('DELETE FROM records WHERE kind=? AND id=?').run('goal_history',key);else{if(label==='identity')v.id='wrong';if(label==='logical goal')v.goalId='wrong';if(label==='version')v.version=2;if(label==='activation')v.activatedAt++;if(label==='deadline')v.deadline++;db.prepare('UPDATE records SET data=? WHERE kind=? AND id=?').run(JSON.stringify(v),'goal_history',key);}
+ if(label==='missing')assert.equal((await reader(f.args)).status,'pending');else await assert.rejects(reader(f.args));
+});
