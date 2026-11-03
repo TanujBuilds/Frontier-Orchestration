@@ -45,7 +45,7 @@ def build_repair_context(report, request_ref):
     for field, shape in SHAPES.items():
         value = report.get(field)
         entries = list(enumerate(value[:50 if field == 'unanswered' else 30])) if isinstance(value, list) and field not in ('title', 'complete') else [(None, value)]
-        if isinstance(value, list) and len(value) > len(entries):
+        if field not in ('title', 'complete') and isinstance(value, list) and len(value) > len(entries):
             result['units_omitted'] += len(value) - len(entries)
         for index, original in entries:
             unit = field if index is None else field + ':' + str(index)
@@ -124,8 +124,9 @@ def present_repair_context(context, candidate, offered, sources, feedback=None):
 def nonempty_shape_example(candidate):
     """Illustrative syntax using one existing claim; no fabricated ID or evidence."""
     claims = (candidate or {}).get('claims', [])
-    if not claims: return None
-    claim = copy.deepcopy(claims[0])
+    claim = next((c for c in claims if isinstance(c, dict) and isinstance(c.get('evidence'), list) and c['evidence']), None)
+    if claim is None: return None
+    claim = copy.deepcopy(claim)
     return {'action': 'finish', 'report': {
         'title': 'Illustrative shape only, not a research finding', 'complete': False,
         'claims': [claim], 'summary': [], 'comparisons': [], 'recommendations': [],

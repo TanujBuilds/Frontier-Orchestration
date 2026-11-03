@@ -104,3 +104,14 @@ class RepairContextTests(unittest.TestCase):
   from repair_context_compat_driver import fingerprints
   expected=json.loads((F.parent/'repair-context-legacy-payload-hashes.json').read_text())
   self.assertEqual(fingerprints(),expected)
+
+ def test_retained_malformed_scalar_field_lists_do_not_claim_omitted_entries(self):
+  raw=copy.deepcopy(self.f['reports']['10']);raw['title']=['one','two','three'];raw['complete']=[True,False,True]
+  ctx=self.build(raw=raw);self.assertEqual(ctx['units_omitted'],0)
+  for field in ('title','complete'):self.assertEqual(next(u for u in ctx['units'] if u['unit']==field)['original'],raw[field])
+ def test_shape_example_uses_existing_selector_after_unknown_first_claim(self):
+  job,c=self.seed();raw=copy.deepcopy(self.f['reports']['11']);raw['claims'].insert(0,{'id':'C999','kind':'unknown','text':'An unresolved deployment detail.','evidence':[]})
+  c['repair_proposal']=review.build_repair_proposal(raw,c['sources'],self.f['offers'],REF,context_version=1)
+  content=json.loads(self.payload(job,c)['messages'][-1]['content']);example=content['finalization']['nonempty_shape_example']
+  self.assertTrue(example['report']['claims'][0]['evidence']);self.assertNotEqual(example['report']['claims'][0]['id'],'C999')
+  self.assertEqual(validate_report(resolve_report(example['report'],c['sources'],content['citation_passages'],strict=True),c['sources']),[])
