@@ -53,3 +53,14 @@ Verified monotonic remote counters are persisted even when the same observation 
 ## Source review resolution
 
 The single independent source review found three additional binding gaps. Proposal descriptors now require the exact supported version1 fields, bounded hash/request references, matching offered-catalog lineage and a unique exact unit list derived from the canonical report's claims and section entries. The report bytes are parsed to enumerate units, never reserialized for acceptance. Reserve acknowledgments are a closed four-field wire object; extra source bodies and coordinator-owned fields cannot enter a local ticket. Completed status/export/collection and receipt envelopes must match the local job/manifest/mode and original deadline; the expected Python deadline is `floor(local milliseconds / 1000)`, matching the reserved manifest's `not_after`. Receipt status must be completed, and finalization must precede that original deadline. These checks preserve the approved report format and semantic rubric.
+
+## Explicit repair context successor
+
+An additional opt-in `repairContextVersion: 1` under policy 3 pins research@5.
+It preserves exact bounded nonclaim units, malformed values, unit findings and
+per-claim selected-source provenance as untrusted writer context. The unchanged
+resolver/validator checks its nonempty syntax example. Old capability schemas,
+absent-key payloads, immutable reservations, report/rubric and review authority
+remain compatible. See [the context contract](REPAIR_CONTEXT.md) for bounds,
+omission behavior and offline evidence. Real-model quality and personal
+installation remain unproved and require their own approved gates.

@@ -10,9 +10,9 @@ import {ResearchAdapter} from '../src/harness/research.mjs';
 import {digest} from '../src/harness/contracts.mjs';
 const sha=s=>createHash('sha256').update(s).digest('hex');
 export const policy={version:3,finish:'selectors_only',discovery:'search_required',review:{version:1,role:'independent_operator',maxRounds:2,maxRevisions:1,maxCorrectionModelCalls:2,rubricSha256:'a'.repeat(64)}};
-export async function fixture(t,{root,now,environment}={}){
+export async function fixture(t,{root,now,environment,researchPolicy=policy}={}){
  root??=await mkdtemp(path.join(os.tmpdir(),'review-binding-'));
- const c=new Coordinator({root,now}),g=c.prepareGoal({submissionId:'g',objective:'Fixture',acceptance:['Reviewed'],researchPolicy:policy,...(environment?{environment}:{})},'p');c.activateGoal({goalId:g.id,hash:g.hash},'a');
+ const c=new Coordinator({root,now}),g=c.prepareGoal({submissionId:'g',objective:'Fixture',acceptance:['Reviewed'],researchPolicy,...(environment?{environment}:{})},'p');c.activateGoal({goalId:g.id,hash:g.hash},'a');
  const task=c.submitTask({goalId:g.id,submissionId:'r',kind:'research',objective:'Fixture',acceptance:['Reviewed']},'t');c.claimNext('owner');
  const report={title:'A',complete:true,claims:[{id:'C1',kind:'fact',text:'A',evidence:[{source_id:'S001',quote:'A',selection:{start:0,end:1,text_sha256:sha('A')}}]}],summary:['C1'],comparisons:[],recommendations:[],contradictions:[],unanswered:[]},canonical={report:JSON.stringify(report),sources:JSON.stringify({S001:{id:'S001',url:'https://example.test/a',title:'Fixture',text:'A',text_sha256:sha('A')}}),offers:'[]'};
  const descriptor={version:1,jobId:'remote',manifestHash:'b'.repeat(64),rubricSha256:policy.review.rubricSha256,reportSha256:sha(canonical.report),sourcesSha256:sha(canonical.sources),offersSha256:sha(canonical.offers),request:{operationId:'op',requestSha256:'c'.repeat(64),resultSha256:'d'.repeat(64),offersSha256:sha(canonical.offers)},units:['title','claims:C1','summary:0']};descriptor.candidateHash=digest(descriptor);

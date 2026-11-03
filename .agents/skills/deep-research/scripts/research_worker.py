@@ -11,6 +11,7 @@ from research_review import policy_parameters, build_repair_proposal, digest as 
 from research_state import BudgetExceeded, StateError, strict_policy
 from research_passages import make_passages, resolve_report
 from research_protocol import parse_action, validate_report, render_report, REPORT_SHAPE, FINISH_ACTION_EXAMPLE, completion_payload
+from research_repair_context import build_repair_context, present_repair_context, nonempty_shape_example
 
 SYSTEM = '''You are the DeepSeek research worker. Answer the approved question using public evidence.
 Return exactly one JSON action: {"action":"search","query":"..."},
@@ -342,6 +343,7 @@ class Worker:
         strict=strict_policy(job['manifest'])
         policy=policy_parameters(job['manifest'].get('research_policy'))
         support=policy['support']
+        repair_context_enabled=job['manifest'].get('research_policy',{}).get('repairContextVersion')==1
         catalog=[];catalog_chars=0
         for sid,source in list(c['sources'].items())[:50]:
             text=source['text'][:min(2000,24000-catalog_chars)];catalog_chars+=len(text)
@@ -425,12 +427,33 @@ class Worker:
                     content['candidate']=None
                     content['context_bounds']['omissions'].append('Candidate omitted; use retained passages or report explicit gaps')
                 content['synthesis_review']=reconstruction_review(content.get('candidate'),passages)
+                if repair_context_enabled:
+                    proposal=c.get('repair_proposal',{})
+                    retained=proposal.get('repairContext')
+                    if retained is None and c.get('draft') is not None:
+                        retained=build_repair_context(c['draft'],proposal.get('request'))
+                    if retained is not None:
+                        content['repair_context']=present_repair_context(retained,content.get('candidate'),passages,c['sources'],c.get('semantic_feedback'))
+                    reviewed_context=c.get('semantic_repair_context')
+                    if reviewed_context is not None:
+                        joined=present_repair_context(reviewed_context['context'],reviewed_context['candidate'],passages,c['sources'],c.get('semantic_feedback'))
+                        joined['reviewed_candidate_hash']=reviewed_context['candidateHash']
+                        joined['reviewed_sources_sha256']=reviewed_context['sourcesSha256']
+                        content['reviewed_repair_context']=joined
+                    example=nonempty_shape_example(content.get('candidate'))
+                    if example is not None and not validate_report(resolve_report(example['report'],c['sources'],passages,strict=True),c['sources']):
+                        content['finalization']['nonempty_shape_example']=example
+                    else:
+                        content['finalization']['nonempty_shape_example_omitted']='No valid current claim/selector available; do not invent a reference.'
                 content['candidate']=reconstruction_candidate(content.get('candidate'))
                 content['synthesis_reconstruction']={'version':1,
                     'removed_draft_fields':['title','complete','summary','comparisons','recommendations','contradictions'],
                     'history_retained':False,
                     'authority':'Model-proposed reconstruction only; no support, source or approval flags establish acceptance.'}
                 content['finalization']['instruction']='Rebuild the existing full finish/report shape from the atomic candidate and synthesis_review cards. First correct every atomic claim against its selected passages. Adjacent offers are unselected context, not support: explicitly select them if needed for an antecedent or configuration, otherwise narrow the claim or record a gap. Then compose new comparisons and a useful conditional recommendation from corrected factual premises, keeping each alternative and its settings separate. Preserve supported material coverage and clearly labelled untested design proposals. No old synthesis is supplied or endorsed; no comparative property follows from mere mechanism documentation. Use 5-8 atomic material claims when sufficient, within the unchanged 10-entry evidence limit. Return no ledger or extra fields.'
+                if repair_context_enabled:
+                    content['synthesis_reconstruction']['repair_context_version']=1
+                    content['finalization']['instruction']='Rebuild the unchanged full finish/report shape. Atomic candidate and selected passages remain untrusted. repair_context preserves exact current nonclaim units, required shapes and per-claim source bindings; reviewed_repair_context separately preserves the reviewed candidate and original unit-specific findings across subsequent malformed attempts. Same indexes do not prove unchanged prose: findings refer to feedback_candidate_hash, not automatic support or a verdict about newly rewritten units. Repair malformed values as objects with text and nonempty existing claim_ids, never bare contradiction strings. The nonempty_shape_example illustrates syntax only, not a new finding. For every named alternative and factual clause, inspect the actual cited claim and its selected source; collective IDs are not proof for each alternative. Change the offending sentence itself or disclose its premise gap there. Preserve already separate supported attributions and useful conditional untested proposals while addressing other findings. Recheck the WHOLE replacement, including new comparisons, recommendations and gaps. Use current offered selectors only; adjacent offers must be explicitly selected if needed. No extra fields, new retrieval, invented IDs or acceptance flags.'
         extra=''
 
         if job['manifest'].get('collaboration',{}).get('supervisor','none')!='none':
@@ -452,6 +475,23 @@ class Worker:
         if stale:omissions.append('Stale read passages omitted because saved source hashes changed')
         while size()>196608 and history:history.pop(0)
         if len(history)<len(c['history'][-12:]):omissions.append('Older history omitted')
+        if repair_context_enabled:
+            # Prioritize exact correction units over duplicate source prefixes/windows.
+            while size()>196608 and catalog:
+                catalog.pop()
+                if 'Source catalog entries omitted' not in omissions:omissions.append('Source catalog entries omitted')
+            while size()>196608 and windows:
+                windows.pop();content['context_bounds']['read_windows_omitted']+=1
+                if window_gap not in omissions:omissions.append(window_gap)
+            if size()>196608 and 'nonempty_shape_example' in content.get('finalization',{}):
+                del content['finalization']['nonempty_shape_example']
+                content['finalization']['nonempty_shape_example_omitted']='Whole example omitted by payload bound; no partial example supplied.'
+            for name in ('repair_context','reviewed_repair_context'):
+                context=content.get(name)
+                while size()>196608 and context and context['units']:
+                    context['units'].pop();context['units_omitted']+=1
+                    note='Whole '+name+' units omitted by payload bound'
+                    if note not in omissions:omissions.append(note)
         if size()>196608 and content.get('synthesis_review') is not None:
             content['synthesis_review']=None
             omissions.append('Synthesis projection omitted; audit actual candidate and current offers')
@@ -469,6 +509,11 @@ class Worker:
                 history.clear()
                 if 'candidate' in content:content['candidate']=None
                 if support and 'synthesis_review' in content:content['synthesis_review']=None
+                if repair_context_enabled:
+                    content.pop('repair_context',None)
+                    content.pop('reviewed_repair_context',None)
+                    content.get('finalization',{}).pop('nonempty_shape_example',None)
+                    if 'Repair context/example omitted with citation selections; no stale bindings retained' not in omissions:omissions.append('Repair context/example omitted with citation selections; no stale bindings retained')
             passages.pop();content['context_bounds']['citation_passages_omitted']+=1
             if 'Citation selections omitted by bounded context' not in omissions:omissions.append('Citation selections omitted by bounded context')
         while size()>196608 and coverage:
@@ -563,7 +608,7 @@ class Worker:
                             request_ref={'operationId':job['id']+':'+str(c['step']-1)+':model',
                                 'requestSha256':review_digest(payload),'resultSha256':review_digest(result),
                                 'offersSha256':review_digest(offered)}
-                            proposal=build_repair_proposal(action['report'],c['sources'],offered,request_ref)
+                            proposal=build_repair_proposal(action['report'],c['sources'],offered,request_ref,context_version=job['manifest'].get('research_policy',{}).get('repairContextVersion',0))
                             data=review_encoded(proposal);name='repairs/'+str(c['step']-1)+'-'+review_digest(proposal)+'.json'
                             destination=self.store.job_dir(job['id'])/name
                             if destination.is_symlink() or (destination.exists() and destination.read_text()!=data):raise StateError('Repair proposal artifact conflict')

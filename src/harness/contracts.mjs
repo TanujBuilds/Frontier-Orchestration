@@ -28,7 +28,8 @@ const taskCeilingsInputSchema=objectSchema(Object.fromEntries(Object.entries(TAS
 ])));
 export const researchPolicySchema=objectSchema({version:{type:'integer',enum:[1,2]},finish:{type:'string',enum:['selectors_only']},discovery:{type:'string',enum:['search_required']}},['version','finish','discovery']);
 export const reviewedResearchPolicySchema=objectSchema({version:{const:3,type:'integer'},finish:{const:'selectors_only',type:'string'},discovery:{const:'search_required',type:'string'},review:objectSchema({version:{const:1,type:'integer'},role:{const:'independent_operator',type:'string'},maxRounds:{const:2,type:'integer'},maxRevisions:{const:1,type:'integer'},maxCorrectionModelCalls:{const:2,type:'integer'},rubricSha256:{type:'string',pattern:'^[a-f0-9]{64}$'}},['version','role','maxRounds','maxRevisions','maxCorrectionModelCalls','rubricSha256'])},['version','finish','discovery','review']);
-const researchPolicyInputSchema={anyOf:[researchPolicySchema,reviewedResearchPolicySchema]};
+export const repairResearchPolicySchema={...reviewedResearchPolicySchema,properties:{...reviewedResearchPolicySchema.properties,repairContextVersion:{const:1,type:'integer'}},required:[...reviewedResearchPolicySchema.required,'repairContextVersion']};
+const researchPolicyInputSchema={anyOf:[researchPolicySchema,reviewedResearchPolicySchema,repairResearchPolicySchema]};
 export const scopeInputSchema=objectSchema({seedUrls:stringsSchema,includeDomains:stringsSchema,excludeDomains:stringsSchema});
 export const goalInputSchema=objectSchema({
  submissionId:stringSchema,objective:stringSchema,acceptance:stringsSchema,mode:{...stringSchema,description:'Registered mode id; collaborative is the default.'},modeVersion:{type:'integer',minimum:1},environment:{type:'string',enum:['live','fixture']},scope:scopeInputSchema,researchPolicy:researchPolicySchema,
@@ -65,6 +66,7 @@ export class Registry {
   supportResearch.inputSchema.properties.researchPolicy.properties.version.enum=[2];
   this.capabilities.set('research@3',supportResearch);
   const reviewedResearch=clone(supportResearch);reviewedResearch.version=4;reviewedResearch.inputSchema.properties.researchPolicy=clone(reviewedResearchPolicySchema);this.capabilities.set('research@4',reviewedResearch);
+  const repairResearch=clone(reviewedResearch);repairResearch.version=5;repairResearch.inputSchema.properties.researchPolicy=clone(repairResearchPolicySchema);this.capabilities.set('research@5',repairResearch);
   for(const m of baseModes)this.registerMode(m);
  }
  registerMode(raw){
@@ -97,7 +99,8 @@ export function sourceScope(raw={}) {
 }
 export function normalizeResearchPolicy(raw){
  if(raw?.version===3){
-  keys(raw,['version','finish','discovery','review'],'research policy');const r=raw.review;
+  keys(raw,['version','finish','discovery','review','repairContextVersion'],'research policy');const r=raw.review;
+  if(Object.hasOwn(raw,'repairContextVersion')&&raw.repairContextVersion!==1)throw Error('Unsupported repair context version');
   keys(r,['version','role','maxRounds','maxRevisions','maxCorrectionModelCalls','rubricSha256'],'review policy');
   if(raw.finish!=='selectors_only'||raw.discovery!=='search_required'||r.version!==1||r.role!=='independent_operator'||r.maxRounds!==2||r.maxRevisions!==1||r.maxCorrectionModelCalls!==2||typeof r.rubricSha256!=='string'||!/^[a-f0-9]{64}$/.test(r.rubricSha256))throw Error('Unsupported independent review contract');
   return clone(raw);
@@ -127,7 +130,7 @@ export function normalizeGoal(raw,registry=new Registry()){
  if(mode.review!=='operator'&&limits.reviewAgentRuns)throw Error('Mode prohibits Codex review agents');
  let project=null;
  if(raw.project){keys(raw.project,['repo','baseCommit','readPaths','writePaths','checks'],'project');project=clone(raw.project);text(project.repo,'repository');if(!path.isAbsolute(project.repo))throw Error('Repository must be absolute');if(!/^[a-f0-9]{40}$/.test(project.baseCommit??''))throw Error('Invalid base commit');validatePermissions(project);}
- return {schema:1,environment,submissionId:identifier(raw.submissionId,'submissionId'),objective:text(raw.objective,'objective'),acceptance:strings(raw.acceptance,'acceptance'),project,mode,capabilities:registry.snapshot().capabilities.filter(c=>mode.capabilities.includes(c.id)&&c.version===(policy&&c.id==='research'?policy.version+1:1)),scope:sourceScope(raw.scope),limits,...(policy?{researchPolicy:policy}:{})};
+ return {schema:1,environment,submissionId:identifier(raw.submissionId,'submissionId'),objective:text(raw.objective,'objective'),acceptance:strings(raw.acceptance,'acceptance'),project,mode,capabilities:registry.snapshot().capabilities.filter(c=>mode.capabilities.includes(c.id)&&c.version===(policy&&c.id==='research'?(policy.repairContextVersion===1?5:policy.version+1):1)),scope:sourceScope(raw.scope),limits,...(policy?{researchPolicy:policy}:{})};
 }
 export function normalizeTask(raw,goal,registry=new Registry()) {
  keys(raw,['submissionId','kind','actor','objective','context','acceptance','dependsOn','priority','permissions','scope','limits','researchPolicy'],'task');

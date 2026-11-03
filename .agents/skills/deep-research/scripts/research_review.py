@@ -3,6 +3,7 @@ import copy
 import hashlib
 import json
 import re
+from research_repair_context import build_repair_context
 
 
 def encoded(value):
@@ -19,7 +20,12 @@ def closed(value, fields):
 
 
 def normalize_review_policy(policy):
-    closed(policy, ('version', 'finish', 'discovery', 'review'))
+    fields = ('version', 'finish', 'discovery', 'review')
+    if isinstance(policy, dict) and 'repairContextVersion' in policy:
+        fields += ('repairContextVersion',)
+        if type(policy['repairContextVersion']) is not int or policy['repairContextVersion'] != 1:
+            raise ValueError('unsupported repair context version')
+    closed(policy, fields)
     if type(policy['version']) is not int or policy['version'] != 3 or policy['finish'] != 'selectors_only' or policy['discovery'] != 'search_required':
         raise ValueError('unsupported reviewed research policy')
     r = policy['review']
@@ -40,7 +46,7 @@ def policy_parameters(policy):
             'catalog_version': 2 if version in (2, 3) else 1, 'requires_review': version == 3}
 
 
-def build_repair_proposal(raw_report, sources, offered, request_ref):
+def build_repair_proposal(raw_report, sources, offered, request_ref, *, context_version=0):
     """Salvage bounded provenance-valid claim records, never approve a report."""
     from research_passages import resolve_report
     from research_protocol import validate_report
@@ -79,8 +85,13 @@ def build_repair_proposal(raw_report, sources, offered, request_ref):
             if isinstance(gap,str) and len(gap)<=3000:
                 proposed = {**projection,'unanswered':projection['unanswered']+[gap]}
                 if len(encoded(proposed).encode())<=32768: projection=proposed
-    return {'version':1,'request':copy.deepcopy(request_ref),'projection':projection,
-            'reportErrors':errors[:15], 'claimErrors':bad,'omittedClaims':omitted+max(0,len(claims)-100)}
+    result = {'version':1,'request':copy.deepcopy(request_ref),'projection':projection,
+              'reportErrors':errors[:15], 'claimErrors':bad,'omittedClaims':omitted+max(0,len(claims)-100)}
+    if context_version == 1:
+        result['repairContext'] = build_repair_context(raw_report, request_ref)
+    elif context_version != 0:
+        raise ValueError('unsupported repair context version')
+    return result
 
 
 class ReviewLifecycle:
@@ -229,6 +240,14 @@ class ReviewLifecycle:
                 s['correctionAllowance']=min(2,available)
                 state.update(next='model',phase='repair',draft=None,errors=[],reason=None)
                 state['semantic_feedback']={'candidateHash':candidate_hash,'rubricSha256':rubric_hash,'findings':copy.deepcopy(findings)}
+                if job['manifest']['research_policy'].get('repairContextVersion') == 1:
+                    packet = self._packet(job)
+                    reviewed_report = json.loads(packet['canonical']['report'])
+                    state['semantic_repair_context'] = {
+                        'candidateHash': candidate_hash, 'sourcesSha256': d['sourcesSha256'],
+                        'context': build_repair_context(reviewed_report, d['request']),
+                        'candidate': {'claims': [{k: copy.deepcopy(c[k]) for k in ('id', 'kind', 'text', 'evidence')}
+                                                 for c in reviewed_report['claims']]}}
                 s['active']=None
             result={'jobId':job_id,'ticketId':ticket_id,'decision':decision,'candidateHash':candidate_hash,'status':'queued'}
             ticket['result']=result
