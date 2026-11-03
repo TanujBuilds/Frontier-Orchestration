@@ -1,12 +1,22 @@
 import {createHash} from 'node:crypto';
 import {digest} from './contracts.mjs';
+import {verifyTargetedRepair} from './research-targeted-repair.mjs';
 const sha=s=>createHash('sha256').update(s).digest('hex');
 const hashPattern=/^[a-f0-9]{64}$/;
 const closed=(value,fields)=>value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).length===fields.length&&fields.every(k=>Object.hasOwn(value,k));
 export function verifyDescriptor(d){
- if(!closed(d,['version','jobId','manifestHash','rubricSha256','reportSha256','sourcesSha256','offersSha256','request','units','candidateHash'])||d.version!==1||typeof d.jobId!=='string'||!d.jobId.length||d.jobId.length>200||['manifestHash','rubricSha256','reportSha256','sourcesSha256','offersSha256','candidateHash'].some(k=>typeof d[k]!=='string'||!hashPattern.test(d[k]))||!closed(d.request,['operationId','requestSha256','resultSha256','offersSha256'])||typeof d.request.operationId!=='string'||!d.request.operationId.length||d.request.operationId.length>200||['requestSha256','resultSha256','offersSha256'].some(k=>typeof d.request[k]!=='string'||!hashPattern.test(d.request[k]))||d.request.offersSha256!==d.offersSha256||!Array.isArray(d.units)||!d.units.length||d.units.length>1000||d.units.some(u=>typeof u!=='string'||!u.length||u.length>200)||new Set(d.units).size!==d.units.length)throw Error('Invalid complete research descriptor/request lineage');
+ const fields=['version','jobId','manifestHash','rubricSha256','reportSha256','sourcesSha256','offersSha256','request','units','candidateHash'];
+ if(d?.version===2)fields.push('assembly');
+ if(!closed(d,fields)||![1,2].includes(d.version)||typeof d.jobId!=='string'||!d.jobId.length||d.jobId.length>200||['manifestHash','rubricSha256','reportSha256','sourcesSha256','offersSha256','candidateHash'].some(k=>typeof d[k]!=='string'||!hashPattern.test(d[k]))||!closed(d.request,['operationId','requestSha256','resultSha256','offersSha256'])||typeof d.request.operationId!=='string'||!d.request.operationId.length||d.request.operationId.length>200||['requestSha256','resultSha256','offersSha256'].some(k=>typeof d.request[k]!=='string'||!hashPattern.test(d.request[k]))||!Array.isArray(d.units)||!d.units.length||d.units.length>1000||d.units.some(u=>typeof u!=='string'||!u.length||u.length>200)||new Set(d.units).size!==d.units.length)throw Error('Invalid complete research descriptor/request lineage');
+ if(d.version===1&&d.request.offersSha256!==d.offersSha256)throw Error('Invalid v1 request catalog equality');
+ if(d.version===2&&(!closed(d.assembly,['version','baseCandidateHash','planSha256','patchSha256','receiptSha256','bundleSha256'])||d.assembly.version!==1||['baseCandidateHash','planSha256','patchSha256','receiptSha256','bundleSha256'].some(k=>typeof d.assembly[k]!=='string'||!hashPattern.test(d.assembly[k]))))throw Error('Invalid targeted assembly binding');
  const {candidateHash,...base}=d;if(candidateHash!==digest(base))throw Error('Research descriptor checksum mismatch');
  return d;
+}
+function descriptorPolicy(d,task){
+ const targeted=task.spec.researchPolicy?.correctionStrategy==='targeted_v1';
+ if(d.version===2&&!targeted)throw Error('Targeted descriptor forbidden by policy');
+ if(targeted&&task.researchReviewTickets?.some(t=>t.submissionIntent?.state==='acknowledged'&&t.submissionIntent.input?.decision==='revise')&&d.version!==2)throw Error('Targeted replacement requires descriptor v2');
 }
 function reportUnits(raw){
  const report=JSON.parse(raw);
@@ -18,10 +28,12 @@ function reportUnits(raw){
 }
 export function verifyProposal(packet,task){
  if(Buffer.byteLength(JSON.stringify(packet))>32*1024*1024)throw Error('Research proposal exceeds bound');
- const d=verifyDescriptor(packet?.descriptor);
+ const d=verifyDescriptor(packet?.descriptor);descriptorPolicy(d,task);
+ if(!closed(packet,d.version===2?['descriptor','canonical','repair']:['descriptor','canonical'])||!closed(packet.canonical,['report','sources','offers']))throw Error('Invalid closed research proposal');
  if(d.jobId!==task.checkpoint.remoteJobId||d.manifestHash!==task.checkpoint.remoteHash||d.rubricSha256!==task.spec.researchPolicy.review.rubricSha256)throw Error('Research proposal identity mismatch');
  for(const [key,hash]of [['report','reportSha256'],['sources','sourcesSha256'],['offers','offersSha256']])if(typeof packet.canonical?.[key]!=='string'||sha(packet.canonical[key])!==d[hash])throw Error('Research proposal checksum mismatch');
  if(digest(reportUnits(packet.canonical.report))!==digest(d.units))throw Error('Research descriptor does not cover exact canonical report units');
+ if(d.version===2)verifyTargetedRepair(packet,task);
  return packet;
 }
 // Local coordinator records are authority; exported receipts only corroborate them.
@@ -44,7 +56,7 @@ export function verifySubmitAck(result,intent){
 export function verifyLocalAcceptance(task,getReviewer){
  const a=task.researchReviewAcceptance,ticket=task.researchReviewTickets?.find(t=>t.id===a?.ticketId),intent=ticket?.submissionIntent,d=a?.descriptor;
  if(!a||a.version!==1||a.state!=='accepted'||a.goalId!==task.goalId||a.taskId!==task.id||a.jobId!==task.checkpoint.remoteJobId||a.manifestHash!==task.checkpoint.remoteHash||d?.jobId!==a.jobId||d?.manifestHash!==a.manifestHash||d?.rubricSha256!==task.spec.researchPolicy.review.rubricSha256||a.input?.decision!=='accept'||a.input.action!=='submit'||a.input.taskId!==task.id||a.input.ticketId!==a.ticketId||a.input.candidateHash!==d?.candidateHash||a.input.rubricHash!==d?.rubricSha256||!ticket||!intent||intent.state!=='acknowledged')throw Error('Missing authoritative local research acceptance');
- verifyDescriptor(d);
+ verifyDescriptor(d);descriptorPolicy(d,task);
  const {candidateHash,...base}=d;if(candidateHash!==digest(base)||!equal(a.descriptor,intent.descriptor)||!equal(a.input,intent.input)||a.inputHash!==digest({input:a.input,key:a.submissionKey})||a.inputHash!==intent.inputHash||a.nativeReservationId!==ticket.nativeReservationId||a.nativeReservationId!==intent.nativeReservationId||a.ticketId!==intent.ticketId||a.submissionKey!==intent.submissionKey||a.intentAt!==intent.intentAt||a.goalId!==intent.goalId||a.taskId!==intent.taskId||a.jobId!==intent.jobId||a.manifestHash!==intent.manifestHash||ticket.candidateHash!==candidateHash||ticket.rubricSha256!==d.rubricSha256||ticket.submissionHash!==a.inputHash||!equal(ticket.descriptor,d)||!Number.isFinite(a.intentAt)||!Number.isFinite(a.acknowledgedAt)||a.intentAt>=task.deadline||a.acknowledgedAt>=task.deadline||a.acknowledgedAt<a.intentAt)throw Error('Local research acceptance binding mismatch');
  verifyReviewVerdict(a.input,d);verifySubmitAck(a.acknowledgment,a);
  if(!equal(a.acknowledgment,ticket.submissionResult)||!equal(a.acknowledgment,intent.acknowledgment))throw Error('Local research acknowledgment mismatch');
@@ -59,14 +71,16 @@ export function verifyRemoteReviewEvidence(receipt,task){
  const {candidateHash,...base}=d;if(digest(base)!==candidateHash)throw Error('Review binding checksum mismatch');
  if(!Number.isFinite(receipt.semantic_finalization_intent_at)||receipt.semantic_finalization_intent_at>=receipt.deadline)throw Error('No timely research finalization intent');
  if(q.report_sha256!==d.reportSha256||q.source_artifact_sha256!==d.sourcesSha256)throw Error('Accepted report/source artifact binding mismatch');
- verifyDescriptor(d);
+ verifyDescriptor(d);descriptorPolicy(d,task);
+ if(d.version===1&&Object.hasOwn(receipt,'targetedRepair'))throw Error('Unexpected targeted receipt metadata');
  const tickets=receipt.semantic_reviews;
  if(!Array.isArray(tickets)||tickets.length>2||!tickets.some(t=>t.binding?.candidateHash===candidateHash&&t.submission?.decision==='accept'&&t.submission.rubricSha256===d.rubricSha256&&digest(t.submission.coverage?.slice().sort())===digest(d.units.slice().sort())&&!t.submission.findings.length))throw Error('Missing full replacement review coverage');
  return d;
 }
-export function verifyReviewedReceipt(receipt,task,getReviewer){
+export function verifyReviewedReceipt(receipt,task,getReviewer,proofPacket){
  const d=verifyRemoteReviewEvidence(receipt,task),tickets=receipt.semantic_reviews;
  const a=verifyLocalAcceptance(task,getReviewer);
+ if(d.version===2){if(!proofPacket||!equal(proofPacket.descriptor,d)||!equal(receipt.targetedRepair,proofPacket.repair))throw Error('Missing/mismatched local targeted proof');verifyProposal(proofPacket,task);}
  const deadline=Math.floor(task.deadline/1000);
  if(receipt.job_id!==a.jobId||receipt.manifest_hash!==a.manifestHash||receipt.status!=='completed'||!['live','fixture'].includes(task.checkpoint.manifest?.mode)||receipt.mode!==task.checkpoint.manifest.mode||receipt.deadline!==deadline||task.checkpoint.manifest.not_after!==deadline||receipt.semantic_finalization_intent_at>=deadline)throw Error('Research receipt envelope identity/original deadline mismatch');
  if(!equal(d,a.descriptor))throw Error('Returned candidate differs from authoritative local acceptance');

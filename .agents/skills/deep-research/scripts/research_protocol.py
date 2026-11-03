@@ -25,16 +25,27 @@ FINISH_ACTION_EXAMPLE = {'action':'finish','report':{
  'unanswered':['The available saved evidence does not yet answer the approved question.']}}
 
 
-def parse_action(raw):
+def parse_action(raw, *, targeted=False):
     if isinstance(raw, str):
         if len(raw) > 150000:
             raise ValueError('action exceeds size limit')
         raw = raw.strip()
         if raw.startswith('```') and raw.endswith('```'):
             raw = re.sub(r'^```(?:json)?\s*', '', raw)[:-3].strip()
-        raw = json.loads(raw)
+        if targeted:
+            def pairs(rows):
+                result={}
+                for key,value in rows:
+                    if key in result:raise ValueError('duplicate targeted JSON field')
+                    result[key]=value
+                return result
+            raw=json.loads(raw,object_pairs_hook=pairs)
+        else:raw = json.loads(raw)
     if not isinstance(raw, dict):
         raise ValueError('action must be an object')
+    if targeted:
+        from research_targeted_repair import parse_patch
+        return parse_patch(raw)
     action = raw.get('action')
     allowed = {'search':{'action','query'}, 'read':{'action','url','source_id','start','length'},
                'finish':{'action','report'}, 'ask_supervisor':{'action','question'}}

@@ -1,3 +1,4 @@
+import {readTargetedProof} from './research-targeted-repair.mjs';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -97,7 +98,7 @@ export class ResearchAdapter {
     if(task.spec.researchPolicy?.version!==3)throw Error('Unexpected reviewed research state');
     const packet=verifyProposal(await this.rpc({command:'proposal_export',job:cp.remoteJobId}),task),dir=path.join(c.store.root,'research-proposals',task.id);await mkdir(dir,{recursive:true});
     const file=path.join(dir,packet.descriptor.candidateHash+'.json'),data=JSON.stringify(packet);let old;try{const st=await lstat(file);if(st.isSymbolicLink())throw Error('Unsafe proposal file');old=await readFile(file,'utf8');}catch(e){if(e.code!=='ENOENT')throw e;}if(old!==undefined&&old!==data)throw Error('Proposal file conflict');if(old===undefined)await writeFile(file,data,{flag:'wx'});
-    const boundary=c.boundary(task.id,{...cp,nextPollAt:0,reviewCandidate:packet.descriptor},owner);if(boundary.status!=='running')return boundary;
+    const boundary=c.boundary(task.id,{...cp,nextPollAt:0,reviewCandidate:packet.descriptor,...(packet.descriptor.version===2?{targetedProof:{candidateHash:packet.descriptor.candidateHash,sha256:sha(data)}}:{})},owner);if(boundary.status!=='running')return boundary;
     c.store.tx(()=>{const current=c.owned(task.id,owner);current.status='awaiting_review';current.owner=null;current.result={proposalFile:file,proposalHash:sha(data),independentReview:'pending',reviewCandidate:packet.descriptor};c.store.put('task',current);c.emit('research.awaiting_review',task.goalId,task.id,packet.descriptor);});return c.getTask(task.id);
    }
    if(['awaiting_supervisor','awaiting_user'].includes(remote.status)){
@@ -113,7 +114,7 @@ export class ResearchAdapter {
     if(!collected.checksums_verified)throw Error('Research collection lacked verified checksums');
     let reviewed=null;
     if(task.spec.researchPolicy?.version===3&&remote.status==='completed'){
-     const receipt=JSON.parse(await readFile(path.join(collected.directory,'receipt.json'),'utf8'));reviewed=verifyReviewedReceipt(receipt,task,id=>c.store.maybe('reviewer',id));
+     const receipt=JSON.parse(await readFile(path.join(collected.directory,'receipt.json'),'utf8'));const proof=task.checkpoint.reviewCandidate?.version===2?await readTargetedProof(c.store.root,task):undefined;reviewed=verifyReviewedReceipt(receipt,task,id=>c.store.maybe('reviewer',id),proof);
      const [report,sources]=await Promise.all(['claims.json','sources.json'].map(file=>readFile(path.join(collected.directory,file))));verifyAcceptedArtifacts(reviewed,report,sources);
     }
     const done=c.completeTask(task.id,{directory:collected.directory,checksumsVerified:true,remoteJobId:cp.remoteJobId,receiptStatus:remote.status,independentReview:reviewed?'accepted':'not_requested',...(reviewed?{reviewBinding:reviewed}:{})},owner);

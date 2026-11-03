@@ -1,0 +1,409 @@
+{
+  "packet": {
+    "descriptor": {
+      "version": 2,
+      "jobId": "fixture-job",
+      "manifestHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "rubricSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "reportSha256": "62cf1700bc89e3cf87fff747196903766a4a2248ba56e65f4d3322d7e9725d4e",
+      "sourcesSha256": "d8594e95ff17a315d991c25d5df7630c81fe72178ed63ab7f487b456d54cb080",
+      "offersSha256": "165d69649d552810aa76dbceafc42c43d28efd8ecf281fd0f786b1beea2a6aa6",
+      "request": {
+        "operationId": "fixture-job:2:model",
+        "requestSha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "resultSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "offersSha256": "dea0e0b441185d0343bac4a96889f0e7354fec35d5ced1b62d4be0e89f6687d1"
+      },
+      "units": [
+        "title",
+        "claims:C1",
+        "claims:C2",
+        "summary:0",
+        "recommendations:0"
+      ],
+      "candidateHash": "dc5a411bd67aae36e741296157af4e66fe44b85cd49415de7320a22d149b4ab9",
+      "assembly": {
+        "version": 1,
+        "baseCandidateHash": "f61a68f41366fe016bd893b3d7fed1746d75758c8685590db08ab8b67dcca116",
+        "planSha256": "1155e2607ee3e75b955467c07e0148a6a8166faaa639ecb5620e72863e9bc4e7",
+        "patchSha256": "42c55049931c5fd9cc93c8f8d4f8f622cf9ac8ef7f53df81b773d1b9d559d5d2",
+        "receiptSha256": "090c19919b654fe4ae9e7acc556e7f177da7cd0dfbc40a669f3af469ce5e3ba9",
+        "bundleSha256": "dc4af3365ca9672f67c327b3d1c58a0d4a8c2fb0397f3a6c9833898b7c16edbd"
+      }
+    },
+    "canonical": {
+      "report": "{\"claims\":[{\"evidence\":[{\"quote\":\"New premise applies only after the grant is committed.\",\"selection\":{\"end\":114,\"start\":60,\"text_sha256\":\"3e6982cd7a2ec79689800abb93483fbf86e2dd8b858f082c15a871ddf3257883\"},\"source_id\":\"S001\"}],\"id\":\"C1\",\"kind\":\"fact\",\"text\":\"New premise applies only after the grant is committed.\"},{\"evidence\":[{\"quote\":\"😀 Old premise remains conditional while its lease is valid.\\n\",\"selection\":{\"end\":60,\"start\":0,\"text_sha256\":\"3e6982cd7a2ec79689800abb93483fbf86e2dd8b858f082c15a871ddf3257883\"},\"source_id\":\"S001\"}],\"id\":\"C2\",\"kind\":\"fact\",\"text\":\"Retained independently reviewed unit.\"}],\"comparisons\":[],\"complete\":true,\"contradictions\":[],\"recommendations\":[{\"claim_ids\":[\"C1\"],\"text\":\"Use entries while valid.\"}],\"summary\":[\"C1\"],\"title\":\"Synthetic conditional premise\",\"unanswered\":[]}",
+      "sources": "{\"S001\":{\"text\":\"😀 Old premise remains conditional while its lease is valid.\\nNew premise applies only after the grant is committed.\",\"url\":\"https://fixture.invalid/premise\"}}",
+      "offers": "[{\"catalog_version\":2,\"complete_unit\":true,\"end\":60,\"source_id\":\"S001\",\"start\":0,\"text\":\"😀 Old premise remains conditional while its lease is valid.\\n\",\"text_sha256\":\"3e6982cd7a2ec79689800abb93483fbf86e2dd8b858f082c15a871ddf3257883\"},{\"catalog_version\":2,\"complete_unit\":true,\"end\":114,\"source_id\":\"S001\",\"start\":60,\"text\":\"New premise applies only after the grant is committed.\",\"text_sha256\":\"3e6982cd7a2ec79689800abb93483fbf86e2dd8b858f082c15a871ddf3257883\"}]"
+    },
+    "repair": {
+      "version": 1,
+      "base": {
+        "descriptor": {
+          "version": 1,
+          "jobId": "fixture-job",
+          "manifestHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "rubricSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "reportSha256": "36ef188919d8368caae8a800f59755b039b95a9e52d1c012da6da2aa32e01f2e",
+          "sourcesSha256": "d8594e95ff17a315d991c25d5df7630c81fe72178ed63ab7f487b456d54cb080",
+          "offersSha256": "046e1b48817148117b063a23788bfdc5b8caeb40378d6a2b0d4a8bd064182585",
+          "request": {
+            "operationId": "fixture-job:1:model",
+            "requestSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "resultSha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "offersSha256": "046e1b48817148117b063a23788bfdc5b8caeb40378d6a2b0d4a8bd064182585"
+          },
+          "units": [
+            "title",
+            "claims:C1",
+            "claims:C2",
+            "summary:0",
+            "recommendations:0"
+          ],
+          "candidateHash": "f61a68f41366fe016bd893b3d7fed1746d75758c8685590db08ab8b67dcca116"
+        },
+        "report": "{\"claims\":[{\"evidence\":[{\"quote\":\"😀 Old premise remains conditional while its lease is valid.\\n\",\"selection\":{\"end\":60,\"start\":0,\"text_sha256\":\"3e6982cd7a2ec79689800abb93483fbf86e2dd8b858f082c15a871ddf3257883\"},\"source_id\":\"S001\"}],\"id\":\"C1\",\"kind\":\"fact\",\"text\":\"Entries always remain readable.\"},{\"evidence\":[{\"quote\":\"😀 Old premise remains conditional while its lease is valid.\\n\",\"selection\":{\"end\":60,\"start\":0,\"text_sha256\":\"3e6982cd7a2ec79689800abb93483fbf86e2dd8b858f082c15a871ddf3257883\"},\"source_id\":\"S001\"}],\"id\":\"C2\",\"kind\":\"fact\",\"text\":\"Retained independently reviewed unit.\"}],\"comparisons\":[],\"complete\":true,\"contradictions\":[],\"recommendations\":[{\"claim_ids\":[\"C1\"],\"text\":\"Use entries while valid.\"}],\"summary\":[\"C1\"],\"title\":\"Synthetic conditional premise\",\"unanswered\":[]}",
+        "offers": "[{\"catalog_version\":2,\"complete_unit\":true,\"end\":60,\"source_id\":\"S001\",\"start\":0,\"text\":\"😀 Old premise remains conditional while its lease is valid.\\n\",\"text_sha256\":\"3e6982cd7a2ec79689800abb93483fbf86e2dd8b858f082c15a871ddf3257883\"}]"
+      },
+      "plan": {
+        "version": 1,
+        "baseCandidateHash": "f61a68f41366fe016bd893b3d7fed1746d75758c8685590db08ab8b67dcca116",
+        "baseDescriptorSha256": "a3e1543f34f1efd390bf1def7dc4dfb64dbc25d2b182ae2ad2fec43bc9206291",
+        "baseReportSha256": "36ef188919d8368caae8a800f59755b039b95a9e52d1c012da6da2aa32e01f2e",
+        "sourcesSha256": "d8594e95ff17a315d991c25d5df7630c81fe72178ed63ab7f487b456d54cb080",
+        "offersSha256": "046e1b48817148117b063a23788bfdc5b8caeb40378d6a2b0d4a8bd064182585",
+        "rubricSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "review": {
+          "ticketId": "ticket-A",
+          "submission": {
+            "ticketId": "ticket-A",
+            "candidateHash": "f61a68f41366fe016bd893b3d7fed1746d75758c8685590db08ab8b67dcca116",
+            "rubricSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "decision": "revise",
+            "findings": [
+              {
+                "unit": "claims:C1",
+                "code": "lost_condition",
+                "message": "Preserve the conditional premise in this claim itself.",
+                "evidence": [
+                  {
+                    "source_id": "S001",
+                    "text_sha256": "3e6982cd7a2ec79689800abb93483fbf86e2dd8b858f082c15a871ddf3257883",
+                    "start": 0,
+                    "end": 60
+                  }
+                ]
+              }
+            ],
+            "coverage": [
+              "title",
+              "claims:C1",
+              "claims:C2",
+              "summary:0",
+              "recommendations:0"
+            ],
+            "key": "submit-A"
+          }
+        },
+        "units": [
+          {
+            "unit": "title",
+            "beforeSha256": "052484df8e5337fe51089ff6c198e87f79fe0573d0a955030fa9be8394c1792d"
+          },
+          {
+            "unit": "claims:C1",
+            "beforeSha256": "6ccf6a794b922f06415a6ac996eb01c8586e99317fbe63f2bd5af0978ef20f98"
+          },
+          {
+            "unit": "claims:C2",
+            "beforeSha256": "4a82e285fca8d1d2f06ec904ffb8dfac321109e2a3a09f32318eec03d8ce7937"
+          },
+          {
+            "unit": "summary:0",
+            "beforeSha256": "2ff9633c4dc1451be7f900cce470abcb0a24b167f37374bcc6f587491224f634"
+          },
+          {
+            "unit": "recommendations:0",
+            "beforeSha256": "6e7bae603d9ae5ad0d50060ec20be41abd94a8084247d99b61125d0849dd8cee"
+          }
+        ],
+        "required": [
+          "claims:C1"
+        ],
+        "summaries": [],
+        "edges": [
+          {
+            "from": "claims:C1",
+            "to": "recommendations:0"
+          },
+          {
+            "from": "claims:C1",
+            "to": "summary:0"
+          }
+        ],
+        "affected": [
+          "claims:C1",
+          "recommendations:0",
+          "summary:0"
+        ]
+      },
+      "patch": {
+        "action": "repair",
+        "base_candidate_hash": "f61a68f41366fe016bd893b3d7fed1746d75758c8685590db08ab8b67dcca116",
+        "plan_sha256": "1155e2607ee3e75b955467c07e0148a6a8166faaa639ecb5620e72863e9bc4e7",
+        "replacements": [
+          {
+            "unit": "claims:C1",
+            "before_sha256": "6ccf6a794b922f06415a6ac996eb01c8586e99317fbe63f2bd5af0978ef20f98",
+            "value": {
+              "evidence": [
+                {
+                  "source_id": "S001",
+                  "text_sha256": "3e6982cd7a2ec79689800abb93483fbf86e2dd8b858f082c15a871ddf3257883",
+                  "start": 60,
+                  "end": 114
+                }
+              ],
+              "id": "C1",
+              "kind": "fact",
+              "text": "New premise applies only after the grant is committed."
+            }
+          }
+        ],
+        "checked_units": [
+          {
+            "unit": "summary:0",
+            "before_sha256": "2ff9633c4dc1451be7f900cce470abcb0a24b167f37374bcc6f587491224f634"
+          },
+          {
+            "unit": "recommendations:0",
+            "before_sha256": "6e7bae603d9ae5ad0d50060ec20be41abd94a8084247d99b61125d0849dd8cee"
+          }
+        ],
+        "cannot_repair": []
+      },
+      "correctionOffers": "[{\"catalog_version\":2,\"complete_unit\":true,\"end\":114,\"source_id\":\"S001\",\"start\":60,\"text\":\"New premise applies only after the grant is committed.\",\"text_sha256\":\"3e6982cd7a2ec79689800abb93483fbf86e2dd8b858f082c15a871ddf3257883\"}]",
+      "receipt": {
+        "version": 1,
+        "baseCandidateHash": "f61a68f41366fe016bd893b3d7fed1746d75758c8685590db08ab8b67dcca116",
+        "planSha256": "1155e2607ee3e75b955467c07e0148a6a8166faaa639ecb5620e72863e9bc4e7",
+        "patchSha256": "42c55049931c5fd9cc93c8f8d4f8f622cf9ac8ef7f53df81b773d1b9d559d5d2",
+        "request": {
+          "operationId": "fixture-job:2:model",
+          "requestSha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "resultSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "offersSha256": "dea0e0b441185d0343bac4a96889f0e7354fec35d5ced1b62d4be0e89f6687d1"
+        },
+        "reportSha256": "62cf1700bc89e3cf87fff747196903766a4a2248ba56e65f4d3322d7e9725d4e",
+        "sourcesSha256": "d8594e95ff17a315d991c25d5df7630c81fe72178ed63ab7f487b456d54cb080",
+        "offersSha256": "165d69649d552810aa76dbceafc42c43d28efd8ecf281fd0f786b1beea2a6aa6",
+        "retained": [
+          {
+            "unit": "claims:C2",
+            "sha256": "4a82e285fca8d1d2f06ec904ffb8dfac321109e2a3a09f32318eec03d8ce7937"
+          },
+          {
+            "unit": "recommendations:0",
+            "sha256": "6e7bae603d9ae5ad0d50060ec20be41abd94a8084247d99b61125d0849dd8cee"
+          },
+          {
+            "unit": "summary:0",
+            "sha256": "2ff9633c4dc1451be7f900cce470abcb0a24b167f37374bcc6f587491224f634"
+          },
+          {
+            "unit": "title",
+            "sha256": "052484df8e5337fe51089ff6c198e87f79fe0573d0a955030fa9be8394c1792d"
+          }
+        ],
+        "changed": [
+          {
+            "unit": "claims:C1",
+            "beforeSha256": "6ccf6a794b922f06415a6ac996eb01c8586e99317fbe63f2bd5af0978ef20f98",
+            "afterSha256": "4e7e2882fc39ef9576febe108ed588ca62d863712faf98dc0ac77bc7bd464a98"
+          }
+        ],
+        "rechecked": [
+          {
+            "unit": "recommendations:0",
+            "beforeSha256": "6e7bae603d9ae5ad0d50060ec20be41abd94a8084247d99b61125d0849dd8cee"
+          },
+          {
+            "unit": "summary:0",
+            "beforeSha256": "2ff9633c4dc1451be7f900cce470abcb0a24b167f37374bcc6f587491224f634"
+          }
+        ]
+      }
+    }
+  },
+  "task": {
+    "id": "fixture-task",
+    "goalId": "fixture-goal",
+    "deadline": 900000,
+    "spec": {
+      "researchPolicy": {
+        "version": 3,
+        "finish": "selectors_only",
+        "discovery": "search_required",
+        "repairContextVersion": 1,
+        "correctionStrategy": "targeted_v1",
+        "review": {
+          "version": 1,
+          "role": "independent_operator",
+          "maxRounds": 2,
+          "maxRevisions": 1,
+          "maxCorrectionModelCalls": 2,
+          "rubricSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      }
+    },
+    "checkpoint": {
+      "remoteJobId": "fixture-job",
+      "remoteHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "reviewCandidate": {
+        "version": 2,
+        "jobId": "fixture-job",
+        "manifestHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "rubricSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reportSha256": "62cf1700bc89e3cf87fff747196903766a4a2248ba56e65f4d3322d7e9725d4e",
+        "sourcesSha256": "d8594e95ff17a315d991c25d5df7630c81fe72178ed63ab7f487b456d54cb080",
+        "offersSha256": "165d69649d552810aa76dbceafc42c43d28efd8ecf281fd0f786b1beea2a6aa6",
+        "request": {
+          "operationId": "fixture-job:2:model",
+          "requestSha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "resultSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "offersSha256": "dea0e0b441185d0343bac4a96889f0e7354fec35d5ced1b62d4be0e89f6687d1"
+        },
+        "units": [
+          "title",
+          "claims:C1",
+          "claims:C2",
+          "summary:0",
+          "recommendations:0"
+        ],
+        "candidateHash": "dc5a411bd67aae36e741296157af4e66fe44b85cd49415de7320a22d149b4ab9",
+        "assembly": {
+          "version": 1,
+          "baseCandidateHash": "f61a68f41366fe016bd893b3d7fed1746d75758c8685590db08ab8b67dcca116",
+          "planSha256": "1155e2607ee3e75b955467c07e0148a6a8166faaa639ecb5620e72863e9bc4e7",
+          "patchSha256": "42c55049931c5fd9cc93c8f8d4f8f622cf9ac8ef7f53df81b773d1b9d559d5d2",
+          "receiptSha256": "090c19919b654fe4ae9e7acc556e7f177da7cd0dfbc40a669f3af469ce5e3ba9",
+          "bundleSha256": "dc4af3365ca9672f67c327b3d1c58a0d4a8c2fb0397f3a6c9833898b7c16edbd"
+        }
+      }
+    },
+    "researchReviewTickets": [
+      {
+        "id": "ticket-A",
+        "goalId": "fixture-goal",
+        "taskId": "fixture-task",
+        "jobId": "fixture-job",
+        "manifestHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "descriptor": {
+          "version": 1,
+          "jobId": "fixture-job",
+          "manifestHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "rubricSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "reportSha256": "36ef188919d8368caae8a800f59755b039b95a9e52d1c012da6da2aa32e01f2e",
+          "sourcesSha256": "d8594e95ff17a315d991c25d5df7630c81fe72178ed63ab7f487b456d54cb080",
+          "offersSha256": "046e1b48817148117b063a23788bfdc5b8caeb40378d6a2b0d4a8bd064182585",
+          "request": {
+            "operationId": "fixture-job:1:model",
+            "requestSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "resultSha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "offersSha256": "046e1b48817148117b063a23788bfdc5b8caeb40378d6a2b0d4a8bd064182585"
+          },
+          "units": [
+            "title",
+            "claims:C1",
+            "claims:C2",
+            "summary:0",
+            "recommendations:0"
+          ],
+          "candidateHash": "f61a68f41366fe016bd893b3d7fed1746d75758c8685590db08ab8b67dcca116"
+        },
+        "nativeReservationId": "reviewer-A",
+        "submissionIntent": {
+          "state": "acknowledged",
+          "goalId": "fixture-goal",
+          "taskId": "fixture-task",
+          "jobId": "fixture-job",
+          "manifestHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "descriptor": {
+            "version": 1,
+            "jobId": "fixture-job",
+            "manifestHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "rubricSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "reportSha256": "36ef188919d8368caae8a800f59755b039b95a9e52d1c012da6da2aa32e01f2e",
+            "sourcesSha256": "d8594e95ff17a315d991c25d5df7630c81fe72178ed63ab7f487b456d54cb080",
+            "offersSha256": "046e1b48817148117b063a23788bfdc5b8caeb40378d6a2b0d4a8bd064182585",
+            "request": {
+              "operationId": "fixture-job:1:model",
+              "requestSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+              "resultSha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+              "offersSha256": "046e1b48817148117b063a23788bfdc5b8caeb40378d6a2b0d4a8bd064182585"
+            },
+            "units": [
+              "title",
+              "claims:C1",
+              "claims:C2",
+              "summary:0",
+              "recommendations:0"
+            ],
+            "candidateHash": "f61a68f41366fe016bd893b3d7fed1746d75758c8685590db08ab8b67dcca116"
+          },
+          "ticketId": "ticket-A",
+          "nativeReservationId": "reviewer-A",
+          "submissionKey": "submit-A",
+          "input": {
+            "action": "submit",
+            "taskId": "fixture-task",
+            "ticketId": "ticket-A",
+            "candidateHash": "f61a68f41366fe016bd893b3d7fed1746d75758c8685590db08ab8b67dcca116",
+            "rubricHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "decision": "revise",
+            "findings": [
+              {
+                "unit": "claims:C1",
+                "code": "lost_condition",
+                "message": "Preserve the conditional premise in this claim itself.",
+                "evidence": [
+                  {
+                    "source_id": "S001",
+                    "text_sha256": "3e6982cd7a2ec79689800abb93483fbf86e2dd8b858f082c15a871ddf3257883",
+                    "start": 0,
+                    "end": 60
+                  }
+                ]
+              }
+            ],
+            "coverage": [
+              "title",
+              "claims:C1",
+              "claims:C2",
+              "summary:0",
+              "recommendations:0"
+            ]
+          },
+          "inputHash": "686b980b1cde81e8a9386ebfc05c6d5ff978dea165566a850987322228c2161f",
+          "intentAt": 1000,
+          "acknowledgedAt": 1100,
+          "acknowledgment": {
+            "jobId": "fixture-job",
+            "ticketId": "ticket-A",
+            "decision": "revise",
+            "candidateHash": "f61a68f41366fe016bd893b3d7fed1746d75758c8685590db08ab8b67dcca116",
+            "status": "queued"
+          }
+        },
+        "submissionHash": "686b980b1cde81e8a9386ebfc05c6d5ff978dea165566a850987322228c2161f",
+        "submissionResult": {
+          "jobId": "fixture-job",
+          "ticketId": "ticket-A",
+          "decision": "revise",
+          "candidateHash": "f61a68f41366fe016bd893b3d7fed1746d75758c8685590db08ab8b67dcca116",
+          "status": "queued"
+        }
+      }
+    ]
+  }
+}

@@ -1,3 +1,4 @@
+import {readTargetedProof} from './research-targeted-repair.mjs';
 // Explicit trusted local state, inspected without Store/Coordinator side effects.
 import {DatabaseSync} from 'node:sqlite';
 import {lstat,realpath} from 'node:fs/promises';
@@ -72,7 +73,7 @@ export async function readResearchAuthority({stateRoot,taskId,receipt,policy,rep
    need(previous.goalId===task.goalId&&previous.version===goal.version-1&&previous.activatedAt===goal.activatedAt&&time(previous.deadline)&&previous.deadline>previous.activatedAt,'authority_goal_predecessor_mismatch');
    approvedDeadline=Math.min(previous.deadline,approvedDeadline);
   }
-  const capabilityVersion=policy.repairContextVersion===1?5:4;
+  const capabilityVersion=policy.correctionStrategy==='targeted_v1'?6:policy.repairContextVersion===1?5:4;
   need(goal.manifest?.schema===1&&goal.manifest.mode?.id==='collaborative'&&goal.manifest.mode.review==='operator'&&goal.manifest.mode.actors?.includes('deepseek')&&goal.manifest.mode.actors?.includes('codex')&&goal.manifest.mode.capabilities?.includes('research')&&goal.manifest.capabilities?.some(c=>c.id==='research'&&c.version===capabilityVersion&&c.actors?.includes('deepseek'))&&same(goal.manifest.researchPolicy,policy)&&goal.hash===digest(goal.manifest)&&Number.isSafeInteger(goal.version)&&goal.version>=1&&task.goalVersion===goal.version,'authority_goal_binding_mismatch');
   need(['active','paused','stopped','completed','partial'].includes(goal.status)&&time(goal.activatedAt)&&time(goal.deadline)&&goal.deadline>goal.activatedAt&&goal.deadline===approvedDeadline&&time(task.createdAt)&&task.createdAt>=goal.activatedAt&&time(task.startedAt)&&task.startedAt>=task.createdAt&&time(task.deadline)&&task.deadline===Math.min(goal.deadline,task.startedAt+task.spec.limits?.seconds*1000),'authority_approval_deadline_mismatch');
   const environment=goal.manifest.environment;
@@ -89,7 +90,13 @@ export async function readResearchAuthority({stateRoot,taskId,receipt,policy,rep
   const reviewer=load('reviewer',a.nativeReservationId);if(!reviewer)return pending('authority_reviewer_missing');
   need(time(reviewer.at)&&reviewer.at>=task.startedAt&&reviewer.at<=a.intentAt,'authority_reviewer_timing_mismatch');
   verifyLocalAcceptance(task,key=>key===reviewer.id?reviewer:null);
-  const descriptor=verifyReviewedReceipt(receipt,task,key=>key===reviewer.id?reviewer:null);
+  let proof;
+  if(a.descriptor?.version===2){
+   proof=await readTargetedProof(selected.root,task);
+   const prior=task.researchReviewTickets.find(t=>t.id===proof.repair.plan.review.ticketId),run=load('reviewer',prior.nativeReservationId),intent=prior.submissionIntent;
+   need(run&&run.status==='completed'&&run.goalId===task.goalId&&run.taskId===task.id&&time(run.at)&&run.at>=task.startedAt&&run.at<=intent.intentAt&&same(run.result,{ticketId:prior.id,decision:'revise',candidateHash:prior.descriptor.candidateHash,submissionHash:intent.inputHash}),'authority_prior_reviewer_mismatch');
+  }
+  const descriptor=verifyReviewedReceipt(receipt,task,key=>key===reviewer.id?reviewer:null,proof);
   verifyAcceptedArtifacts(descriptor,reportBytes,sourceBytes);
   need(same(result.reviewBinding,descriptor),'authority_result_binding_mismatch');
   return {status:'verified',reason:'accepted_local_research_snapshot',version:1,taskId:task.id,goalId:task.goalId,goalVersion:goal.version,goalHash:goal.hash,taskHash:task.hash,environment,ticketId:a.ticketId,nativeReservationId:reviewer.id,candidateHash:descriptor.candidateHash,reportSha256:descriptor.reportSha256,sourcesSha256:descriptor.sourcesSha256,runtimeAttested:false};
