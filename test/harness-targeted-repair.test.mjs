@@ -28,3 +28,18 @@ test('Python/Node Unicode offsets and mixed A/correction catalogs agree exactly'
  assert.equal(JSON.parse(packet.canonical.offers).length,2);assert.equal(verifyProposal(packet,task),packet);
  const report=JSON.parse(packet.canonical.report);assert.match(report.claims[0].evidence[0].quote,/New premise/);assert.match(report.claims[1].evidence[0].quote,/😀 Old premise/);
 });
+
+test('both foreign edits and acknowledgements reject even with valid global manifest hashes',async()=>{
+ for(const field of ['replacements','checked_units']){
+  const {packet,task}=await f(),base=JSON.parse(packet.repair.base.report);
+  packet.repair.patch[field].push({unit:'title',before_sha256:digest(base.title),...(field==='replacements'?{value:'Foreign changed title'}:{})});
+  assert.throws(()=>verifyProposal(packet,task),/unit\/hash\/closure/);
+ }
+});
+import {verifyReviewVerdict,verifyLocalAcceptance} from '../src/harness/research-review.mjs';
+test('mechanical B requires whole report review and genuine local native acceptance authority',async()=>{
+ const {packet,task}=await f(),d=verifyProposal(packet,task).descriptor;
+ assert.throws(()=>verifyReviewVerdict({decision:'accept',findings:[],coverage:d.units.slice(0,1)},d),/full unique coverage/);
+ assert.doesNotThrow(()=>verifyReviewVerdict({decision:'accept',findings:[],coverage:d.units},d));
+ assert.throws(()=>verifyLocalAcceptance(task,()=>undefined));
+});
