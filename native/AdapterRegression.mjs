@@ -1,0 +1,11 @@
+import{readFileSync}from'node:fs';import vm from'node:vm';import assert from'node:assert/strict';
+const context=vm.createContext({window:{},Date});vm.runInContext(readFileSync('ui/adapter.js','utf8'),context);const{adaptSnapshot}=context.window.MosaicAdapter;
+const now=1800000000000;
+const snapshot={goals:[{id:'g',mode:'collaborative',status:'active',objective:'Goal'}],tasks:[{id:'t',goalId:'g',actor:'deepseek',status:'accepted',question:{text:'Old answered question'},outcome:{integrated:true,review:'Codex review accepted'}}],agents:[{taskId:'t',goalId:'g',actor:'codex',role:'reviewer',lastReport:{at:now-1000,summary:'Reviewed the implementation',status:'completed'}}]};
+let d=adaptSnapshot(snapshot,[],now);assert.notEqual(d.projects[0].state,'question','terminal tasks must not resurrect saved questions');assert.equal(d.tasks.t.question,null);assert.match(d.projects[0].codex.action,/Reviewed the implementation/);assert.match(d.projects[0].codex.source,/report/i);
+snapshot.tasks[0].status='awaiting_user';snapshot.tasks[0].outcome=null;d=adaptSnapshot(snapshot,[],now);assert.equal(d.projects[0].state,'question');assert.equal(d.tasks.t.question,'Old answered question');assert.equal(d.tasks.t.status,'Answer needed');
+console.log('Saved-question and reviewer attribution regressions passed');
+const task={id:'t',files:[],diff:'',outcome:'done'};
+const enriched=context.window.MosaicAdapter.applyEvidence(task,{text:JSON.stringify({result:{diff:'diff --git a/src/a.js b/src/a.js\n--- a/src/a.js\n+++ b/src/a.js\n@@ -1 +1 @@\n-old\n+new',newFiles:[{path:'src/b.js',content:'new file'}],workerSummary:'Worker output'}}),partial:false});
+assert.match(enriched.diff,/\+new/,'DeepSeek unified diff must be displayed');assert.ok(enriched.files.includes('src/a.js'));assert.ok(enriched.files.includes('src/b.js'));assert.equal(enriched.output,'Worker output');
+console.log('Legacy worker diff/new-file evidence regression passed');

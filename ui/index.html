@@ -2,9 +2,10 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#101416">
-  <meta name="description" content="Mosaic — a read-only window into coordinated coding work. Interactive prototype with fictional sample data.">
+  <meta name="description" content="Mosaic — a read-only window into coordinated coding work. Mac app for your registered coding work.">
   <title>Mosaic — Work, together</title>
   <link rel="icon" href="assets/mosaic.svg" type="image/svg+xml">
   <link rel="preload" href="assets/fonts/BricolageGrotesque-Variable.ttf" as="font" type="font/ttf" crossorigin>
@@ -71,6 +72,7 @@
 /* /OD-LAYOUT-PRIMITIVES v1 */
 </style>
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="motion.css">
 </head>
 <body>
   <div class="app" id="app">
@@ -91,15 +93,16 @@
       </nav>
       <section class="sidebar-section" aria-label="Project assignments"><p class="sidebar-label" id="sidebar-task-label">Assignments</p><div class="sidebar-assignments" id="side-tasks"></div></section>
       <div class="sidebar-bottom">
-        <button type="button" class="workspace-button" data-action="about" aria-label="About this sample workspace"><span class="avatar">M</span><span class="od-field"><span class="small">Personal workspace</span><span class="tiny muted">Sample data</span></span><svg class="od-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10h.01"/></svg></button>
+        <button type="button" class="workspace-button" data-action="about" aria-label="About Mosaic"><span class="avatar">M</span><span class="od-field"><span class="small">Personal workspace</span><span class="tiny muted">Live observer</span></span><svg class="od-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10h.01"/></svg></button>
         <p class="sidebar-note">A window into the work.<br>Instructions stay in Codex.</p>
       </div>
     </aside>
     <section class="workspace" aria-label="Mosaic work observer">
       <header class="topbar">
         <div class="breadcrumb"><span id="breadcrumb-project" class="od-truncate">Pocket Ledger</span><svg class="od-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg><span id="breadcrumb-view" class="od-nowrap">Current work</span></div>
-        <div class="topbar-end"><div id="connection" class="connection"><span class="status-dot"></span><span class="connection-label">Coordinator connected</span></div><button type="button" class="sample-badge" data-action="about" aria-label="About the fictional sample data">Sample data</button></div>
+        <div class="topbar-end"><div id="connection" class="connection"><span class="status-dot"></span><span class="connection-label">Coordinator connected</span></div><button type="button" class="sample-badge" data-action="about" aria-label="About this observer">Live observer</button></div>
       </header>
+      <div class="snapshot-notice" id="snapshot-notice" role="status" hidden><p id="snapshot-message"></p><button type="button" class="text-button" data-action="refresh">Retry connection</button></div>
       <div class="layout" id="layout">
         <main class="main-scroll" id="main" tabindex="-1" aria-label="Work overview"></main>
         <aside class="inspector" id="inspector" aria-label="Selected task details"></aside>
@@ -107,8 +110,10 @@
     </section>
   </div>
   <dialog class="dialog" id="info-dialog" aria-labelledby="dialog-title"><div class="dialog-head"><h2 id="dialog-title"></h2><button type="button" class="icon-button" id="dialog-close" data-action="close-dialog" aria-label="Close information"><svg class="od-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6"/></svg></button></div><div id="dialog-body"></div><button type="button" class="soft-button" data-action="close-dialog">Got it</button></dialog>
-  <noscript><div style="padding:24px;background:#202324;color:#f0f2ee">Enable JavaScript to explore Mosaic’s local sample data. No services or models are connected.</div></noscript>
+  <noscript><div style="padding:24px;background:#202324;color:#f0f2ee">Mosaic needs JavaScript to display saved work.</div></noscript>
   <script src="mock-data.js"></script>
+  <script src="adapter.js"></script>
+  <script src="runtime.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

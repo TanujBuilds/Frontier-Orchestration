@@ -1,7 +1,7 @@
 /* Mosaic observer prototype. Views are local; no execution or approval APIs exist. */
 (() => {
   'use strict';
-  const data = window.MOSAIC_DATA;
+  let data = window.MOSAIC_DATA;
   const $ = (selector, scope = document) => scope.querySelector(selector);
   const all = (selector, scope = document) => [...scope.querySelectorAll(selector)];
   const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -38,14 +38,16 @@
   };
   const icon = name => `<svg class="od-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">${paths[name] || paths.circle}</svg>`;
   const state = {
-    project: 'pocket', view: 'overview', task: 'validation', tab: 'summary',
-    timeline: { project: 'pocket', task: 'all', actor: 'all' },
+    project: data.projects[0].id, view: 'overview', task: data.projects[0].selected, tab: 'summary',
+    timeline: { project: data.projects[0].id, task: 'all', actor: 'all' },
     history: { project: 'all', result: 'all', query: '' },
-    selections: { pocket: 'validation' }, tabs: {}, expanded: {}, scroll: {}, inspectorOpen: true
+    selections: {}, tabs: {}, expanded: {}, scroll: {}, inspectorOpen: true
   };
+  let pendingSaved = null;
   // Storage is optional in a sandbox. The same state works entirely in memory.
   try {
-    const saved = JSON.parse(localStorage.getItem('mosaic-observer-v1') || 'null');
+    const saved = JSON.parse(localStorage.getItem(window.MosaicRuntime.demo ? 'mosaic-observer-demo-v1' : 'mosaic-observer-v1') || 'null');
+    pendingSaved = saved;
     if (saved && data.projects.some(p => p.id === saved.project)) {
       state.project = saved.project;
       state.selections = { ...state.selections, ...(saved.selections || {}) };
@@ -60,7 +62,7 @@
   function currentProject() { return data.projects.find(p => p.id === state.project) || data.projects[0]; }
   function currentTask() { return data.tasks[state.task] || null; }
   function save() {
-    try { localStorage.setItem('mosaic-observer-v1', JSON.stringify({ project: state.project, task: state.task, view: state.view, selections: state.selections, tabs: state.tabs, expanded: state.expanded })); } catch (_) { /* no persistence required */ }
+    try { localStorage.setItem(window.MosaicRuntime.demo ? 'mosaic-observer-demo-v1' : 'mosaic-observer-v1', JSON.stringify({ project: state.project, task: state.task, view: state.view, selections: state.selections, tabs: state.tabs, expanded: state.expanded })); } catch (_) { /* no persistence required */ }
   }
   function capture() {
     const main = $('#main');
@@ -88,10 +90,13 @@
     $('#breadcrumb-project').textContent = p.name;
     $('#breadcrumb-view').textContent = {overview:'Current work',timeline:'Shared timeline',history:'History',projects:'Projects'}[state.view];
     const connection = $('#connection');
-    const connectionText = p.state === 'disconnected' ? 'Coordinator disconnected' : p.state === 'loading' ? 'Loading coordinator snapshot' : 'Coordinator connected';
-    connection.className = `connection${p.state === 'disconnected' ? ' offline' : p.state === 'loading' ? ' loading' : ''}`;
-    connection.setAttribute('aria-label', `${connectionText} · sample connection`);
+    const connectionText = data.connection === 'demo' ? 'Design demo · not connected' : data.connection === 'disconnected' ? 'Coordinator disconnected' : data.connection === 'loading' ? 'Connecting to coordinator' : 'Coordinator connected';
+    connection.className = `connection${data.connection === 'disconnected' ? ' offline' : data.connection === 'loading' ? ' loading' : ''}`;
+    connection.setAttribute('aria-label', connectionText);
     connection.innerHTML = `<span class="status-dot"></span><span class="connection-label">${escape(connectionText)}</span>`;
+    all('.sample-badge,.workspace-button .tiny').forEach(el => el.textContent = data.sample ? 'Design demo' : 'Live observer');
+    $('#snapshot-notice').hidden = data.connection !== 'disconnected';
+    $('#snapshot-message').textContent = data.hasSnapshot && data.generatedAt ? 'Connection lost. Showing the snapshot from '+new Date(data.generatedAt).toLocaleTimeString()+'. Current activity is unknown. Retry here or inspect the coordinator in Codex.' : 'No snapshot available. Open Codex and check the Mosaic coordinator, then retry.';
     all('.nav-button').forEach(button => {
       button.classList.toggle('active', button.dataset.view === state.view);
       if (button.dataset.view === state.view) button.setAttribute('aria-current','page'); else button.removeAttribute('aria-current');
@@ -107,13 +112,14 @@
   }
   function notice(p) {
     const notices = {
-      question: { icon:'message', title:'Waiting for your answer in Codex', body:'DeepSeek asked how to handle conflicting offline edits. Read the question in the task details, then answer in Codex.', action:true },
-      stale: { icon:'clock', title:'No recent native progress report', body:'The last registered Codex report is 18 minutes old. Current activity is unknown. Check the conversation in Codex for context.', tone:'quiet', action:true },
+      question: { icon:'message', title:'Waiting for your answer in Codex', body:'Read the saved question in task details, then answer in Codex.', action:true },
+      stale: { icon:'clock', title:'No recent native progress report', body:'The last registered native report is old or unavailable. Current activity is unknown. Check the conversation in Codex for context.', tone:'quiet', action:true },
       review: { icon:'eye', title:'Checks passed. Review comes next.', body:'DeepSeek’s result is saved. Bounded automatic Codex review has not started; the result is not yet accepted.' },
       unavailable: { icon:'alert', title:'DeepSeek is unavailable', body:'The saved plan is preserved. Implementation is blocked; Codex has not taken over. Inspect worker availability from Codex.', tone:'problem', action:true },
       disconnected: { icon:'disconnect', title:'You’re viewing the last saved snapshot', body:'The coordinator is disconnected. These reports are 12 minutes old; current activity is unknown. Check the coordinator from Codex.', tone:'problem', action:true }
     };
     const item = notices[p.state];
+    if (item && p.notice) item.body = p.notice;
     return item ? `<section class="notice ${item.tone || ''}" aria-label="Work notice">${icon(item.icon)}<div><strong>${item.title}</strong><p>${item.body}</p>${item.action ? `<button type="button" class="text-button" data-action="open-codex">Open Codex ${icon('external')}</button>` : ''}</div></section>` : '';
   }
   function actorPanel(actor, kind) {
@@ -129,7 +135,7 @@
   }
   function recentActivity(p) {
     const events = data.events.filter(event => event.project === p.id).slice(0,3);
-    return `<section class="activity-section"><div class="section-title"><h2>Recent activity</h2><button type="button" class="text-button" data-action="project-timeline">Full timeline ${icon('arrow')}</button></div><div class="activity-list">${events.length ? events.map(event => `<div class="activity-row"><span class="event-symbol">${icon(event.icon)}</span><div><button type="button" class="event-title" data-action="event" data-event="${event.id}">${escape(event.title)}</button><p class="event-actor">${escape(event.actor)}<span aria-hidden="true"> · </span>${escape(data.tasks[event.task].title)}</p></div><span class="event-time">${escape(event.age)}</span></div>`).join('') : '<p class="small muted">No captured activity yet.</p>'}</div></section>`;
+    return `<section class="activity-section"><div class="section-title"><h2>Recent activity</h2><button type="button" class="text-button" data-action="project-timeline">Full timeline ${icon('arrow')}</button></div><div class="activity-list">${events.length ? events.map(event => `<div class="activity-row"><span class="event-symbol">${icon(event.icon)}</span><div><button type="button" class="event-title" data-action="event" data-event="${event.id}">${escape(event.title)}</button><p class="event-actor">${escape(event.actor)}<span aria-hidden="true"> · </span>${escape(data.tasks[event.task]?.title || 'Goal activity')}</p></div><span class="event-time">${escape(event.age)}</span></div>`).join('') : '<p class="small muted">No captured activity yet.</p>'}</div></section>`;
   }
   function footnote() { return `<p class="main-footnote">${icon('info')}<span>DeepSeek actions are captured by Mosaic. Codex activity comes from registered native reports and may be stale or unavailable.</span></p>`; }
   function overview() {
@@ -146,7 +152,7 @@
     const filter = state.timeline;
     const taskOptions = Object.values(data.tasks).filter(t => filter.project === 'all' || t.project === filter.project);
     const events = data.events.filter(e => (filter.project === 'all' || e.project === filter.project) && (filter.task === 'all' || e.task === filter.task) && (filter.actor === 'all' || e.actor === filter.actor));
-    return `${intro(currentProject(),'Shared timeline','The handoffs, decisions, and evidence behind the work.',false)}<div class="filter-bar"><div class="filter"><label for="timeline-project">Project</label><select id="timeline-project" data-filter="timeline-project">${projectOptions(filter.project)}</select></div><div class="filter"><label for="timeline-task">Assignment</label><select id="timeline-task" data-filter="timeline-task"><option value="all">All assignments</option>${taskOptions.map(task => `<option value="${task.id}"${filter.task === task.id ? ' selected' : ''}>${escape(task.title)}</option>`).join('')}</select></div><div class="filter"><label for="timeline-actor">Actor</label><select id="timeline-actor" data-filter="timeline-actor">${['all','Codex','DeepSeek','Protected checks','Mosaic'].map(actor => `<option value="${actor}"${filter.actor === actor ? ' selected' : ''}>${actor === 'all' ? 'All actors' : actor}</option>`).join('')}</select></div></div><div class="section-title"><span class="small secondary">Today <span class="muted tiny">· ${events.length} ${events.length === 1 ? 'event' : 'events'}</span></span><span class="tiny muted">Newest first</span></div>${events.length ? events.map(event => `<article class="timeline-event"><div class="timeline-marker"><span class="event-symbol">${icon(event.icon)}</span></div><details class="timeline-card" data-key="event:${event.id}"><summary><span class="od-field"><span class="event-title">${escape(event.title)}</span><span class="event-actor">${escape(event.actor)} · ${escape(data.projects.find(p => p.id === event.project).name)}</span></span><span class="event-time">${escape(event.time)}</span></summary><div class="timeline-body"><p>${escape(event.detail)}</p><p class="timeline-source">${escape(event.source)} · ${escape(data.tasks[event.task].title)}</p><button type="button" class="text-button" data-action="task" data-task="${event.task}">Inspect assignment ${icon('arrow')}</button></div></details></article>`).join('') : `<div class="empty-results"><h2>No matching events</h2><p>Try another actor or assignment to see the saved activity.</p><button type="button" class="soft-button" data-action="clear-timeline">Clear filters</button></div>`}${footnote()}`;
+    return `${intro(currentProject(),'Shared timeline','The handoffs, decisions, and evidence behind the work.',false)}<div class="filter-bar"><div class="filter"><label for="timeline-project">Project</label><select id="timeline-project" data-filter="timeline-project">${projectOptions(filter.project)}</select></div><div class="filter"><label for="timeline-task">Assignment</label><select id="timeline-task" data-filter="timeline-task"><option value="all">All assignments</option>${taskOptions.map(task => `<option value="${task.id}"${filter.task === task.id ? ' selected' : ''}>${escape(task.title)}</option>`).join('')}</select></div><div class="filter"><label for="timeline-actor">Actor</label><select id="timeline-actor" data-filter="timeline-actor">${['all','Codex','DeepSeek','Protected checks','Mosaic'].map(actor => `<option value="${actor}"${filter.actor === actor ? ' selected' : ''}>${actor === 'all' ? 'All actors' : actor}</option>`).join('')}</select></div></div><div class="section-title"><span class="small secondary">Saved activity <span class="muted tiny">· ${events.length} ${events.length === 1 ? 'event' : 'events'}</span></span><span class="tiny muted">Newest first</span></div>${events.length ? events.map(event => `<article class="timeline-event"><div class="timeline-marker"><span class="event-symbol">${icon(event.icon)}</span></div><details class="timeline-card" data-key="event:${event.id}"><summary><span class="od-field"><span class="event-title">${escape(event.title)}</span><span class="event-actor">${escape(event.actor)} · ${escape(data.projects.find(p => p.id === event.project).name)}</span></span><span class="event-time">${escape(event.time)}</span></summary><div class="timeline-body"><p>${escape(event.detail)}</p><p class="timeline-source">${escape(event.source)} · ${escape(data.tasks[event.task]?.title || 'Goal activity')}</p>${event.task ? `<button type="button" class="text-button" data-action="task" data-task="${event.task}">Inspect assignment ${icon('arrow')}</button>` : ''}</div></details></article>`).join('') : `<div class="empty-results"><h2>No matching events</h2><p>Try another actor or assignment to see the saved activity.</p><button type="button" class="soft-button" data-action="clear-timeline">Clear filters</button></div>`}${footnote()}`;
   }
   function history() {
     const f = state.history;
@@ -166,23 +172,23 @@
     }).join('')}</div>` : `<div class="empty-results"><h2>No saved results match</h2><p>Try another project, outcome, or search term.</p><button type="button" class="soft-button" data-action="clear-history">Clear filters</button></div>`;
   }
   function projects() {
-    return `${intro(currentProject(),'Projects','A window into your registered coding work.',false)}<div class="project-grid">${data.projects.map(p => `<button type="button" class="project-card" data-action="project" data-project="${p.id}" aria-label="Open ${escape(p.name)}, ${escape(p.status)}"><span class="project-card-head"><span class="project-mini" style="color:${projectColor(p)}">${p.initials}</span><span class="od-field"><h2>${escape(p.name)}</h2><span class="tiny muted">${escape(p.description)}</span></span></span><p>${escape(p.goal)}</p><span class="project-card-foot">${badge(p.status,projectTone(p))}${icon('chevron')}</span><span class="mode-name">${escape(data.modes[p.mode].name)}</span></button>`).join('')}</div><p class="main-footnote">${icon('info')}<span>Fictional projects show different work states. This prototype observes sample snapshots; no models or services are connected.</span></p>`;
+    return `${intro(currentProject(),'Projects','A window into your registered coding work.',false)}<div class="project-grid">${data.projects.map(p => `<button type="button" class="project-card" data-action="project" data-project="${p.id}" aria-label="Open ${escape(p.name)}, ${escape(p.status)}"><span class="project-card-head"><span class="project-mini" style="color:${projectColor(p)}">${p.initials}</span><span class="od-field"><h2>${escape(p.name)}</h2><span class="tiny muted">${escape(p.description)}</span></span></span><p>${escape(p.goal)}</p><span class="project-card-foot">${badge(p.status,projectTone(p))}${icon('chevron')}</span><span class="mode-name">${escape(data.modes[p.mode].name)}</span></button>`).join('')}</div><p class="main-footnote">${icon('info')}<span>Each workspace represents a saved Mosaic goal. Unrelated chats and projects without registered work do not appear here.</span></p>`;
   }
   function disclosure(key, title, body) { return `<details class="disclosure" data-key="detail:${state.task}:${key}"><summary>${escape(title)}</summary><div class="disclosure-body">${body}</div></details>`; }
   function milestone(glyph, color, title, subtitle) { return `<div class="milestone">${icon(glyph).replace('od-icon',`od-icon ${color}`)}<span class="od-field"><strong>${escape(title)}</strong><small>${escape(subtitle)}</small></span></div>`; }
   function fileList(task) { return task.files.length ? task.files.map(file => `<div class="file-row">${icon('file')}<code>${escape(file)}</code></div>`).join('') : '<p class="small muted">No changed files reported.</p>'; }
-  function checks(task) { return task.checkItems.length ? `<div class="check-list">${task.checkItems.map(check => `<div class="check-item">${icon(check.toLowerCase().includes('failed') ? 'alert' : 'checkCircle')}<span>${escape(check)}</span></div>`).join('')}</div><p class="detail-hint">${escape(task.checks)}. Counts are illustrative sample evidence.</p>` : `<p>${escape(task.checks)}. No check evidence is available for this snapshot.</p>`; }
+  function checks(task) { return task.checkItems.length ? `<div class="check-list">${task.checkItems.map(check => `<div class="check-item">${icon(check.toLowerCase().includes('failed') ? 'alert' : 'checkCircle')}<span>${escape(check)}</span></div>`).join('')}</div><p class="detail-hint">${escape(task.checks)}. Counts come from saved coordinator check receipts.</p>` : `<p>${escape(task.checks)}. No check evidence is available for this snapshot.</p>`; }
   function summaryTab(task) {
     const integrated = task.integration === 'Integrated';
-    const checkPass = task.checks.includes('checks passed');
-    return `<section class="detail-section"><h3>Current outcome</h3><p class="outcome-copy">${escape(task.outcome)}</p></section>${task.question ? `<section class="notice"><div><strong>Question for you</strong><p>${escape(task.question)}</p><button type="button" class="text-button" data-action="open-codex">Answer in Codex ${icon('external')}</button></div></section>` : ''}<section class="detail-section"><h3>Checks, review & integration</h3>${milestone(checkPass ? 'checkCircle' : 'circle',checkPass ? 'mint' : 'muted',task.checks,checkPass ? 'Protected checks · saved evidence' : 'Check status from the saved snapshot')}${milestone(task.review.includes('Accepted') ? 'checkCircle' : 'eye',task.review.includes('Accepted') ? 'mint' : 'secondary',task.review,task.mode === 'deepseek_only' ? 'Protected checks govern acceptance' : 'Review is separate from passing checks')}${milestone(integrated ? 'merge' : 'circle',integrated ? 'mint' : 'muted',task.integration,integrated ? 'Saved integration result' : 'Integration is a separate recorded step')}</section><section class="detail-section"><div class="files-heading"><h3>Changed files</h3><span class="count">${task.files.length}</span></div>${fileList(task)}${task.files.length ? '<button type="button" class="text-button" data-action="detail-tab" data-tab="changes">Inspect changes '+icon('arrow')+'</button>' : ''}</section>${disclosure('feedback','Review feedback',`<p>${escape(task.feedback)}</p>`)}${disclosure('evidence','Check evidence',checks(task))}<p class="detail-hint">${escape(task.report)}<br>Usage: Not reported</p>`;
+    const checkPass = data.sample ? /^\d+ checks passed$/.test(task.checks) : task.checksPassed === true;
+    return `<section class="detail-section"><h3>Current outcome</h3><p class="outcome-copy">${escape(task.outcome)}</p></section>${task.question ? `<section class="notice"><div><strong>Question for you</strong><p>${escape(task.question)}</p><button type="button" class="text-button" data-action="open-codex">Answer in Codex ${icon('external')}</button></div></section>` : ''}<section class="detail-section"><h3>Checks, review & integration</h3>${milestone(checkPass ? 'checkCircle' : 'circle',checkPass ? 'mint' : 'muted',task.checks,checkPass ? 'Protected checks · saved evidence' : 'Check status from the saved snapshot')}${milestone(task.review.includes('Accepted') ? 'checkCircle' : 'eye',task.review.includes('Accepted') ? 'mint' : 'secondary',task.review,task.mode === 'deepseek_only' ? 'Protected checks govern acceptance' : 'Review is separate from passing checks')}${milestone(integrated ? 'merge' : 'circle',integrated ? 'mint' : 'muted',task.integration,integrated ? 'Saved integration result' : 'Integration is a separate recorded step')}</section><section class="detail-section"><div class="files-heading"><h3>Changed files</h3><span class="count">${task.files.length}</span></div>${fileList(task)}${task.files.length ? '<button type="button" class="text-button" data-action="detail-tab" data-tab="changes">Inspect changes '+icon('arrow')+'</button>' : ''}</section>${disclosure('feedback','Review feedback',`<p>${escape(task.feedback)}</p>`)}${disclosure('evidence','Check evidence',checks(task))}<p class="detail-hint">${escape(task.report)}<br>Usage: ${escape(task.usage || 'Not reported')}</p>`;
   }
   function changesTab(task) {
-    return `<section class="detail-section"><h3>Saved changes</h3><p class="outcome-copy">Implemented by ${escape(task.implementer)}. ${escape(task.files.length ? 'This is the saved sample diff, not a live filesystem view.' : 'No implementation changes are available in this snapshot.')}</p></section><section class="detail-section">${fileList(task)}</section>${disclosure('diff','Inspect saved diff',`<pre class="diff-code">${escape(task.diff)}</pre>`)}${disclosure('saved-output','Saved output',`<p>${escape(task.output)}</p>`)}<section class="detail-section" style="margin-top:24px"><h3>Integration result</h3><p class="outcome-copy">${escape(task.integrationDetail)}</p></section>`;
+    return `<section class="detail-section"><h3>Saved changes</h3><p class="outcome-copy">Implemented by ${escape(task.implementer)}. ${escape(task.files.length ? (data.sample ? 'Illustrative saved changes in the design demo.' : task.changeNotice || 'Saved file contents, not a live filesystem view.') : 'No implementation changes are available in this snapshot.')}</p></section><section class="detail-section">${fileList(task)}</section>${disclosure('diff','Inspect saved diff',`<pre class="diff-code">${escape(task.diff)}</pre>`)}${disclosure('saved-output','Saved output',`<p>${escape(task.output)}</p>`)}<section class="detail-section" style="margin-top:24px"><h3>Integration result</h3><p class="outcome-copy">${escape(task.integrationDetail)}</p></section>`;
   }
   function evidenceTab(task) {
-    const advanced = { sample: true, assignment: task.id, project: task.project, mode: task.mode, implementer: task.implementer, actor: task.actor, outcome: task.status, checks: task.checks, review: task.review, integration: task.integration, usage: null };
-    return `<section class="detail-section"><h3>Evidence, at your pace</h3><p class="outcome-copy">Saved evidence explains the outcome. A completed attempt or passing check is not review acceptance.</p></section>${disclosure('checks','Protected checks',checks(task))}${disclosure('review','Review record',`<p>${escape(task.feedback)}</p>`)}${disclosure('integration','Integration record',`<p>${escape(task.integrationDetail)}</p>`)}${disclosure('output','Saved output',`<p>${escape(task.output)}</p>`)}${disclosure('attempts','Attempt details',`<dl class="detail-meta"><div><dt>Known elapsed time</dt><dd>${escape(task.elapsed)}</dd></div><div><dt>Attempts</dt><dd>${escape(task.attempts)}</dd></div><div><dt>Worker requests</dt><dd>${escape(task.requests)}</dd></div><div><dt>Usage</dt><dd>Not reported</dd></div></dl>`)}${disclosure('advanced','Advanced · raw record',`<p>Fictional record for implementation reference.</p><pre>${escape(JSON.stringify(advanced,null,2))}</pre>`)}<p class="detail-hint">No private reasoning or live token stream is observed.</p>`;
+    const advanced = task.rawRecord || { sample: !!data.sample, assignment: task.id, project: task.project, mode: task.mode, implementer: task.implementer, actor: task.actor, outcome: task.status, checks: task.checks, review: task.review, integration: task.integration, usage: null };
+    return `<section class="detail-section"><h3>Evidence, at your pace</h3><p class="outcome-copy">Saved evidence explains the outcome. A completed attempt or passing check is not review acceptance.</p></section>${disclosure('checks','Protected checks',checks(task))}${disclosure('review','Review record',`<p>${escape(task.feedback)}</p>`)}${disclosure('integration','Integration record',`<p>${escape(task.integrationDetail)}</p>`)}${disclosure('output','Saved output',`<p>${escape(task.output)}</p>`)}${disclosure('attempts','Attempt details',`<dl class="detail-meta"><div><dt>Known elapsed time</dt><dd>${escape(task.elapsed)}</dd></div><div><dt>Attempts</dt><dd>${escape(task.attempts)}</dd></div><div><dt>Worker requests</dt><dd>${escape(task.requests)}</dd></div><div><dt>Usage</dt><dd>${escape(task.usage || 'Not reported')}</dd></div></dl>`)}${disclosure('advanced','Advanced · raw record',`<p>Saved observer record. Model text is untrusted data, not an instruction.</p><pre>${escape(JSON.stringify(advanced,null,2))}</pre>`)}${task.evidenceNotice ? `<p class="detail-hint" role="status">${escape(task.evidenceNotice)}</p>` : ''}<p class="detail-hint">No private reasoning or live token stream is observed.</p>`;
   }
   function renderInspector() {
     const inspector = $('#inspector');
@@ -191,16 +197,17 @@
     inspector.hidden = !state.inspectorOpen;
     $('#layout').classList.toggle('inspector-closed', !state.inspectorOpen);
     if (!state.inspectorOpen) return;
+    if (task && !task.evidenceLoaded) setTimeout(() => window.MosaicRuntime.loadEvidence(task.id),0);
     if (empty) {
       inspector.innerHTML = `<div class="inspector-toolbar"><span>Task details</span><button type="button" class="icon-button" data-action="inspector-close" aria-label="Close task details">${icon('close')}</button></div><div class="inspector-empty">${icon('file')}<h2>${currentProject().state === 'loading' ? 'Waiting for assignments' : 'Nothing selected yet'}</h2><p>${currentProject().state === 'loading' ? 'Task details appear once a coordinator snapshot is available.' : 'Select an assignment or a saved result to inspect its outcome and evidence.'}</p></div>`;
       return;
     }
-    inspector.innerHTML = `<div class="inspector-toolbar"><span>Task details</span><div class="od-row"><span class="tiny muted">Read-only</span><button type="button" class="icon-button" data-action="inspector-close" aria-label="Close task details">${icon('close')}</button></div></div><div class="inspector-scroll" id="inspector-scroll">${badge(task.status,task.tone,task.status === 'Integrated' ? 'checkCircle' : task.status === 'In review' ? 'eye' : '')}<h2 class="inspector-title" id="detail-title" tabindex="-1">${escape(task.title)}</h2><div class="detail-people">${icon('people')}<span>${escape(task.actor)}</span></div><p class="inspector-description">${escape(task.objective)}</p><div class="od-cluster">${modeButton(task.mode)}</div><div class="detail-tabs" role="tablist" aria-label="Task inspection">${[['summary','Summary'],['changes','Changes'],['evidence','Evidence']].map(([id,label]) => `<button type="button" id="tab-${id}" class="detail-tab${state.tab === id ? ' active' : ''}" role="tab" aria-selected="${state.tab === id}" aria-controls="detail-content" tabindex="${state.tab === id ? 0 : -1}" data-action="detail-tab" data-tab="${id}">${label}</button>`).join('')}</div><div id="detail-content" role="tabpanel" aria-labelledby="tab-${state.tab}" tabindex="0">${state.tab === 'summary' ? summaryTab(task) : state.tab === 'changes' ? changesTab(task) : evidenceTab(task)}</div></div><footer class="inspector-footer"><button type="button" class="text-button" data-action="task-timeline">View in timeline ${icon('arrow')}</button><button type="button" class="soft-button" data-action="open-codex">Open Codex ${icon('external')}</button></footer>`;
+    inspector.innerHTML = `<div class="inspector-toolbar"><span>Task details</span><div class="od-row"><span class="tiny muted">Read-only</span><button type="button" class="icon-button" data-action="inspector-close" aria-label="Close task details">${icon('close')}</button></div></div><div class="inspector-scroll" id="inspector-scroll">${badge(task.status,task.tone,task.status === 'Integrated' ? 'checkCircle' : task.status === 'In review' ? 'eye' : '')}<h2 class="inspector-title" id="detail-title" tabindex="-1">${escape(task.title)}</h2><div class="detail-people">${icon('people')}<span>${escape(task.actor)}</span></div><p class="inspector-description${!data.sample && task.objective.length > 220 && !state.expanded[`brief:${task.id}`] ? ' brief-preview' : ''}">${escape(task.objective)}</p>${!data.sample && task.objective.length > 220 ? `<button type="button" class="text-button" data-action="brief-toggle" aria-expanded="${!!state.expanded[`brief:${task.id}`]}">${state.expanded[`brief:${task.id}`] ? 'Collapse brief' : 'Read full brief'}</button>` : ''}<div class="od-cluster">${modeButton(task.mode)}</div><div class="detail-tabs" role="tablist" aria-label="Task inspection">${[['summary','Summary'],['changes','Changes'],['evidence','Evidence']].map(([id,label]) => `<button type="button" id="tab-${id}" class="detail-tab${state.tab === id ? ' active' : ''}" role="tab" aria-selected="${state.tab === id}" aria-controls="detail-content" tabindex="${state.tab === id ? 0 : -1}" data-action="detail-tab" data-tab="${id}">${label}</button>`).join('')}</div><div id="detail-content" role="tabpanel" aria-labelledby="tab-${state.tab}" tabindex="0">${task.evidenceError ? `<p class="detail-hint" role="status">${escape(task.evidenceError)}</p><button type="button" class="text-button evidence-retry" data-action="retry-evidence">Retry evidence</button>` : ''}${state.tab === 'summary' ? summaryTab(task) : state.tab === 'changes' ? changesTab(task) : evidenceTab(task)}</div></div><footer class="inspector-footer"><button type="button" class="text-button" data-action="task-timeline">View in timeline ${icon('arrow')}</button><button type="button" class="soft-button" data-action="open-codex">Open Codex ${icon('external')}</button></footer>`;
   }
-  function render({ focus = '', resetMain = false } = {}) {
+  function render({ focus = '', resetMain = false, preserveInspector = false } = {}) {
     renderChrome();
     $('#main').innerHTML = ({overview, timeline, history, projects})[state.view]();
-    renderInspector();
+    if (!preserveInspector) renderInspector();
     restore();
     if (resetMain) $('#main').scrollTop = 0;
     if (focus) $(focus)?.focus({ preventScroll: true });
@@ -215,7 +222,7 @@
     state.tab = state.tabs[state.task] || 'summary';
     state.inspectorOpen = true;
     state.timeline = { project:id, task:'all', actor:'all' };
-    render({ focus:'#page-heading' });
+    render({ focus:'#page-heading' }); motion('#main','view-arrive');
   }
   function openTask(id) {
     const task = data.tasks[id];
@@ -226,7 +233,7 @@
     state.selections[task.project] = id;
     state.tab = state.tabs[id] || 'summary';
     state.inspectorOpen = true;
-    render({ focus:'#detail-title' });
+    render({ focus:'#detail-title' }); motion('#inspector','inspector-arrive');
   }
   function navigate(view) {
     capture();
@@ -238,12 +245,13 @@
     }
     if (view === 'history' && !data.history.some(h => h.task === state.task)) {
       const first = data.history.find(h => data.tasks[h.task].project === state.project) || data.history[0];
+      if (!first) { render({focus:'#page-heading'}); return; }
       state.task = first.task;
       state.project = data.tasks[first.task].project;
       state.tab = state.tabs[state.task] || 'summary';
       state.inspectorOpen = true;
     }
-    render({ focus:'#page-heading' });
+    render({ focus:'#page-heading' }); motion('#main','view-arrive');
   }
   let dialogTrigger = null;
   function openDialog(title, body, trigger) {
@@ -264,7 +272,7 @@
       const tab = button.dataset.tab;
       if (!['summary','changes','evidence'].includes(tab)) return;
       capture(); state.tab = tab; state.tabs[state.task] = tab;
-      renderInspector(); restore(); save(); $(`#tab-${tab}`)?.focus({ preventScroll:true });
+      renderInspector(); restore(); save(); $(`#tab-${tab}`)?.focus({ preventScroll:true }); motion('#detail-content','tab-arrive');
     }
     else if (action === 'inspector-close') {
       capture(); state.inspectorOpen = false; render({ focus:'.nav-button.active' });
@@ -294,11 +302,13 @@
       if (mode) openDialog(mode.name,`<p>${escape(mode.description)}</p><p>Individual actions are attributed to the actor that performed them. A mode label does not prove who did the work.</p><p>Modes are selected in Codex. Mosaic observes the registered work.</p>`,button);
     }
     else if (action === 'open-codex') {
-      const task = currentTask();
-      openDialog('Continue in Codex',`<p>This is a visual placeholder for the future Mac integration. No app or conversation has been opened.</p>${task ? `<p>In Codex, return to <strong>${escape(data.projects.find(p => p.id === task.project).name)}</strong> and the <strong>${escape(task.title)}</strong> assignment.</p>` : '<p>Give Codex a coding task and choose a working mode there.</p>'}<p>Instructions, answers, mode changes, controls, and approvals stay in Codex.</p>`,button);
+      window.MosaicRuntime.openCodex().catch(() => openDialog('Open Codex', '<p>Codex could not be opened automatically. Open it from Applications, then return to the conversation for this work.</p>', button));
     }
+    else if (action === 'brief-toggle') { const key=`brief:${state.task}`;state.expanded[key]=!state.expanded[key];$('#inspector .inspector-description').classList.toggle('brief-preview',!state.expanded[key]);button.textContent=state.expanded[key]?'Collapse brief':'Read full brief';button.setAttribute('aria-expanded',String(state.expanded[key]));save(); }
+    else if (action === 'refresh') window.MosaicRuntime.refresh();
+    else if (action === 'retry-evidence') { const t=currentTask(); if(t) {delete t.evidenceError;window.MosaicRuntime.loadEvidence(t.id);} }
     else if (action === 'about') {
-      openDialog('A window into the work',`<p>Mosaic observes work registered with its coordinator. It does not automatically observe unrelated chats.</p><p><strong>Everything in this prototype is fictional sample data.</strong> Timestamps describe frozen example snapshots. No model, service, or local app is connected.</p>${Object.values(data.modes).map(mode => `<section class="dialog-mode"><h3>${escape(mode.name)}</h3><p>${escape(mode.description)}</p></section>`).join('')}`,button);
+      openDialog('A window into the work',`<p>Mosaic observes work registered with your local coordinator. It does not automatically observe unrelated chats.</p><p>${data.sample ? '<strong>Design demo:</strong> fictional snapshots, disconnected from live work.' : 'This Mac app reads the installed viewer connection. It cannot create jobs, answer questions, change modes or approve work. Instructions stay in Codex.'}</p><p>Workspaces correspond to saved goals. DeepSeek activity is captured by Mosaic; native Codex progress is reported and can become stale. Acceptance, checks and integration are separate saved milestones.</p>${Object.values(data.modes).map(mode => `<section class="dialog-mode"><h3>${escape(mode.name)}</h3><p>${escape(mode.description)}</p></section>`).join('')}`,button);
     }
     else if (action === 'close-dialog') $('#info-dialog').close();
   });
@@ -325,7 +335,7 @@
     $('#history-results').innerHTML = $('#history-results',holder).innerHTML;
   });
   document.addEventListener('toggle', event => {
-    if (event.target.matches('details[data-key]')) {
+    if (event.target.isConnected && event.target.matches('details[data-key]')) {
       state.expanded[event.target.dataset.key] = event.target.open;
       save();
     }
@@ -351,6 +361,33 @@
   });
   $('#info-dialog').addEventListener('close', () => {
     if (dialogTrigger?.isConnected) dialogTrigger.focus({preventScroll:true}); else $('.nav-button.active')?.focus({preventScroll:true});
+  });
+  function motion(selector, name) {
+    const el=$(selector);if(!el||matchMedia('(prefers-reduced-motion: reduce)').matches)return;
+    el.classList.remove(name);void el.offsetWidth;el.classList.add(name);
+    el.addEventListener('animationend',()=>el.classList.remove(name),{once:true});
+  }
+  const captureFocus=()=>window.MosaicRuntime.captureFocus();
+  const restoreFocus=focus=>window.MosaicRuntime.restoreFocus(focus);
+  window.addEventListener('mosaic:data',event=>{
+    capture();const focused=captureFocus(),inspected=state.task,before=JSON.stringify(currentTask()),projectState=currentProject().state;data=event.detail;
+    if(pendingSaved && data.projects.some(p=>p.id===pendingSaved.project)){
+      Object.assign(state,{project:pendingSaved.project,view:['overview','timeline','history','projects'].includes(pendingSaved.view)?pendingSaved.view:'overview',selections:pendingSaved.selections||{},tabs:pendingSaved.tabs||{},expanded:pendingSaved.expanded||{}});
+      state.task=data.tasks[pendingSaved.task]?pendingSaved.task:currentProject().selected;state.tab=state.tabs[state.task]||'summary';state.timeline.project=state.project;pendingSaved=null;
+    }
+    if(!data.projects.some(p=>p.id===state.project)){state.project=data.projects[0].id;state.task=currentProject().selected;state.timeline.project=state.project;}
+    if(state.task&&!data.tasks[state.task])state.task=currentProject().selected;
+    render({preserveInspector:inspected===state.task && before===JSON.stringify(currentTask()) && projectState===currentProject().state});restoreFocus(focused);
+  });
+  window.addEventListener('mosaic:evidence',event=>{
+    const {id,key,value}=event.detail,t=data.tasks[id];
+    if(!t||JSON.stringify(t.rawRecord)!==key)return;
+    data.tasks[id]=window.MosaicAdapter.applyEvidence(t,value);
+    if(state.task===id){capture();const focused=captureFocus();renderInspector();restore();restoreFocus(focused);}
+  });
+  window.addEventListener('mosaic:evidence-error',event=>{
+    const t=data.tasks[event.detail.id];if(!t)return;t.evidenceError=event.detail.message;t.evidenceLoaded=true;
+    if(state.task===t.id){capture();renderInspector();restore();}
   });
   render();
 })();

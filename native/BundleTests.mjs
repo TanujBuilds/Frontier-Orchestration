@@ -1,0 +1,10 @@
+import{readFile,readdir,lstat}from'node:fs/promises';import path from'node:path';import assert from'node:assert/strict';import{execFileSync}from'node:child_process';
+const root=path.resolve(import.meta.dirname,'..'),app=path.join(root,'dist/Mosaic.app');
+const files=[];async function walk(dir){for(const e of await readdir(dir,{withFileTypes:true})){const file=path.join(dir,e.name);assert.equal((await lstat(file)).isSymbolicLink(),false,'bundle contains no symlinks');if(e.isDirectory())await walk(file);else files.push(file)}}await walk(app);
+assert.ok(files.some(f=>f.endsWith('/Contents/MacOS/Mosaic')));assert.ok(files.some(f=>f.endsWith('Mosaic.icns')));
+assert.ok(files.some(f=>f.endsWith('InstrumentSans-Variable.ttf')));assert.ok(files.some(f=>f.endsWith('BricolageGrotesque-Variable.ttf')));
+assert.ok(files.every(f=>!/connection\.json|local-config|\.sqlite|node_modules|\/\.git\//.test(f)));
+const html=await readFile(path.join(app,'Contents/Resources/ui/index.html'),'utf8');assert.match(html,/connect-src 'none'/);assert.doesNotMatch(html,/https?:\/\//);
+execFileSync('codesign',['--verify','--deep','--strict',app],{stdio:'inherit'});
+const links=execFileSync('otool',['-L',path.join(app,'Contents/MacOS/Mosaic')],{encoding:'utf8'}).split('\n').slice(1).filter(Boolean);assert.ok(links.every(s=>/^\s+\/(System|usr)\//.test(s)),links.join('\n'));
+console.log(`Bundle verified: ${files.length} files, local resources and system libraries only`);
