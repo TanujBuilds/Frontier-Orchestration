@@ -95,3 +95,12 @@ test('outcome summary does not invent checks, review or integration for an unfin
  const f=fixture(t),outcome=f.observer.snapshot({}).tasks.find(t=>t.id===f.ds.id).outcome;
  assert.equal(outcome.checks,null);assert.equal(outcome.integrated,false);assert.equal(outcome.review,'No recorded review');
 });
+
+test('invalidated replacement does not inherit historical review acceptance',t=>{
+ const f=fixture(t),task=f.c.store.get('task',f.native.id);
+ task.status='codex_ready';task.reviewed=false;task.result=null;task.legacyDecision=null;task.feedback=[{decision:'accept',text:'An earlier candidate was accepted'}];f.c.store.put('task',task);
+ const outcome=f.observer.snapshot({}).tasks.find(t=>t.id===task.id).outcome;
+ assert.equal(outcome.review,'No recorded review');assert.equal(outcome.checks,null);assert.equal(outcome.integrated,false);
+ task.status='awaiting_review';task.result={summary:'Replacement candidate'};task.reviewed=true;f.c.store.put('task',task);
+ assert.equal(f.observer.snapshot({}).tasks.find(t=>t.id===task.id).outcome.review,'No recorded review');
+});

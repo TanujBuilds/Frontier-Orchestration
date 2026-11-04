@@ -22,10 +22,13 @@ const trim=value=>String(value).slice(0,2000);
 function outcome(t){
  const result=t.result??{},integration=t.integration,checks=integration?.checks??result.checks;
  const files=[...new Set([...(Array.isArray(result.changes)?result.changes:[]),...(Array.isArray(result.newFiles)?result.newFiles:[])].map(x=>x?.path).filter(x=>typeof x==='string'))].slice(0,50).map(x=>x.slice(0,200));
- const feedback=t.feedback?.findLast(x=>['accept','revise'].includes(x.decision));
- const review=({none:'Checks only; no Codex review',codex_operator:'Codex review accepted',codex_legacy:'Codex automatic review accepted',codex_native:'Native completion; no separate review recorded'})[integration?.review]??(feedback?feedback.decision==='accept'?'Codex review accepted':'Codex requested changes':'No recorded review');
+ const integrated=t.status==='accepted'&&/^[a-f0-9]{40}$/.test(integration?.commit??'');
+ const currentReview=result&&t.result&&['ready_to_integrate','accepted','blocked'].includes(t.status);
+ const feedback=currentReview&&t.reviewed===true?t.feedback?.findLast(x=>['accept','revise'].includes(x.decision)):null;
+ const legacy=currentReview?t.legacyDecision:null;
+ const review=(integrated?({none:'Checks only; no Codex review',codex_operator:'Codex review accepted',codex_legacy:'Codex automatic review accepted',codex_native:'Native completion; no separate review recorded'})[integration.review]:null)??(legacy?legacy.decision==='accept'?'Codex automatic review accepted':'Codex requested changes':feedback?feedback.decision==='accept'?'Codex review accepted':'Codex requested changes':'No recorded review');
  const summary=result.summary??result.workerSummary;
- return {summary:typeof summary==='string'?trim(summary):null,files,checks:Array.isArray(checks)&&checks.length&&checks.every(x=>typeof x?.passed==='boolean')?{passed:checks.filter(x=>x.passed).length,total:checks.length}:null,review,integrated:t.status==='accepted'&&typeof integration?.commit==='string',commit:/^[a-f0-9]{40}$/.test(integration?.commit??'')?integration.commit:null};
+ return {summary:typeof summary==='string'?trim(summary):null,files,checks:Array.isArray(checks)&&checks.length&&checks.every(x=>typeof x?.passed==='boolean')?{passed:checks.filter(x=>x.passed).length,total:checks.length}:null,review,integrated,commit:/^[a-f0-9]{40}$/.test(integration?.commit??'')?integration.commit:null};
 }
 function window(bytes,start,length){
  const begin=Math.min(start,bytes.length);if(begin<bytes.length&&(bytes[begin]&0xc0)===0x80)throw Error('Evidence start must be a UTF-8 character boundary');
