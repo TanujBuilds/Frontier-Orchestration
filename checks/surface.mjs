@@ -1,0 +1,15 @@
+import {readFileSync} from 'node:fs';
+import assert from 'node:assert/strict';
+const html=readFileSync('ui/index.html','utf8');
+const app=readFileSync('ui/app.js','utf8');
+const runtime=readFileSync('ui/runtime.js','utf8');
+const css=readFileSync('ui/motion.css','utf8');
+const native=readFileSync('native/Mosaic.swift','utf8');
+assert.match(html,/adapter.js/);assert.match(html,/runtime.js/);assert.match(html,/Content-Security-Policy/);
+assert.match(css,/prefers-reduced-motion/);
+assert.doesNotMatch(runtime,/Bearer|connection\.json|localStorage.*token/);
+assert.doesNotMatch(native,/(?<!viewer-)connection\.json/);
+assert.match(native,/WKScriptMessageHandlerWithReply/);assert.match(native,/viewer-connection.json/);
+assert.doesNotMatch(native,/Process\(|\/bin\/|\/usr\/bin\/|task_submit|work_control|goal_activate/);
+assert.doesNotMatch(app,/This is a visual placeholder|Everything in this prototype is fictional/);
+console.log('Protected app surface and read-only credential boundary checks passed');
