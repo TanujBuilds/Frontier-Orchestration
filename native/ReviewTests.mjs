@@ -27,3 +27,7 @@ vm.runInContext(readFileSync('ui/runtime.js','utf8'),context);
 await window.MosaicRuntime.refresh();const offline=errorEvents.at(-1).detail;
 assert.equal(offline.connection,'disconnected');assert.equal(offline.hasSnapshot,false,'fresh offline launch must not claim a previous snapshot');assert.equal(offline.generatedAt,null);
 console.log('Fresh-offline provenance regression passed');
+const reviewing={goals:[{id:'g',mode:'codex_only',status:'active',objective:'Build app'}],tasks:[{id:'t',goalId:'g',actor:'codex',status:'awaiting_review',outcome:{checks:{passed:2,total:2}}}]};
+let reviewed=adaptSnapshot(reviewing,[],now);assert.match(reviewed.projects[0].notice||'',/Codex/);assert.doesNotMatch(reviewed.projects[0].notice,/DeepSeek|automatic/);
+reviewing.goals[0].mode='overnight_review';reviewing.tasks[0].actor='deepseek';reviewing.tasks[0].status='awaiting_legacy_review';reviewed=adaptSnapshot(reviewing,[],now);assert.equal(reviewed.projects[0].state,'review');assert.match(reviewed.projects[0].notice,/bounded automatic Codex review/i);
+console.log('Installed mode-specific review notice regression passed');

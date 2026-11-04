@@ -53,3 +53,5 @@ Quit Mosaic, drag `~/Applications/Mosaic.app` to Trash, then remove its Dock ico
 - Final independent review identified partial-check success wording, registration-order progress hiding, and disclosure focus loss. Each was reproduced, corrected and covered by `native/ReviewTests.mjs` (RED→GREEN). Idle polls now avoid replacing unchanged content; unchanged selected inspector nodes survive unrelated updates.
 - Fresh-offline provenance was also corrected with a failing regression: no prior snapshot is claimed before one has loaded.
 - Final review exclusions: installation/reopen/Dock and rendering require direct verification; public notarization is outside this personal build. Their actual results are recorded in the private installation record.
+
+- Installed verification caught an inherited review notice that named DeepSeek during Codex-only work. Corrected through a same-task revision with a failing mode-specific notice regression; no identity, spending or deadline reset. Saved review waiting states also take precedence over report age.
