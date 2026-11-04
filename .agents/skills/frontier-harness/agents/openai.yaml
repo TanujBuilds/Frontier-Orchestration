@@ -1,10 +1,10 @@
 interface:
-  display_name: "Frontier Harness"
+  display_name: "Mosaic"
   short_description: "Choose and coordinate bounded Codex and DeepSeek goals"
   default_prompt: "Use $frontier-harness to choose a workflow if undecided, then prepare scoped work with auditable evidence."
 dependencies:
   tools:
     - type: "mcp"
       value: "frontier-harness"
-      description: "Shared installed Frontier Harness coordinator"
+      description: "Shared installed Mosaic coordinator"
       transport: "stdio"

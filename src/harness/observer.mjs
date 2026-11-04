@@ -19,6 +19,14 @@ const label=type=>({
  'request.reserved':'Request budget reserved','request.saved':'Request result saved'
  })[type]??type.replaceAll('.',' ');
 const trim=value=>String(value).slice(0,2000);
+function outcome(t){
+ const result=t.result??{},integration=t.integration,checks=integration?.checks??result.checks;
+ const files=[...new Set([...(Array.isArray(result.changes)?result.changes:[]),...(Array.isArray(result.newFiles)?result.newFiles:[])].map(x=>x?.path).filter(x=>typeof x==='string'))].slice(0,50).map(x=>x.slice(0,200));
+ const feedback=t.feedback?.findLast(x=>['accept','revise'].includes(x.decision));
+ const review=({none:'Checks only; no Codex review',codex_operator:'Codex review accepted',codex_legacy:'Codex automatic review accepted',codex_native:'Native completion; no separate review recorded'})[integration?.review]??(feedback?feedback.decision==='accept'?'Codex review accepted':'Codex requested changes':'No recorded review');
+ const summary=result.summary??result.workerSummary;
+ return {summary:typeof summary==='string'?trim(summary):null,files,checks:Array.isArray(checks)&&checks.length&&checks.every(x=>typeof x?.passed==='boolean')?{passed:checks.filter(x=>x.passed).length,total:checks.length}:null,review,integrated:t.status==='accepted'&&typeof integration?.commit==='string',commit:/^[a-f0-9]{40}$/.test(integration?.commit??'')?integration.commit:null};
+}
 function window(bytes,start,length){
  const begin=Math.min(start,bytes.length);if(begin<bytes.length&&(bytes[begin]&0xc0)===0x80)throw Error('Evidence start must be a UTF-8 character boundary');
  let end=Math.min(bytes.length,begin+length);while(end>begin&&end<bytes.length&&(bytes[end]&0xc0)===0x80)end--;
@@ -76,6 +84,7 @@ export class Observer {
    const actor=t.executionActor??t.spec.actor,event=this.c.store.db.prepare("SELECT seq,at,type,data FROM events WHERE task_id=? AND type!='model.output' AND (?!='deepseek' OR json_extract(data,'$.provenance')='captured') ORDER BY seq DESC LIMIT 1").get(t.id,actor),last=event?{...event,data:JSON.parse(event.data)}:null,registered=agents.find(a=>a.taskId===t.id&&a.actor===actor);
    return {id:t.id,goalId:t.goalId,objective:trim(t.spec.objective),objectiveTruncated:t.spec.objective.length>2000,kind:t.spec.kind,actor,status:t.status,phase:last?.data.phase??t.checkpoint?.phase??null,priority:t.priority??t.spec.priority,provenance:actor==='codex'?'reported':'captured',lastActivityAt:actor==='codex'?registered?.lastReport?.at??null:last?.at??null,lastActivity:actor==='codex'?registered?.lastReport?.summary??null:last?label(last.type):null,model:actor==='codex'?registered?.model??{requested:null,resolved:null}:{requested:null,resolved:typeof (t.providerModel??t.result?.model)==='string'?trim(t.providerModel??t.result.model):null},spent:this.c.getTask(t.id).spent,usage:actor==='codex'?{reportedTokens:null,completedModelRequests:0,usageUnavailable:null}:this.usage(t.id),deadline:t.deadline,question:t.questions?.length?{...t.questions.at(-1),text:trim(t.questions.at(-1).text??'')}:null,candidate:t.native?{layout:t.native.layout??'legacy',writerActive:t.native.writerActive??null,baseCommit:t.native.baseCommit??null,commit:t.native.commit??null}:null,evidenceRef:'task-'+t.id};
   });
+  for(let index=0;index<rows.length;index++)rows[index].outcome=outcome(selected[index]);
   const goals=this.c.store.db.prepare("SELECT data FROM records WHERE kind='goal' AND (? IS NULL OR id=?) ORDER BY json_extract(data,'$.status')='active' DESC,rowid DESC LIMIT 100").all(q.goalId,q.goalId).map(r=>{const g=JSON.parse(r.data);return {id:g.id,objective:trim(g.manifest.objective),status:g.status,mode:g.manifest.mode.id,environment:g.manifest.environment,deadline:g.deadline,maxTasks:g.manifest.limits.maxTasks,taskCount:this.c.store.db.prepare("SELECT COUNT(*) AS n FROM records WHERE kind='task' AND json_extract(data,'$.goalId')=?").get(g.id).n};});
   const cursor=Number(this.c.store.db.prepare('SELECT COALESCE(MAX(seq),0) AS n FROM events').get().n);
   return {version:1,generatedAt:this.c.now(),cursor,goals,tasks:rows,agents,queue:rows.filter(t=>queueStates.has(t.status)),attention:rows.filter(t=>attentionStates.has(t.status)).map(t=>({taskId:t.id,goalId:t.goalId,status:t.status,objective:t.objective,instruction:'Continue in Codex to inspect and decide.'})),overflow:{tasks:tasks.length>500},limits:{goals:100,tasks:500,agents:500},nativeAccounting:'unavailable unless supplied by the native host'};

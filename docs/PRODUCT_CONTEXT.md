@@ -1,5 +1,9 @@
 # Product context and decisions
 
+## Personal coding-core release direction — 2026-11-04
+
+The owner explicitly chose personal Codex discovery across projects, all four coding modes, login startup, the existing skills/MCP packaging route, and bounded installed live checks. This delivery has its own coding-core acceptance and does not claim the original research/full-product gates passed. Research stays parked. Preserve the single portable coordinator for later clients. See [ordinary use and release boundary](MOSAIC_CODING_CORE.md). Implementation, personal activation and demonstrated installed readiness remain separately evidenced.
+
 ## Current opt-in collaboration direction — 2026-10-30
 
 The owner approved the Codex + DeepSeek Collaboration Package: Codex app/CLI is

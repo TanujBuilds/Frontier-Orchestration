@@ -80,3 +80,18 @@ test('the product home opens the read-only observer; legacy controls require ope
  const f=await apiFixture(t);for(const token of [f.viewerToken,f.token]){const r=await fetch(f.api.url+'/',{headers:{authorization:'Bearer '+token},redirect:'manual'});assert.equal(r.status,303);assert.equal(r.headers.get('location'),'/observer');}
  assert.equal((await fetch(f.api.url+'/legacy-console',{headers:{authorization:'Bearer '+f.viewerToken}})).status,403);const legacy=await fetch(f.api.url+'/legacy-console',{headers:{authorization:'Bearer '+f.token}});assert.equal(legacy.status,200);assert.match(await legacy.text(),/new-goal/);
 });
+
+test('outcome summary uses authoritative integration and checks without copying source or private paths',t=>{
+ const f=fixture(t),task=f.c.store.get('task',f.native.id);
+ task.status='accepted';task.result={summary:'Added the checklist counter',changes:[{path:'src/counter.mjs',content:'PRIVATE SOURCE'}],checks:[{id:'old',passed:false}]};
+ task.feedback=[{decision:'accept',text:'Matches the approved task'}];
+ task.integration={commit:'a'.repeat(40),checks:[{id:'counter',passed:true}],review:'codex_operator',worktree:'/private/path'};f.c.store.put('task',task);
+ const outcome=f.observer.snapshot({}).tasks.find(t=>t.id===task.id).outcome;
+ assert.deepEqual(outcome,{summary:'Added the checklist counter',files:['src/counter.mjs'],checks:{passed:1,total:1},review:'Codex review accepted',integrated:true,commit:'a'.repeat(40)});
+ assert.doesNotMatch(JSON.stringify(outcome),/PRIVATE|private\/path/);
+});
+
+test('outcome summary does not invent checks, review or integration for an unfinished task',t=>{
+ const f=fixture(t),outcome=f.observer.snapshot({}).tasks.find(t=>t.id===f.ds.id).outcome;
+ assert.equal(outcome.checks,null);assert.equal(outcome.integrated,false);assert.equal(outcome.review,'No recorded review');
+});

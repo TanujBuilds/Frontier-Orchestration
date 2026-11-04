@@ -1,7 +1,6 @@
 # Conversational mode selection
 
-Use for substantial new coding or public-source research outcomes, such as
-“build a calendar” or “compare durable queues with evidence.” A definition,
+Use for substantial new coding outcomes, such as “build a calendar.” Research stays parked for the personal coding-core release. A definition,
 small explanation, unrelated chat or question about an existing result needs an
 ordinary response. Do not turn loading this skill into a goal or assignment.
 
@@ -72,3 +71,7 @@ load the installed skills/instructions and discover MCP tools before claiming
 first use works. Existing desktop chats may need refresh; do not restart an
 active owner goal. Ordinary ChatGPT chats are outside this package's scope.
 MCP results do not wake a closed native chat or install an always-on supervisor.
+
+## Coding-core installation
+
+Personal installation exposes the four sibling skills and one MCP server across projects. Explain scope, protected checks and numerical limits in plain language; keep technical manifests available as details. Existing research capabilities are not part of this release acceptance and must not be dispatched while parked. Normal use is an ordinary Codex task followed by one mode choice. A fresh host must demonstrate implicit invocation; if discovery fails, report the failure and offer explicit $frontier-harness invocation without claiming automatic onboarding passed.

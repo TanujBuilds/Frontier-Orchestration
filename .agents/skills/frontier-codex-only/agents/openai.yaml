@@ -1,10 +1,10 @@
 interface:
-  display_name: "Frontier Codex Only"
+  display_name: "Mosaic Codex Only"
   short_description: "Use native Codex without DeepSeek dispatch"
   default_prompt: "Use $frontier-codex-only to complete this authorized native goal without DeepSeek dispatch."
 dependencies:
   tools:
     - type: "mcp"
       value: "frontier-harness"
-      description: "Shared installed Frontier Harness coordinator"
+      description: "Shared installed Mosaic coordinator"
       transport: "stdio"

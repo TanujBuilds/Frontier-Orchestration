@@ -1,7 +1,7 @@
 <!-- BEGIN FRONTIER-HARNESS ONBOARDING v1 -->
-When the installed Frontier Harness is available, use `frontier-harness` for a
-substantial new coding or public-source research outcome, or to continue an
-existing harness goal. Read its onboarding guidance before preparation. Choose
+When the installed Mosaic coding core is available, use `frontier-harness` for a
+substantial new coding task, or to continue an
+existing harness goal. Read its onboarding guidance before preparation. Mosaic is the user-facing name; its internal skill/MCP name remains frontier-harness. Research stays parked in this coding-core release. Requests to inspect progress, pause, stop, continue, answer a worker question or open Mosaic also use this entry. Choose
 in order: explicit current user mode, active goal's pinned mode, explicitly
 owner-saved project preference. If still undecided, ask once: “Which workflow:
 collaborative (recommended), DeepSeek-only, Codex-only, or overnight review?”

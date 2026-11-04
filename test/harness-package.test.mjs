@@ -33,7 +33,7 @@ test('portable skill bundle resolves one shared runtime after relocation and exc
  const compatibilityBody=await readFile(path.join(relocated,'SKILL.md'),'utf8');for(const match of compatibilityBody.matchAll(/\]\(([^)]+\.md)\)/g))await readFile(path.resolve(relocated,match[1]));
  for(const entry of ['scripts/harness.mjs','skills/frontier-harness/scripts/harness.mjs']){
   const result=await new Promise(resolve=>{const p=spawn(process.execPath,[path.join(relocated,entry),'--help'],{cwd:root,env:{PATH:process.env.PATH},stdio:['ignore','pipe','pipe']});let stdout='',stderr='';p.stdout.on('data',b=>stdout+=b);p.stderr.on('data',b=>stderr+=b);p.on('exit',code=>resolve({code,stdout,stderr}));});
-  assert.equal(result.code,0,result.stderr);assert.match(result.stdout,/Frontier Harness/);
+  assert.equal(result.code,0,result.stderr);assert.match(result.stdout,/Mosaic/);
  }
  const missingRuntimeConfig=path.join(root,'private-binding.json');await writeFile(missingRuntimeConfig,JSON.stringify({runtimeRoot:path.join(root,'missing-runtime')}));
  const unavailable=await execute(process.execPath,[path.join(relocated,'scripts/harness.mjs'),'--help'],{cwd:root,env:{PATH:process.env.PATH,FRONTIER_HARNESS_CONFIG:missingRuntimeConfig}}).then(()=>null,error=>error);assert.ok(unavailable);assert.match(unavailable.stderr,/Cannot find module|runtime unavailable/);
@@ -145,7 +145,7 @@ test('installed research RPCs and MCP restart preserve the immutable package inv
  const source=await operation('research_action',{idempotencyKey:'read',taskId:task.id,action:{action:'read',url}});assert.equal(source.source_id,'S001');assert.equal(source.text,text);assert.equal(await verifyPackage(destination),true);
  await stop();assert.equal(await verifyPackage(destination),true);await start();
  const report={title:'Installed SQLite evidence',complete:true,claims:[{id:'C1',kind:'fact',text:'WAL processes share one host.',evidence:[{source_id:'S001',quote:text}]}],summary:['C1'],comparisons:[],recommendations:[],contradictions:[],unanswered:[]};const done=await operation('research_action',{idempotencyKey:'finish',taskId:task.id,action:{action:'finish',report}});assert.equal(done.status,'accepted');assert.equal(done.spent.model,0);assert.equal(done.spent.download,1);assert.equal(done.deadline,started.deadline);assert.equal(done.result.checksumsVerified,true);assert.match(await readFile(path.join(done.result.directory,'report.md'),'utf8'),/FIXTURE/);assert.equal(await verifyPackage(destination),true);
- await stop();const help=await execute(process.execPath,[launcher,'--help'],{cwd:root,env});assert.match(help.stdout,/Frontier Harness/);assert.equal(await verifyPackage(destination),true);
+ await stop();const help=await execute(process.execPath,[launcher,'--help'],{cwd:root,env});assert.match(help.stdout,/Mosaic/);assert.equal(await verifyPackage(destination),true);
  const cache=path.join(destination,'runtime/.agents/skills/deep-research/scripts/__pycache__');await mkdir(cache);await writeFile(path.join(cache,'unlisted.pyc'),'untrusted bytecode');await assert.rejects(verifyPackage(destination),/Unlisted/);
 });
 

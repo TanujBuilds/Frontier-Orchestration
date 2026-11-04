@@ -1,10 +1,10 @@
 interface:
-  display_name: "Frontier DeepSeek Only"
+  display_name: "Mosaic DeepSeek Only"
   short_description: "Run bounded local work without Codex fallback"
   default_prompt: "Use $frontier-deepseek-only to run this authorized goal without Codex execution or fallback."
 dependencies:
   tools:
     - type: "mcp"
       value: "frontier-harness"
-      description: "Shared installed Frontier Harness coordinator"
+      description: "Shared installed Mosaic coordinator"
       transport: "stdio"
