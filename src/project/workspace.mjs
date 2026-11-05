@@ -153,14 +153,14 @@ export class Workspace {
     if (Buffer.byteLength(diff) > 512 * 1024) throw new Pause('Diff exceeds review context limit', 'context');
     return { diff, newFiles, snapshot: Object.fromEntries(Object.entries(snapshot).filter(([file]) => !secretPath(file) && matches(file, this.manifest.permissions.readPaths))) };
   }
-  async acceptedDiffs() {
-    const scopes = this.manifest.permissions.writePaths.map(scope => scope.replace(/\/$/, ''));
+  async acceptedDiffs({readPaths} = {}) {
+    const scopes = (readPaths ?? this.manifest.permissions.writePaths).map(scope => scope.replace(/\/$/, ''));
     const commits = this.journal.events.filter(event => event.type === 'stage.accepted');
     const diffs = [];
     let bytes = 0;
     for (const event of commits) {
       if (!/^[a-f0-9]{40}$/.test(event.data.commit)) throw new Pause('Invalid accepted checkpoint commit', 'evidence');
-      const diff = await git(this.root, 'show', '--format=', '--no-ext-diff', '--no-textconv',
+      const diff = await git(this.root, 'show', '--format=', '--no-ext-diff', '--no-textconv', ...(readPaths ? ['--no-renames'] : []),
         event.data.commit, '--', ...scopes);
       bytes += Buffer.byteLength(diff);
       if (bytes > 512 * 1024) throw new Pause('Accepted stage diffs exceed review context limit', 'context');

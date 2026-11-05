@@ -1,10 +1,11 @@
 import {keys,integer,digest} from './contracts.mjs';
 export const isOvernightV2=manifest=>manifest?.mode?.id==='overnight_review'&&manifest.mode.version===2;
 export function normalizeOvernightPolicy(raw,project){
- keys(raw,['preflightCheckIds','finalOnlyCheckIds','maxBatches','maxExchanges','maxCorrections','reconnectMs'],'overnight policy');
+ keys(raw,['preflightCheckIds','finalOnlyCheckIds','maxBatches','maxExchanges','maxCorrections','reconnectMs','launchCheckIds'],'overnight policy');
  if(!project)throw Error('Overnight v2 requires a coding project');
  const p={maxBatches:20,maxExchanges:40,maxCorrections:2,reconnectMs:1800000,...raw};
  for(const name of ['preflightCheckIds','finalOnlyCheckIds']){const ids=p[name];if(!Array.isArray(ids)||name==='preflightCheckIds'&&!ids.length||new Set(ids).size!==ids.length||ids.some(id=>!project.checks.some(c=>c.id===id)))throw Error('Invalid overnight '+name);}
+ if(Object.hasOwn(raw,'launchCheckIds')){if(!Array.isArray(raw.launchCheckIds)||new Set(raw.launchCheckIds).size!==raw.launchCheckIds.length||raw.launchCheckIds.some(id=>!project.checks.some(c=>c.id===id)))throw Error('Invalid launch check IDs');if(raw.launchCheckIds.some(id=>!p.finalOnlyCheckIds.includes(id)))throw Error('Launch checks must be final-only');}
  if(p.preflightCheckIds.some(id=>p.finalOnlyCheckIds.includes(id)))throw Error('Preflight cannot require future final-only checks');
  for(const [k,max]of Object.entries({maxBatches:20,maxExchanges:40,maxCorrections:2,reconnectMs:1800000}))integer(p[k],k,k==='maxCorrections'?0:1,max);
  return p;

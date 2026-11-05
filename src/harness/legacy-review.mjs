@@ -1,3 +1,5 @@
+import path from 'node:path';
+import {Journal} from '../project/journal.mjs';
 import {randomUUID} from 'node:crypto';
 import {ProjectFrontier} from '../project/providers.mjs';
 import {keys,text,digest} from './contracts.mjs';
@@ -17,6 +19,17 @@ export class LegacyReview {
   const paths=(await source.workspace.inventory()).map(f=>f.path).filter(file=>task.spec.role==='final'||!matches(file,task.spec.permissions.writePaths));
   if(paths.length>128)throw Error('Review reference context exceeds 128 files; inspect approved stage scope');
   return source.workspace.readFiles(paths);
+ }
+ async stageEvidence(task,g,checks){
+  const c=this.c,accepted=c.store.all('task').filter(t=>t.goalId===g.id&&t.status==='accepted'&&t.integration),acceptedStages=[];
+  for(const t of accepted){
+   const journal=await new Journal(path.join(c.store.root,'coding'),t.id).load(),firstGate=journal.events.findIndex(e=>e.type==='operation.started'&&/^harness-attempt-\d+\/checks$/.test(e.data.key));
+   acceptedStages.push({id:t.id,role:t.spec.role,objective:t.spec.objective,commit:t.integration.commit,checks:t.integration.checks.map(({id,passed})=>({id,passed})),reviewHistory:t.feedback.filter(f=>f.kind==='legacy_review').map(f=>({decision:f.decision,feedbackHash:digest(f.text),at:f.at})),providerModel:t.providerModel??null,spent:c.getTask(t.id).spent,batchesBeforeFirstGate:firstGate<0?null:journal.events.slice(0,firstGate).filter(e=>e.type==='edits.applied').length});
+  }
+  const target=await this.worker.integration.lockedGoal(g.id,{refuseLegacy:true});let acceptedDiffs;
+  try{acceptedDiffs=await target.workspace.acceptedDiffs({readPaths:task.spec.permissions.readPaths});}finally{await target.release();}
+  const checkIds=g.manifest.overnightPolicy.launchCheckIds??[],plan=c.store.maybe('overnight_plan',g.id),lease=c.store.maybe('lease','coordinator');
+  return {acceptedDiffs,acceptedStages,launchEvidence:{source:'approved_literal_project_checks',checkIds,checks:checks.filter(r=>checkIds.includes(r.id))},overnightLifecycle:{source:'coordinator_records',mode:g.manifest.mode,approvalHash:g.hash,planValidated:plan?.approvalHash===g.hash,plannedTaskIds:plan?.tasks??[],execution:{coordinatorLeaseMatches:lease?.pid===process.pid&&lease?.token===this.worker.owner},nativeChatActivity:'not_observed_by_coordinator',completionReceipt:'pending_after_final_integration',completionAlert:'pending_after_finalization'}};
  }
  async repairEvidence(input,key){return this.worker.integration.effect(key,{op:'review.evidence_repair',...input},async()=>{
   const {c}=this;let task=c.getTask(input.taskId);const g=c.store.get('goal',task.goalId);c.liveTask(task);text(input.reason,'evidence repair reason',2000);
@@ -44,7 +57,9 @@ export class LegacyReview {
   try{
    await source.workspace.recover();const runner=this.worker.integration.checks(source.workspace),sandbox=await runner.verify();
    const checks=await runner.run(source.manifest.permissions.checks,`legacy-${task.id}-${task.reviews}`);if(!checks.every(r=>r.passed))throw Error('Legacy review requires passing protected checks');
-   const referenceFiles=isOvernightV2(g.manifest)?await this.referenceFiles(source,task):null;
+   const v2=isOvernightV2(g.manifest),referenceFiles=v2?await this.referenceFiles(source,task):null,stageEvidence=v2?await this.stageEvidence(task,g,checks):null;
+   const preparedEvidence=v2?{...await source.workspace.evidence(),checks,sandbox,referenceFiles,...stageEvidence,reviewHistory:task.feedback.filter(f=>f.kind==='legacy_review').map(f=>({decision:f.decision,text:f.text.slice(0,4000),at:f.at})),modelContext:source.journal.events.filter(e=>e.type==='harness.context'&&c.store.request(task.id,e.data.key)?.status==='completed').map(e=>e.data)}:null;
+   if(preparedEvidence&&Buffer.byteLength(JSON.stringify(preparedEvidence))>1024*1024)throw Error('Review evidence exceeds 1 MiB; narrow the approved context before further review');
    const reservation=c.store.tx(()=>{
     const current=c.liveTask(task);if(c.now()>=current.deadline)throw Error('Task deadline reached');
     if(current.checkpoint.legacyReviewKey)return c.store.request(task.id,current.checkpoint.legacyReviewKey);
@@ -60,7 +75,7 @@ export class LegacyReview {
     const repo=g.manifest.project.repo,head=await git(repo,'rev-parse','HEAD'),status=await git(repo,'status','--porcelain'),sourceFixture={head,status,approvedBase:g.manifest.project.baseCommit,unchanged:head===g.manifest.project.baseCommit&&!status};
     if(!sourceFixture.unchanged)throw Error('Source fixture changed from its approved revision/status');
     const modelContext=source.journal.events.filter(e=>e.type==='harness.context'&&c.store.request(task.id,e.data.key)?.status==='completed').map(e=>e.data);
-    const evidence={...await source.workspace.evidence(),checks,sandbox,sourceFixture,modelContext,...(referenceFiles?{referenceFiles}:{})};
+    const evidence=preparedEvidence?{...preparedEvidence,sourceFixture}:{...await source.workspace.evidence(),checks,sandbox,sourceFixture,modelContext};
     try{result=await this.worker.reviewer.reviewCode({brief:g.manifest.objective,approvedPlan:g.manifest.acceptance,stage:task.spec,assignment:task.spec,evidence},AbortSignal.timeout(Math.max(1,Math.min(300000,task.deadline-c.now()))));c.saveRequest(reservation.id,result);}
     catch(error){c.store.tx(()=>{const t=c.store.get('task',task.id);t.status='blocked';t.reason=error.message;t.checkpoint.legacyReviewKey=null;c.store.put('task',t);c.store.db.prepare("UPDATE requests SET status='failed' WHERE id=?").run(reservation.id);c.emit('legacy_review.failed',g.id,t.id,{id:reservation.id,reason:t.reason});});return c.getTask(task.id);}
    }
