@@ -4,11 +4,13 @@ import path from 'node:path';
 const root=import.meta.dirname,dist=path.join(root,'dist'),app=path.join(dist,'Mosaic.app');
 const run=(name,args)=>execFileSync(name,args,{cwd:root,stdio:'inherit'});
 await mkdir(dist,{recursive:true});
-run('xcrun',['swiftc','-swift-version','5','native/Policy.swift','native/PolicyTests.swift','-o',path.join(dist,'policy-tests')]);
+run('xcrun',['swiftc','-swift-version','5','native/Policy.swift','native/CodexRecent.swift','native/PolicyTests.swift','-o',path.join(dist,'policy-tests')]);
 run(path.join(dist,'policy-tests'),[]);
+run('xcrun',['swiftc','-swift-version','5','native/Policy.swift','native/CodexRecent.swift','native/CodexRecentTests.swift','-o',path.join(dist,'chat-tests')]);
+run(path.join(dist,'chat-tests'),[]);
 await rm(app,{recursive:true,force:true});
 await mkdir(path.join(app,'Contents/MacOS'),{recursive:true});await mkdir(path.join(app,'Contents/Resources'),{recursive:true});
-run('xcrun',['swiftc','-swift-version','5','-O','-target',process.arch==='arm64'?'arm64-apple-macos13.0':'x86_64-apple-macos13.0','-parse-as-library','native/Policy.swift','native/Mosaic.swift','-framework','AppKit','-framework','WebKit','-o',path.join(app,'Contents/MacOS/Mosaic')]);
+run('xcrun',['swiftc','-swift-version','5','-O','-target',process.arch==='arm64'?'arm64-apple-macos13.0':'x86_64-apple-macos13.0','-parse-as-library','native/Policy.swift','native/CodexRecent.swift','native/Mosaic.swift','-framework','AppKit','-framework','WebKit','-o',path.join(app,'Contents/MacOS/Mosaic')]);
 run('xcrun',['swiftc','-swift-version','5','-parse-as-library','native/Icon.swift','-framework','AppKit','-o',path.join(dist,'icon-builder')]);
 run(path.join(dist,'icon-builder'),[path.join(dist,'Mosaic.iconset')]);
 run('iconutil',['-c','icns',path.join(dist,'Mosaic.iconset'),'-o',path.join(app,'Contents/Resources/Mosaic.icns')]);
@@ -21,8 +23,8 @@ await writeFile(path.join(app,'Contents/Info.plist'),`<?xml version="1.0" encodi
 <key>CFBundleName</key><string>Mosaic</string>
 <key>CFBundleDisplayName</key><string>Mosaic</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleVersion</key><string>1</string>
-<key>CFBundleShortVersionString</key><string>1.0.0</string>
+<key>CFBundleVersion</key><string>2</string>
+<key>CFBundleShortVersionString</key><string>1.1.0</string>
 <key>CFBundleIconFile</key><string>Mosaic</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>NSHighResolutionCapable</key><true/>

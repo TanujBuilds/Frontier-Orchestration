@@ -11,9 +11,15 @@ import Foundation
         let endpoint = try ViewerEndpoint(record: good)
         precondition(endpoint.url.host == "127.0.0.1"); count += 1
         for address in ["https://127.0.0.1:4332", "http://localhost:4332", "http://127.0.0.1.evil:4332", "http://user:pass@127.0.0.1:4332", "http://127.0.0.1:4332/path", "http://127.0.0.1:4332?key=x", "http://127.0.0.1:4332#x"] {
-            var bad = good; bad["url"] = address
+        var bad = good; bad["url"] = address
             rejects("reject endpoint \(address)") { _ = try ViewerEndpoint(record: bad) }
         }
+        _ = try ReadInvocation(body:["name":"recent_chats","input":[:]])
+        _ = try ReadInvocation(body:["name":"open_chat","input":["chatId":"12345678-1234-5678-9abc-123456789abc"]])
+        rejects("reject arbitrary chat URL") { _ = try ReadInvocation(body:["name":"open_chat","input":["chatId":"codex://threads/new?prompt=send"]]) }
+        rejects("reject extra chat command") { _ = try ReadInvocation(body:["name":"recent_chats","input":["method":"write"]]) }
+        rejects("reject absent chat ID") { _ = try ReadInvocation(body:["name":"open_chat","input":[:]]) }
+        count += 2
         var bad = good; bad["role"] = "operator"
         rejects("reject operator credential") { _ = try ViewerEndpoint(record: bad) }
         bad = good; bad["token"] = "test\r\nHeader:bad"

@@ -30,11 +30,12 @@ struct ReadInvocation {
             "observer_snapshot":["goalId","actor"],
             "observer_timeline":["goalId","actor","after","limit"],
             "observer_evidence":["reference","start","length"],
-            "observer_artifacts":["taskId"], "open_codex":[]
+            "observer_artifacts":["taskId"], "open_codex":[], "recent_chats":[], "open_chat":["chatId"]
         ]
         guard let fields = allowed[name], Set(input.keys).isSubset(of:fields) else { throw MosaicError.invalidCommand }
         for (key,value) in input {
             switch key {
+            case "chatId": guard let id=value as? String,CodexChatCodec.validID(id) else { throw MosaicError.invalidCommand }
             case "actor": guard ["codex","deepseek"].contains(value as? String ?? "") else { throw MosaicError.invalidCommand }
             case "goalId","taskId": guard let id = value as? String, id.range(of:"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,119}$", options:.regularExpression) != nil else { throw MosaicError.invalidCommand }
             case "reference": guard let reference = value as? String, reference.range(of:"^(task|request)-[a-zA-Z0-9_-]{1,120}$|^artifact-[a-f0-9]{64}$",options:.regularExpression) != nil else { throw MosaicError.invalidCommand }
@@ -48,6 +49,7 @@ struct ReadInvocation {
         }
         if name == "observer_evidence" && input["reference"] == nil { throw MosaicError.invalidCommand }
         if name == "observer_artifacts" && input["taskId"] == nil { throw MosaicError.invalidCommand }
+        if name == "open_chat" && input["chatId"] == nil { throw MosaicError.invalidCommand }
         self.name = name; self.input = input
     }
 }

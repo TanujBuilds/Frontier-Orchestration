@@ -3,6 +3,7 @@ import WebKit
 
 // The renderer receives JSON results, never connection settings or bearer keys.
 final class ViewerBridge: NSObject, WKScriptMessageHandlerWithReply, URLSessionTaskDelegate {
+    private let chats=CodexChatReader()
     private lazy var session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 10
@@ -12,6 +13,7 @@ final class ViewerBridge: NSObject, WKScriptMessageHandlerWithReply, URLSessionT
         configuration.urlCache = nil
         return URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
     }()
+    func shutdown() { chats.shutdown();session.invalidateAndCancel() }
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
         completionHandler(nil)
     }
@@ -21,6 +23,22 @@ final class ViewerBridge: NSObject, WKScriptMessageHandlerWithReply, URLSessionT
               message.webView?.url?.absoluteString == "mosaic-app://ui/index.html",
               let invocation = try? ReadInvocation(body: message.body)
         else { replyHandler(nil,"Mosaic rejected an unsupported observer request."); return }
+        if invocation.name == "recent_chats" {
+            chats.list { result in
+                switch result {
+                case .success(let rows):replyHandler(["chats":rows],nil)
+                case .failure:replyHandler(nil,"Recent Codex chats are unavailable. Check that the Codex CLI is installed, then retry.")
+                }
+            }
+            return
+        }
+        if invocation.name == "open_chat" {
+            guard let id=invocation.input["chatId"] as? String,let url=chats.link(id),let app=NSWorkspace.shared.urlForApplication(withBundleIdentifier:"com.openai.codex") else { replyHandler(nil,"This chat is no longer in the recent list. Refresh the list and try again.");return }
+            NSWorkspace.shared.open([url],withApplicationAt:app,configuration:NSWorkspace.OpenConfiguration()) { _,error in
+                DispatchQueue.main.async{if error != nil{replyHandler(nil,"The chat could not be opened in Codex.")}else{replyHandler(["opened":true],nil)}}
+            }
+            return
+        }
         if invocation.name == "open_codex" {
             guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier:"com.openai.codex") else { replyHandler(nil,"Codex is not installed in Applications."); return }
             NSWorkspace.shared.openApplication(at:url,configuration:NSWorkspace.OpenConfiguration()) { _,error in
@@ -102,12 +120,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     }
     func applicationShouldHandleReopen(_ sender:NSApplication,hasVisibleWindows flag:Bool)->Bool { showWindow(nil);return true }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender:NSApplication)->Bool { false }
-    @objc func showWindow(_ sender:Any?) { window?.makeKeyAndOrderFront(nil);NSApp.activate(ignoringOtherApps:true) }
+    func applicationWillTerminate(_ notification:Notification) { bridge.shutdown() }
+    func updateViewerVisibility(_ visible:Bool?=nil) {
+        let active=visible ?? (window.isVisible && !window.isMiniaturized && window.occlusionState.contains(.visible))
+        webView.evaluateJavaScript("window.MosaicRuntime?.setHostVisible(\(active ? "true":"false"))",completionHandler:nil)
+    }
+    func windowWillClose(_ notification:Notification) { updateViewerVisibility(false) }
+    func windowDidMiniaturize(_ notification:Notification) { updateViewerVisibility(false) }
+    func windowDidDeminiaturize(_ notification:Notification) { updateViewerVisibility() }
+    func windowDidChangeOcclusionState(_ notification:Notification) { updateViewerVisibility() }
+    func webView(_ webView:WKWebView,didFinish navigation:WKNavigation!) { updateViewerVisibility() }
+    @objc func showWindow(_ sender:Any?) { window?.makeKeyAndOrderFront(nil);NSApp.activate(ignoringOtherApps:true);updateViewerVisibility() }
     @objc func refresh(_ sender:Any?) { webView.evaluateJavaScript("window.MosaicRuntime.refresh()",completionHandler:nil) }
     @objc func showLive(_ sender:Any?) { load(false) }
     @objc func showDemo(_ sender:Any?) { load(true) }
     @objc func showAbout(_ sender:Any?) {
-        NSApp.orderFrontStandardAboutPanel(options:[.applicationName:"Mosaic",.applicationVersion:"1.0.0",.credits:NSAttributedString(string:"A window into the work.\nInstructions stay in Codex.\nBased on your Mosaic desktop prototype.")])
+        NSApp.orderFrontStandardAboutPanel(options:[.applicationName:"Mosaic",.applicationVersion:"1.1.0",.credits:NSAttributedString(string:"A window into the work.\nInstructions stay in Codex.\nBased on your Mosaic desktop prototype.")])
     }
     func webView(_ webView:WKWebView,decidePolicyFor action:WKNavigationAction,decisionHandler:@escaping(WKNavigationActionPolicy)->Void) {
         decisionHandler(action.targetFrame?.isMainFrame == true && action.request.url?.absoluteString == "mosaic-app://ui/index.html" ? .allow:.cancel)
