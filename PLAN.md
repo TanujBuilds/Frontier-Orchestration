@@ -1,13 +1,14 @@
-# Mosaic 1.1 — Recent across projects
+# Mosaic full-page project details
 
-Owner asks to find the most recent/current DeepSeek project without switching project selectors and identify/open Codex conversations. Codex-only chosen explicitly. Preserve the installed dark/cyan design and read-only nature.
+Owner asks to streamline navigation: recent project rows should open a full detail page instead of a narrow inspector, with the current version saved first. Continue Codex-only.
 
-1. Define protected Recent projection checks before implementation. Group live DeepSeek running, waiting work and recently updated projects across all goals. Preserve stored statuses, report ages and unknown timestamps; never promote historical/fixture work to current work.
-2. Add Recent as first global navigation item and initial fresh-install view. Reuse task inspector/navigation and existing refresh/focus preservation. Add searchable recent Codex chats with source titles/project labels and exact Open chat links, distinct from registered Mosaic activity. Do not infer chat-to-task association from similar names/paths.
-3. Use documented Codex app-server metadata interface: bounded one-shot local process sends initialize, initialized and fixed thread/list (state DB only, bounded interactive sources, no history/messages or generation). Existing daemon proxy probe did not answer; standalone stdio metadata query succeeded without a model request. Native returns only chat ID/title/project path/updated time/source status. No raw notifications, credentials, arbitrary executable paths/protocol methods exposed. Cached listed UUID may open only codex://threads/UUID without prompt/query. No conversation created or messaged.
-4. Test errors, timeout/cleanup, malformed/bounded metadata, bridge allowlist and exact links. Retain existing tests. Verify Recent live app and labeled demo at wide/small desktop sizes, inspect tasks and open an existing chat. One independent final read-only source review.
-5. Finish/review/integrate through one new bounded Codex-only goal. Package1.1.0 in a new immutable version, preserve old app/state/coordinator/active work, replace only installed app after quitting. Keep existing Dock binding. Record private installation/memory and GitHub source checkpoint.
+Design: preserve charcoal/cyan typography and viewer-only semantics. Keep global navigation; dedicate the entire content area to project details. A visible Back to Recent/History/etc returns to the originating list and scroll/focus. Project heading and assignment selector give context; Summary, Changes and Evidence use full width and preserve per-task tabs, scroll and disclosures. Current work, History and Projects remain usable. No OS full-screen mode switch, new execution controls, provider changes or guessed chat links.
 
-Limits: goal2hours, one coding task90minutes, up to2 operator reviews, one independent reviewer reservation, no DeepSeek requests. Earlier budgets remain closed. No coordinator restart, Spark/auth/network changes or messages to other chats.
+Checkpoint: GitHub annotated tag mosaic-desktop-v1.1.0-before-full-page pins accepted9e7236f; existing immutable1.1.0 app retained. Install new immutable1.2.0 at same Dock path, retain1.1.0 for restoration. Restoration changes only viewer app, never database/spending.
 
-Review focus: truthful running/waiting/closed/fixture classification; project-wide recency; no guessed chat identity; fixed read-only Codex messages; bounded bytes/time/process cleanup; no renderer command/URL authority; opening listed chat sends no message; polling preserves focus/scroll/selection; active coordinator work remains intact.
+- [ ] Define protected behavior regression before UI edits: full-page navigation, project assignment switching, tabs, return origin/scroll/focus, refresh preservation and empty states.
+- [ ] Implement one project detail route, full-width layout, clearer project context and consistent task entry points; preserve runtime/native credential boundaries.
+- [ ] Run focused app suites and native build/sign/bundle; actual protected sandbox checks. Inspect wide/compact native app, keyboard navigation, long content and return behavior. One independent read-only reviewer; fix important findings with regressions.
+- [ ] Native finish, accept and checked integrate through coordinator. Package/install1.2.0 preserving previous app, Dock/service/current state; verify installed UI. Push source branch, retain checkpoint tag; record restoration instructions and private memory.
+
+Limits: one new Codex-only goal2hours, one task90minutes, attempts3,2 operator decisions,1 independent reviewer reservation, no DeepSeek calls. Previous allowances closed. No unrelated goals touched, no coordinator restart.

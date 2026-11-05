@@ -1,0 +1,20 @@
+import vm from'node:vm';import{readFileSync}from'node:fs';import assert from'node:assert/strict';
+const nodes=new Map(),listeners={},windowListeners={},storage=new Map();let focused='';
+function el(id){if(!nodes.has(id)){const classes=new Set();nodes.set(id,{id,innerHTML:'',textContent:'',hidden:false,scrollTop:0,offsetWidth:100,dataset:{},style:{},classList:{toggle:(s,on)=>{on?classes.add(s):classes.delete(s)},contains:s=>classes.has(s),add:s=>classes.add(s),remove:s=>classes.delete(s)},setAttribute(){},removeAttribute(){},focus(){focused=id},addEventListener(){},querySelectorAll(){return[]}})}return nodes.get(id)}
+const document={activeElement:null,querySelector:s=>el(s.replace(/^#/,'')),querySelectorAll:()=>[],addEventListener:(name,fn)=>listeners[name]=fn};
+const window={addEventListener:(n,fn)=>windowListeners[n]=fn,MosaicRuntime:{demo:false,loadEvidence(){},refreshChats(){},captureFocus(){return{}},restoreFocus(){}}};
+const c=vm.createContext({window,document,Date,console,Map,Set,JSON,setTimeout(){},matchMedia:()=>({matches:true}),localStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)}});
+vm.runInContext(readFileSync('ui/adapter.js','utf8'),c);
+const snapshot={goals:[{id:'p',objective:'Build a clear project screen',mode:'codex_only',status:'active'}],tasks:['a','b'].map(id=>({id,goalId:'p',objective:'Assignment '+id,actor:'codex',status:'accepted',outcome:{summary:'Saved result '+id,checks:{passed:1,total:1}}}))};
+window.MOSAIC_DATA=window.MosaicAdapter.adaptSnapshot(snapshot,[]);vm.runInContext(readFileSync('ui/app.js','utf8'),c);
+const click=(action,extra={})=>listeners.click({target:{closest:()=>({dataset:{action,...extra}})}});
+const saved=()=>JSON.parse(storage.get('mosaic-observer-v1'));
+el('main').scrollTop=320;click('task',{task:'a'});
+assert.equal(saved().view,'project','task opens a dedicated project route');assert.equal(el('main').hidden,true,'list is replaced, not shown alongside a popup');assert.equal(el('inspector').hidden,false);assert.match(el('inspector').innerHTML,/Back to Recent/);assert.match(el('inspector').innerHTML,/detail-task-select/);assert.match(el('inspector').innerHTML,/Assignment b/);
+click('detail-tab',{tab:'changes'});assert.equal(saved().tabs.a,'changes');
+listeners.change({target:{id:'detail-task-select',value:'b'}});assert.equal(saved().task,'b');assert.equal(saved().view,'project');
+click('inspector-close');assert.equal(saved().view,'recent');assert.equal(el('main').hidden,false);assert.equal(el('main').scrollTop,320,'back restores list position');
+click('view',{view:'history'});el('main').scrollTop=180;click('task',{task:'a'});assert.match(el('inspector').innerHTML,/Back to History/);assert.equal(saved().tabs.a,'changes');click('inspector-close');assert.equal(saved().view,'history');assert.equal(el('main').scrollTop,180);
+click('view',{view:'overview'});assert.equal(el('inspector').hidden,true,'Current work remains a full overview');
+click('task',{task:'b'});windowListeners['mosaic:data']({detail:window.MosaicAdapter.adaptSnapshot(snapshot,[])});assert.equal(saved().view,'project','polling preserves project route');assert.equal(saved().task,'b');
+console.log('Protected full-page route, assignment switching, tabs, return scroll and refresh cases passed');
