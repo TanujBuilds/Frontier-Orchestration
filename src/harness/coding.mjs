@@ -38,7 +38,7 @@ export class CodingAdapter {
    if(v2&&!journal.last('harness.stage_preflight')){const ids=c.store.get('goal',task.goalId).manifest.overnightPolicy.preflightCheckIds;const results=await checks.run(manifest.permissions.checks.filter(check=>ids.includes(check.id)),'stage-preflight');await journal.append('harness.stage_preflight',{results});if(!results.every(r=>r.passed))throw Error('Stage infrastructure preflight failed under exact stage read policy; correct approved input scope before spending');}
    if(v2&&journal.last('harness.stage_preflight')?.results.some(r=>!r.passed))throw Error('Saved stage infrastructure preflight failed; inspect scope');
    if(phase==='attempt'){
-    const attempt=c.beginAttempt(task.id,owner);return this.worker.checkpoint(task,{...cp,phase:'model',attempt,exchange:0,...(v2?{batch:0,corrections:0,stalePaths:[],reply:null}:{})},owner);
+    const attempt=c.beginAttempt(task.id,owner);return this.worker.checkpoint(task,{...cp,phase:'model',attempt,exchange:0,...(v2?{batch:0,corrections:0,stalePaths:[],reply:null,previousAction:null}:{})},owner);
    }
    if(phase==='model'){
     if(cp.exchange>=(v2?policy.maxExchanges:10))throw new AttemptError('Context exchange limit reached');
@@ -48,7 +48,7 @@ export class CodingAdapter {
     this.worker.activity(task,'coding.context.refreshed',{operationId:`context-${cp.attempt}-${cp.exchange}`,files:context.workingSet.entries});
     if(context.evicted.length)this.worker.activity(task,'coding.context.evicted',{operationId:`evict-${cp.attempt}-${cp.exchange}`,paths:context.evicted});
     const editLimits={maxFiles:2,maxBytes:24576};for(const item of task.memory??[])if(item.recipe.family==='edit_batch'){editLimits.maxFiles=Math.min(editLimits.maxFiles,item.recipe.maxFiles);editLimits.maxBytes=Math.min(editLimits.maxBytes,item.recipe.maxBytes);}
-    const input={task:task.spec,files,inventory,feedback:task.feedback,answers:task.answers,memory:task.memory??[],editLimits,attempt:cp.attempt};
+    const input={task:task.spec,files,inventory,feedback:task.feedback,answers:task.answers,memory:task.memory??[],editLimits,attempt:cp.attempt,...(v2?{exchange:cp.exchange,previousAction:cp.previousAction??null}:{})};
     const requestKey=`code-${cp.attempt}-${cp.exchange}`;
     if(!journal.events.some(e=>e.type==='harness.context'&&e.data.key===requestKey))await journal.append('harness.context',{key:requestKey,attempt:cp.attempt,files:files.map(f=>({path:f.path,hash:f.hash,bytes:Buffer.byteLength(f.content??'')}))});
     const result=await this.worker.model(task,owner,requestKey,[{role:'system',content:v2?overnightSystem:system},{role:'user',content:JSON.stringify(input)}]);
@@ -74,7 +74,7 @@ export class CodingAdapter {
      if(bytes>editLimits.maxBytes)throw new AttemptError('Edit batch exceeds pinned byte limit; submit smaller batches');
     }
     if(reply.type==='needs_approval')throw Error('Assignment needs expanded approval');
-    if(reply.type==='read_files'){const selected=await selectContext(workspace,cp,inventory,reply.paths);this.worker.activity(task,'coding.files.read',{operationId:`read-${requestKey}`,requestId:cp.requestId,files:selected.workingSet.entries.filter(e=>reply.paths.includes(e.path))});if(selected.evicted.length)this.worker.activity(task,'coding.context.evicted',{operationId:`read-evict-${requestKey}`,paths:selected.evicted});return this.worker.checkpoint(task,{...cp,paths:reply.paths,...(v2?{stalePaths:(cp.stalePaths??[]).filter(p=>!reply.paths.includes(p))}:{}),workingSet:selected.workingSet,exchange:cp.exchange+1},owner);}
+    if(reply.type==='read_files'){const selected=await selectContext(workspace,cp,inventory,reply.paths);this.worker.activity(task,'coding.files.read',{operationId:`read-${requestKey}`,requestId:cp.requestId,files:selected.workingSet.entries.filter(e=>reply.paths.includes(e.path))});if(selected.evicted.length)this.worker.activity(task,'coding.context.evicted',{operationId:`read-evict-${requestKey}`,paths:selected.evicted});return this.worker.checkpoint(task,{...cp,paths:reply.paths,...(v2?{stalePaths:(cp.stalePaths??[]).filter(p=>!reply.paths.includes(p)),previousAction:{type:'read_files',fulfilled:true,files:selected.workingSet.entries.filter(e=>reply.paths.includes(e.path))}}:{}),workingSet:selected.workingSet,exchange:cp.exchange+1},owner);}
     if(v2&&reply.type==='finish_stage')return this.worker.checkpoint(task,{...cp,phase:'checks',reply},owner);
     if(v2&&cp.stalePaths?.length)throw new AttemptError('Stale hash requires fresh read_files: '+cp.stalePaths.join(', '));
     if(v2&&cp.batch>=policy.maxBatches)throw new AttemptError('Applied batch limit reached; finish_stage or next attempt required');
@@ -85,7 +85,7 @@ export class CodingAdapter {
     await workspace.apply(v2?`${task.id}/attempt-${cp.attempt}/batch-${cp.batch}`:`harness-attempt-${cp.attempt}`,{writePaths:manifest.permissions.writePaths},cp.reply.edits);
     this.worker.activity(task,'coding.edit.applied',{operationId:v2?`apply-${cp.attempt}-${cp.batch}`:`apply-${cp.attempt}`,requestId:cp.requestId??null,paths:cp.reply.edits.map(e=>e.path)});
     const changed=new Set(cp.reply.edits.map(e=>e.path));if(cp.workingSet)cp.workingSet={...cp.workingSet,entries:cp.workingSet.entries.map(e=>changed.has(e.path)?{...e,hash:null}:e)};
-    return this.worker.checkpoint(task,{...cp,phase:v2?'model':'checks',...(v2?{batch:cp.batch+1,exchange:cp.exchange+1,reply:null}:{})},owner);
+    return this.worker.checkpoint(task,{...cp,phase:v2?'model':'checks',...(v2?{batch:cp.batch+1,exchange:cp.exchange+1,previousAction:{type:'apply_changes',fulfilled:true,batch:cp.batch,paths:cp.reply.edits.map(e=>e.path)},reply:null}:{})},owner);
    }
    if(phase==='checks'){
     this.worker.activity(task,'coding.checks.started',{operationId:`checks-start-${cp.attempt}`,requestId:cp.requestId??null,attempt:cp.attempt});
