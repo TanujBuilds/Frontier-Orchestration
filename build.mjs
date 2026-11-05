@@ -23,8 +23,8 @@ await writeFile(path.join(app,'Contents/Info.plist'),`<?xml version="1.0" encodi
 <key>CFBundleName</key><string>Mosaic</string>
 <key>CFBundleDisplayName</key><string>Mosaic</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleVersion</key><string>2</string>
-<key>CFBundleShortVersionString</key><string>1.1.0</string>
+<key>CFBundleVersion</key><string>3</string>
+<key>CFBundleShortVersionString</key><string>1.2.0</string>
 <key>CFBundleIconFile</key><string>Mosaic</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>NSHighResolutionCapable</key><true/>
