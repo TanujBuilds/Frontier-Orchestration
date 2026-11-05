@@ -34,3 +34,41 @@ input,select { caret-color:var(--mint); }
 @media(max-width:767px) { .workspace { grid-template-rows:48px auto minmax(0,1fr); } }
 
 .brief-preview { display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:4;overflow:hidden; }
+
+/* Recent uses the existing quiet rows and typography, across project boundaries. */
+.recent-grid { display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);grid-template-rows:auto 1fr;grid-template-areas:"live chats" "projects chats";column-gap:40px;row-gap:28px;align-items:start; }
+.recent-live { grid-area:live;min-width:0; }
+.recent-projects { grid-area:projects;min-width:0; }
+.recent-chats { grid-area:chats;min-width:0; }
+.recent-section + .recent-section { margin-top:28px; }
+.recent-grid > .recent-section { margin-top:0; }
+.recent-section .section-title { gap:12px; }
+.recent-section h2 { font-size:16px;font-weight:500; }
+.recent-empty-state { display:flex;gap:12px;padding:18px 0;border-top:1px solid var(--line-soft);border-bottom:1px solid var(--line-soft);color:var(--secondary); }
+.recent-empty-state > .od-icon { --od-icon-size:20px;margin-top:3px;color:var(--mint); }
+.recent-empty-state strong { font-size:14px;font-weight:450;color:var(--text); }
+.recent-empty-state p,.recent-section-note { margin-top:6px;font-size:12px;line-height:1.65;color:var(--muted); }
+.recent-empty { padding:16px 0;color:var(--secondary);font-size:13px;line-height:1.7; }
+.recent-work-row { border-top:1px solid var(--line-soft); }
+.recent-task-button { display:flex;align-items:center;gap:12px;width:100%;padding:17px 0;text-align:left; }
+.recent-task-button > .od-field { flex:1;min-width:0;gap:5px; }
+.recent-task-button strong { font-size:14px;font-weight:450;line-height:1.5;overflow-wrap:anywhere; }
+.recent-task-button .recent-project { color:var(--secondary);font-size:12px;line-height:1.5; }
+.recent-task-button small,.recent-chat-row small { color:var(--muted);font-size:11px;line-height:1.5; }
+.recent-task-button > .od-icon { --od-icon-size:14px;color:var(--muted); }
+.recent-row-state { display:grid;gap:8px;justify-items:end;flex:none; }
+.recent-row-state small { font-variant-numeric:tabular-nums; }
+.recent-row-state .badge { font-size:10px; }
+.recent-chat-row { display:flex;align-items:center;gap:12px;padding:17px 0;border-bottom:1px solid var(--line-soft); }
+.recent-chat-row > .od-field { flex:1;min-width:0;gap:5px; }
+.recent-chat-row h3 { font-family:inherit;font-size:14px;font-weight:450;line-height:1.5;overflow-wrap:anywhere; }
+.recent-chat-row .soft-button { font-size:11px;white-space:nowrap;flex:none; }
+.recent-chat-row .event-symbol,.recent-task-button .event-symbol { color:var(--mint);flex:none; }
+.recent-search { width:100%;margin:16px 0 2px; }
+.recent-inline-notice { padding:14px 0;font-size:12px;color:var(--secondary);line-height:1.6; }
+.linked-chat { margin:0 0 12px 32px; }
+@media(hover:hover){.recent-task-button:hover strong{color:var(--mint)}.recent-chat-row .soft-button:hover{background:var(--raised)}}
+.layout:not(.inspector-closed) .recent-grid { grid-template-columns:minmax(0,1fr);grid-template-areas:"live" "chats" "projects"; }
+@media(max-width:1250px){.recent-grid{grid-template-columns:minmax(0,1fr);grid-template-areas:"live" "chats" "projects";row-gap:28px}.recent-row-state{max-width:130px}}
+
+.recent-task-button[aria-pressed="true"] strong { color:var(--mint); }

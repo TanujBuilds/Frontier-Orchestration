@@ -51,7 +51,12 @@
       });
       for(const t of rows) {
         const status=taskStatus(t),out=t.outcome||{}, q=waiting(t)?questionText(t.question):null;
-        const result={id:t.id,project:g.id,title:title(t.objective,'Registered assignment'),objective:t.objective||'Objective not reported',actor:t.actor==='codex'?'Codex':t.actor==='deepseek'?'DeepSeek':'Actor not reported',implementer:t.actor==='codex'?'Codex':t.actor==='deepseek'?'DeepSeek':'Not reported',mode,status,tone:['Failed','Blocked','Stopped'].includes(status)?'rose':status==='Answer needed'?'amber':'mint',outcome:out.summary||'No saved implementation outcome yet.',checks:checkLabel(out.checks),checksPassed:!!(out.checks&&out.checks.total>0&&out.checks.passed===out.checks.total),review:out.review||'Review not recorded',integration:out.integrated===true?'Integrated':'Not integrated yet',report:`${t.provenance==='reported'?'Native report':'Captured activity'} · ${age(t.lastActivityAt,now)}`,elapsed:'Not reported',attempts:'Not reported',requests:Number.isFinite(t.spent?.model)?String(t.spent.model):'Not reported',usage:t.usage?.reportedTokens==null?'Not reported':`${t.usage.reportedTokens} reported tokens`,files:Array.isArray(out.files)?out.files:[],checkItems:[],feedback:'Review feedback has not been loaded.',output:out.summary||'No saved output reported.',diff:'Saved changes have not been loaded. Open Changes to read the recorded evidence.',integrationDetail:out.integrated===true?`Accepted changes integrated${out.commit?` · commit ${out.commit}`:''}. This saved result remains valid when activity reports become old.`:'No integration result has been recorded.',question:q,rawRecord:t,evidenceRef:t.evidenceRef||null,evidenceNotice:'',evidenceLoaded:false};
+        const result={id:t.id,project:g.id,title:title(t.objective,'Registered assignment'),objective:t.objective||'Objective not reported',actor:t.actor==='codex'?'Codex':t.actor==='deepseek'?'DeepSeek':'Actor not reported',implementer:t.actor==='codex'?'Codex':t.actor==='deepseek'?'DeepSeek':'Not reported',mode,status,sourceStatus:t.status,goalStatus:g.status,environment:g.environment,updatedAt:null,activity:t.lastActivity||'No activity summary reported',tone:['Failed','Blocked','Stopped'].includes(status)?'rose':status==='Answer needed'?'amber':'mint',outcome:out.summary||'No saved implementation outcome yet.',checks:checkLabel(out.checks),checksPassed:!!(out.checks&&out.checks.total>0&&out.checks.passed===out.checks.total),review:out.review||'Review not recorded',integration:out.integrated===true?'Integrated':'Not integrated yet',report:`${t.provenance==='reported'?'Native report':'Captured activity'} · ${age(t.lastActivityAt,now)}`,elapsed:'Not reported',attempts:'Not reported',requests:Number.isFinite(t.spent?.model)?String(t.spent.model):'Not reported',usage:t.usage?.reportedTokens==null?'Not reported':`${t.usage.reportedTokens} reported tokens`,files:Array.isArray(out.files)?out.files:[],checkItems:[],feedback:'Review feedback has not been loaded.',output:out.summary||'No saved output reported.',diff:'Saved changes have not been loaded. Open Changes to read the recorded evidence.',integrationDetail:out.integrated===true?`Accepted changes integrated${out.commit?` · commit ${out.commit}`:''}. This saved result remains valid when activity reports become old.`:'No integration result has been recorded.',question:q,rawRecord:t,evidenceRef:t.evidenceRef||null,evidenceNotice:'',evidenceLoaded:false};
+        const at=[t.lastActivityAt,...events.filter(e=>e.taskId===t.id).map(e=>e.at)].filter(Number.isFinite);
+        result.updatedAt=at.length?Math.max(...at):null;
+        result.updatedLabel=age(result.updatedAt,now);
+        const linked=(snapshot.agents||[]).find(a=>a.taskId===t.id&&a.goalId===g.id&&/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(a.hostAgentId||''));
+        result.chatId=linked?.hostAgentId?.toLowerCase()||null;
         d.tasks[t.id]=result;
         if(terminal(t.status)||out.integrated===true)d.history.push({task:t.id,goal:title(g.objective),when:date(t.lastActivityAt)});
       }
@@ -91,5 +96,17 @@
     if(Number.isInteger(raw.attempts))t.attempts=String(raw.attempts);
     return t;
   }
-  window.MosaicAdapter={adaptSnapshot,applyEvidence,mergeEvents};
+  function recentWork(data) {
+    const tasks=Object.values(data.tasks).map(t=>({...t,updatedAt:Number.isFinite(t.updatedAt)?t.updatedAt:null}));
+    tasks.sort((a,b)=>(b.updatedAt??-1)-(a.updatedAt??-1)||a.id.localeCompare(b.id));
+    const open=t=>!t.goalStatus||t.goalStatus==='active';
+    const resumable=t=>!t.goalStatus||['active','paused'].includes(t.goalStatus);
+    const live=t=>t.environment!=='fixture';
+    const source=t=>t.sourceStatus || ({Working:'running','In review':'awaiting_review','Answer needed':'awaiting_user',Queued:'queued',Blocked:'blocked',Paused:'paused'})[t.status];
+    const working=tasks.filter(t=>t.actor==='DeepSeek'&&source(t)==='running'&&open(t)&&live(t));
+    const waiting=tasks.filter(t=>['queued','suspended','uncertain','blocked','paused','awaiting_user','awaiting_supervisor','awaiting_review','awaiting_legacy_review','codex_ready'].includes(source(t))&&resumable(t)&&live(t));
+    const seen=new Set(),recent=tasks.filter(t=>{if(seen.has(t.project))return false;seen.add(t.project);return true}).slice(0,8);
+    return {working,waiting,recent};
+  }
+  window.MosaicAdapter={adaptSnapshot,applyEvidence,mergeEvents,recentWork};
 })();

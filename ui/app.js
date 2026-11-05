@@ -38,10 +38,10 @@
   };
   const icon = name => `<svg class="od-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">${paths[name] || paths.circle}</svg>`;
   const state = {
-    project: data.projects[0].id, view: 'overview', task: data.projects[0].selected, tab: 'summary',
+    project: data.projects[0].id, view: 'recent', task: data.projects[0].selected, tab: 'summary',
     timeline: { project: data.projects[0].id, task: 'all', actor: 'all' },
     history: { project: 'all', result: 'all', query: '' },
-    selections: {}, tabs: {}, expanded: {}, scroll: {}, inspectorOpen: true
+    selections: {}, tabs: {}, expanded: {}, scroll: {}, inspectorOpen: false, chatQuery: ''
   };
   let pendingSaved = null;
   // Storage is optional in a sandbox. The same state works entirely in memory.
@@ -54,7 +54,8 @@
       state.task = data.tasks[saved.task] ? saved.task : currentProject().selected;
       state.tabs = saved.tabs || {};
       state.expanded = saved.expanded || {};
-      state.view = ['overview','timeline','history','projects'].includes(saved.view) ? saved.view : 'overview';
+      state.view = ['recent','overview','timeline','history','projects'].includes(saved.view) ? saved.view : 'recent';
+      state.inspectorOpen = state.view !== 'recent';
       state.tab = state.tabs[state.task] || 'summary';
       state.timeline.project = state.project;
     }
@@ -87,8 +88,8 @@
     select.innerHTML = data.projects.map(item => `<option value="${item.id}"${item.id === p.id ? ' selected' : ''}>${escape(item.name)}</option>`).join('');
     $('#project-initials').textContent = p.initials;
     $('#project-initials').style.color = projectColor(p);
-    $('#breadcrumb-project').textContent = p.name;
-    $('#breadcrumb-view').textContent = {overview:'Current work',timeline:'Shared timeline',history:'History',projects:'Projects'}[state.view];
+    $('#breadcrumb-project').textContent = state.view === 'recent' ? 'Personal workspace' : p.name;
+    $('#breadcrumb-view').textContent = {recent:'Recent · all projects',overview:'Current work',timeline:'Shared timeline',history:'History',projects:'Projects'}[state.view];
     const connection = $('#connection');
     const connectionText = data.connection === 'demo' ? 'Design demo · not connected' : data.connection === 'disconnected' ? 'Coordinator disconnected' : data.connection === 'loading' ? 'Connecting to coordinator' : 'Coordinator connected';
     connection.className = `connection${data.connection === 'disconnected' ? ' offline' : data.connection === 'loading' ? ' loading' : ''}`;
@@ -144,6 +145,31 @@
     if (p.state === 'empty') return `${header}<section class="large-empty"><span class="empty-symbol">${icon('work')}</span><h2>A clear space for your next goal.</h2><p>No Mosaic work is registered for this project. Give Codex a coding task and choose a mode there. Registered work will appear here.</p><button type="button" class="soft-button" data-action="open-codex">Open Codex ${icon('external')}</button><button type="button" class="text-button" data-action="view" data-view="history">Browse saved results ${icon('arrow')}</button></section>${footnote()}`;
     if (p.state === 'loading') return `${header}<p class="loading-note" role="status">Waiting for the coordinator’s first snapshot.<span class="loading-dots" aria-hidden="true"><i></i><i></i><i></i></span><br>Actor activity will appear when it is reported.</p><div class="skeleton-grid" aria-hidden="true">${[1,2].map(() => '<div class="skeleton-card"><span class="skeleton short"></span><span class="skeleton large"></span><span class="skeleton"></span><span class="skeleton short"></span></div>').join('')}</div><p class="small muted">No activity or outcome is inferred while work is loading.</p>${footnote()}`;
     return `${header}${notice(p)}<div class="actor-grid">${actorPanel(p.codex,'codex')}${actorPanel(p.deepseek,'deepseek')}</div>${handoff(p)}<section><div class="section-title"><h2>Assignments <span class="muted tiny">${p.tasks.length}</span></h2><span class="tiny muted">Registered work only</span></div><div class="assignment-list">${p.tasks.map(taskRow).join('')}</div></section>${recentActivity(p)}${footnote()}`;
+  }
+  function recentTaskRow(task) {
+    const project=data.projects.find(p=>p.id===task.project);
+    const linked=task.chatId && (data.recentChats?.items||[]).some(c=>c.id===task.chatId);
+    return `<article class="recent-work-row"><button type="button" class="recent-task-button" aria-pressed="${state.task===task.id && state.inspectorOpen}" data-action="task" data-task="${escape(task.id)}"><span class="event-symbol">${icon(task.actor==='DeepSeek'?'layers':'terminal')}</span><span class="od-field"><span class="recent-project">${escape(project?.name||'Project not reported')}</span><strong>${escape(task.title)}</strong><small>${escape(task.actor)} · ${escape(data.modes[task.mode]?.name||'Mode not reported')}${task.environment==='fixture'?' · Fixture':''}${task.goalStatus&&task.goalStatus!=='active'?' · Goal '+escape(task.goalStatus):''}</small></span><span class="recent-row-state">${badge(task.status,task.tone)}<small>${escape(data.sample?'Frozen example':task.updatedLabel||'Time not reported')}</small></span>${icon('chevron')}</button>${linked?`<button type="button" class="text-button linked-chat" data-action="open-chat" data-chat="${escape(task.chatId)}">Open linked chat ${icon('external')}</button>`:''}</article>`;
+  }
+  function chatRows() {
+    const list=data.recentChats||{state:'loading',items:[]};
+    if(data.sample)return '<p class="recent-empty">Design demo. Real Codex chat titles appear in Live Work.</p>';
+    const items=(list.items||[]).filter(c=>`${c.title} ${c.project}`.toLowerCase().includes(state.chatQuery.toLowerCase()));
+    const error=list.state==='error'?`<div class="recent-inline-notice" role="status"><p>${escape(list.error)}${list.loadedAt?' Showing the last successful chat list.':''}</p><button type="button" class="text-button" data-action="refresh-chats">Retry chats</button></div>`:'';
+    if(!items.length)return `${error}<p class="recent-empty">${list.state==='loading'?'Loading recent chats…':state.chatQuery?'No chats match your search.':list.state==='error'?'Chat titles are unavailable. Open Codex to find your conversation.':'No recent local Codex chats.'}</p>`;
+    return `${error}<div class="recent-chat-list">${items.map(chat=>{
+      const timestamp=Number.isFinite(chat.updatedAt)?chat.updatedAt*(chat.updatedAt<1e12?1000:1):null;
+      return `<article class="recent-chat-row"><span class="event-symbol">${icon('message')}</span><span class="od-field"><h3>${escape(chat.title)}</h3><small>${escape(chat.project||'Project not reported')} · ${escape(timestamp?new Date(timestamp).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):'Update time not reported')}</small></span><button type="button" class="soft-button" data-action="open-chat" data-chat="${escape(chat.id)}" aria-label="Open chat: ${escape(chat.title)}">Open chat ${icon('external')}</button></article>`;
+    }).join('')}</div>`;
+  }
+  function recent() {
+    const work=window.MosaicAdapter.recentWork(data);
+    const offline=data.connection==='disconnected';
+    const live=`<section class="recent-section" aria-label="DeepSeek across all projects"><div class="section-title"><h2>${offline?'Last saved DeepSeek assignments':'DeepSeek now'} <span class="count">${work.working.length}</span></h2><span class="tiny muted">${offline?'Current activity unknown':'Registered work'}</span></div>${work.working.length?`<div class="recent-work-list">${work.working.map(recentTaskRow).join('')}</div>`:`<div class="recent-empty-state">${icon('layers')}<div><strong>${data.connection==='loading'?'Checking registered assignments…':'No running DeepSeek assignment recorded'}</strong><p>${offline?'Reconnect to see current assignments.':'A collaborative chat can be planning or waiting before it registers a DeepSeek assignment. Find the conversation in Recent Codex chats.'}</p></div></div>`}</section>`;
+    const waiting=work.waiting.length?`<section class="recent-section"><div class="section-title"><h2>Waiting & needs attention</h2><span class="tiny muted">${work.waiting.length} assignments</span></div><div class="recent-work-list">${work.waiting.slice(0,8).map(recentTaskRow).join('')}</div></section>`:'';
+    const chats=`<section class="recent-section recent-chats" aria-label="Recent Codex chats"><div class="section-title"><h2>Recent Codex chats</h2><button type="button" class="text-button" data-action="refresh-chats">Refresh chats</button></div><p class="recent-section-note">Open the exact conversation. Saved chat activity does not imply DeepSeek is working there.</p><label class="sr-only" for="recent-chat-search">Find a recent chat</label><input id="recent-chat-search" class="search-input recent-search" type="search" placeholder="Find a chat or project" value="${escape(state.chatQuery)}" autocomplete="off"><div id="recent-chat-results">${chatRows()}</div></section>`;
+    const projects=`<section class="recent-section recent-projects"><div class="section-title"><h2>Recent projects</h2><span class="tiny muted">Most recently updated first</span></div>${work.recent.length?`<div class="recent-work-list">${work.recent.map(recentTaskRow).join('')}</div>`:'<p class="recent-empty">No registered project activity yet.</p>'}</section>`;
+    return `${intro(currentProject(),'Recent','DeepSeek work and recent chats, across all your projects.',false)}<div class="recent-grid"><div class="recent-live">${live}${waiting}</div>${chats}${projects}</div>${footnote()}`;
   }
   function projectOptions(value, allProjects = true) {
     return `${allProjects ? `<option value="all"${value === 'all' ? ' selected' : ''}>All projects</option>` : ''}${data.projects.map(p => `<option value="${p.id}"${p.id === value ? ' selected' : ''}>${escape(p.name)}</option>`).join('')}`;
@@ -206,7 +232,7 @@
   }
   function render({ focus = '', resetMain = false, preserveInspector = false } = {}) {
     renderChrome();
-    $('#main').innerHTML = ({overview, timeline, history, projects})[state.view]();
+    $('#main').innerHTML = ({recent, overview, timeline, history, projects})[state.view]();
     if (!preserveInspector) renderInspector();
     restore();
     if (resetMain) $('#main').scrollTop = 0;
@@ -238,6 +264,7 @@
   function navigate(view) {
     capture();
     state.view = view;
+    if (view === 'recent') {state.inspectorOpen=false;window.MosaicRuntime.refreshChats();}
     if (view === 'overview') {
       const p = currentProject();
       if (!p.tasks.includes(state.task)) state.task = p.selected;
@@ -304,6 +331,10 @@
     else if (action === 'open-codex') {
       window.MosaicRuntime.openCodex().catch(() => openDialog('Open Codex', '<p>Codex could not be opened automatically. Open it from Applications, then return to the conversation for this work.</p>', button));
     }
+    else if (action === 'open-chat') {
+      window.MosaicRuntime.openChat(button.dataset.chat).catch(()=>openDialog('Open chat','<p>This chat could not be opened. Refresh Recent chats, then try again.</p>',button));
+    }
+    else if (action === 'refresh-chats') window.MosaicRuntime.refreshChats();
     else if (action === 'brief-toggle') { const key=`brief:${state.task}`;state.expanded[key]=!state.expanded[key];$('#inspector .inspector-description').classList.toggle('brief-preview',!state.expanded[key]);button.textContent=state.expanded[key]?'Collapse brief':'Read full brief';button.setAttribute('aria-expanded',String(state.expanded[key]));save(); }
     else if (action === 'refresh') window.MosaicRuntime.refresh();
     else if (action === 'retry-evidence') { const t=currentTask(); if(t) {delete t.evidenceError;window.MosaicRuntime.loadEvidence(t.id);} }
@@ -327,6 +358,11 @@
     render({focus:`#${control.id}`});
   });
   document.addEventListener('input', event => {
+    if (event.target.id === 'recent-chat-search') {
+      state.chatQuery=event.target.value;
+      $('#recent-chat-results').innerHTML=chatRows();
+      return;
+    }
     if (event.target.dataset.filter !== 'history-query') return;
     // Only the result region changes, preserving typing focus and selection.
     state.history.query = event.target.value;
@@ -372,8 +408,8 @@
   window.addEventListener('mosaic:data',event=>{
     capture();const focused=captureFocus(),inspected=state.task,before=JSON.stringify(currentTask()),projectState=currentProject().state;data=event.detail;
     if(pendingSaved && data.projects.some(p=>p.id===pendingSaved.project)){
-      Object.assign(state,{project:pendingSaved.project,view:['overview','timeline','history','projects'].includes(pendingSaved.view)?pendingSaved.view:'overview',selections:pendingSaved.selections||{},tabs:pendingSaved.tabs||{},expanded:pendingSaved.expanded||{}});
-      state.task=data.tasks[pendingSaved.task]?pendingSaved.task:currentProject().selected;state.tab=state.tabs[state.task]||'summary';state.timeline.project=state.project;pendingSaved=null;
+      Object.assign(state,{project:pendingSaved.project,view:['recent','overview','timeline','history','projects'].includes(pendingSaved.view)?pendingSaved.view:'overview',selections:pendingSaved.selections||{},tabs:pendingSaved.tabs||{},expanded:pendingSaved.expanded||{}});
+      state.task=data.tasks[pendingSaved.task]?pendingSaved.task:currentProject().selected;state.tab=state.tabs[state.task]||'summary';state.timeline.project=state.project;state.inspectorOpen=state.view!=='recent';pendingSaved=null;
     }
     if(!data.projects.some(p=>p.id===state.project)){state.project=data.projects[0].id;state.task=currentProject().selected;state.timeline.project=state.project;}
     if(state.task&&!data.tasks[state.task])state.task=currentProject().selected;
