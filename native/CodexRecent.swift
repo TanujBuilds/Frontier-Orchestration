@@ -4,7 +4,7 @@ import Darwin
 
 enum CodexChatCodec {
     static let listRequest:[String:Any] = ["jsonrpc":"2.0","id":2,"method":"thread/list","params":["limit":20,"sortKey":"updated_at","sortDirection":"desc","sourceKinds":["cli","vscode","appServer"],"archived":false,"useStateDbOnly":true]]
-    static let initializeRequest:[String:Any] = ["jsonrpc":"2.0","id":1,"method":"initialize","params":["clientInfo":["name":"mosaic_desktop","title":"Mosaic","version":"1.2.0"],"capabilities":["experimentalApi":false]]]
+    static let initializeRequest:[String:Any] = ["jsonrpc":"2.0","id":1,"method":"initialize","params":["clientInfo":["name":"mosaic_desktop","title":"Mosaic","version":"1.2.1"],"capabilities":["experimentalApi":false]]]
     static func validID(_ id:String)->Bool { id.range(of:"^[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}$",options:.regularExpression) != nil }
     static func rows(_ raw:[String:Any]) throws -> [[String:Any]] {
         guard let data=raw["data"] as? [[String:Any]] else { throw MosaicError.invalidCommand }

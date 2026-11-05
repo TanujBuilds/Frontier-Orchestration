@@ -91,6 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     var demo=false
     func applicationDidFinishLaunching(_ notification:Notification) {
         NSApp.setActivationPolicy(.regular)
+        if let iconURL=Bundle.main.url(forResource:"Mosaic",withExtension:"icns"),let icon=NSImage(contentsOf:iconURL) { NSApp.applicationIconImage=icon }
         NSApp.appearance=NSAppearance(named:.darkAqua)
         installMenus()
         let config=WKWebViewConfiguration()
@@ -135,7 +136,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     @objc func showLive(_ sender:Any?) { load(false) }
     @objc func showDemo(_ sender:Any?) { load(true) }
     @objc func showAbout(_ sender:Any?) {
-        NSApp.orderFrontStandardAboutPanel(options:[.applicationName:"Mosaic",.applicationVersion:"1.2.0",.credits:NSAttributedString(string:"A window into the work.\nInstructions stay in Codex.\nBased on your Mosaic desktop prototype.")])
+        NSApp.orderFrontStandardAboutPanel(options:[.applicationName:"Mosaic",.applicationVersion:"1.2.1",.credits:NSAttributedString(string:"A window into the work.\nInstructions stay in Codex.\nBased on your Mosaic desktop prototype.")])
     }
     func webView(_ webView:WKWebView,decidePolicyFor action:WKNavigationAction,decisionHandler:@escaping(WKNavigationActionPolicy)->Void) {
         decisionHandler(action.targetFrame?.isMainFrame == true && action.request.url?.absoluteString == "mosaic-app://ui/index.html" ? .allow:.cancel)

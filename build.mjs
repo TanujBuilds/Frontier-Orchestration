@@ -12,7 +12,7 @@ await rm(app,{recursive:true,force:true});
 await mkdir(path.join(app,'Contents/MacOS'),{recursive:true});await mkdir(path.join(app,'Contents/Resources'),{recursive:true});
 run('xcrun',['swiftc','-swift-version','5','-O','-target',process.arch==='arm64'?'arm64-apple-macos13.0':'x86_64-apple-macos13.0','-parse-as-library','native/Policy.swift','native/CodexRecent.swift','native/Mosaic.swift','-framework','AppKit','-framework','WebKit','-o',path.join(app,'Contents/MacOS/Mosaic')]);
 run('xcrun',['swiftc','-swift-version','5','-parse-as-library','native/Icon.swift','-framework','AppKit','-o',path.join(dist,'icon-builder')]);
-run(path.join(dist,'icon-builder'),[path.join(dist,'Mosaic.iconset')]);
+run(path.join(dist,'icon-builder'),[path.join(dist,'Mosaic.iconset'),path.join(root,'ui/assets/mosaic.svg')]);
 run('iconutil',['-c','icns',path.join(dist,'Mosaic.iconset'),'-o',path.join(app,'Contents/Resources/Mosaic.icns')]);
 await cp(path.join(root,'ui'),path.join(app,'Contents/Resources/ui'),{recursive:true});
 await writeFile(path.join(app,'Contents/Info.plist'),`<?xml version="1.0" encoding="UTF-8"?>
@@ -23,8 +23,8 @@ await writeFile(path.join(app,'Contents/Info.plist'),`<?xml version="1.0" encodi
 <key>CFBundleName</key><string>Mosaic</string>
 <key>CFBundleDisplayName</key><string>Mosaic</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleVersion</key><string>3</string>
-<key>CFBundleShortVersionString</key><string>1.2.0</string>
+<key>CFBundleVersion</key><string>4</string>
+<key>CFBundleShortVersionString</key><string>1.2.1</string>
 <key>CFBundleIconFile</key><string>Mosaic</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>NSHighResolutionCapable</key><true/>
