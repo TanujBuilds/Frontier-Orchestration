@@ -41,7 +41,7 @@
     project: data.projects[0].id, view: 'recent', task: data.projects[0].selected, tab: 'summary',
     timeline: { project: data.projects[0].id, task: 'all', actor: 'all' },
     history: { project: 'all', result: 'all', query: '' },
-    selections: {}, tabs: {}, expanded: {}, scroll: {}, inspectorOpen: false, chatQuery: ''
+    selections: {}, tabs: {}, expanded: {}, scroll: {}, inspectorOpen: false, chatQuery: '', detailOrigin: null
   };
   let pendingSaved = null;
   // Storage is optional in a sandbox. The same state works entirely in memory.
@@ -54,8 +54,8 @@
       state.task = data.tasks[saved.task] ? saved.task : currentProject().selected;
       state.tabs = saved.tabs || {};
       state.expanded = saved.expanded || {};
-      state.view = ['recent','overview','timeline','history','projects'].includes(saved.view) ? saved.view : 'recent';
-      state.inspectorOpen = state.view !== 'recent';
+      state.view = ['recent','overview','timeline','history','projects','project'].includes(saved.view) ? saved.view : 'recent';
+      state.inspectorOpen = state.view === 'project';
       state.tab = state.tabs[state.task] || 'summary';
       state.timeline.project = state.project;
     }
@@ -89,7 +89,7 @@
     $('#project-initials').textContent = p.initials;
     $('#project-initials').style.color = projectColor(p);
     $('#breadcrumb-project').textContent = state.view === 'recent' ? 'Personal workspace' : p.name;
-    $('#breadcrumb-view').textContent = {recent:'Recent · all projects',overview:'Current work',timeline:'Shared timeline',history:'History',projects:'Projects'}[state.view];
+    $('#breadcrumb-view').textContent = {recent:'Recent · all projects',overview:'Current work',timeline:'Shared timeline',history:'History',projects:'Projects',project:'Project details'}[state.view];
     const connection = $('#connection');
     const connectionText = data.connection === 'demo' ? 'Design demo · not connected' : data.connection === 'disconnected' ? 'Coordinator disconnected' : data.connection === 'loading' ? 'Connecting to coordinator' : 'Coordinator connected';
     connection.className = `connection${data.connection === 'disconnected' ? ' offline' : data.connection === 'loading' ? ' loading' : ''}`;
@@ -207,7 +207,7 @@
   function summaryTab(task) {
     const integrated = task.integration === 'Integrated';
     const checkPass = data.sample ? /^\d+ checks passed$/.test(task.checks) : task.checksPassed === true;
-    return `<section class="detail-section"><h3>Current outcome</h3><p class="outcome-copy">${escape(task.outcome)}</p></section>${task.question ? `<section class="notice"><div><strong>Question for you</strong><p>${escape(task.question)}</p><button type="button" class="text-button" data-action="open-codex">Answer in Codex ${icon('external')}</button></div></section>` : ''}<section class="detail-section"><h3>Checks, review & integration</h3>${milestone(checkPass ? 'checkCircle' : 'circle',checkPass ? 'mint' : 'muted',task.checks,checkPass ? 'Protected checks · saved evidence' : 'Check status from the saved snapshot')}${milestone(task.review.includes('Accepted') ? 'checkCircle' : 'eye',task.review.includes('Accepted') ? 'mint' : 'secondary',task.review,task.mode === 'deepseek_only' ? 'Protected checks govern acceptance' : 'Review is separate from passing checks')}${milestone(integrated ? 'merge' : 'circle',integrated ? 'mint' : 'muted',task.integration,integrated ? 'Saved integration result' : 'Integration is a separate recorded step')}</section><section class="detail-section"><div class="files-heading"><h3>Changed files</h3><span class="count">${task.files.length}</span></div>${fileList(task)}${task.files.length ? '<button type="button" class="text-button" data-action="detail-tab" data-tab="changes">Inspect changes '+icon('arrow')+'</button>' : ''}</section>${disclosure('feedback','Review feedback',`<p>${escape(task.feedback)}</p>`)}${disclosure('evidence','Check evidence',checks(task))}<p class="detail-hint">${escape(task.report)}<br>Usage: ${escape(task.usage || 'Not reported')}</p>`;
+    return `<div class="project-summary-grid"><div><section class="detail-section"><h3>Current outcome</h3><p class="outcome-copy">${escape(task.outcome)}</p></section>${task.question ? `<section class="notice"><div><strong>Question for you</strong><p>${escape(task.question)}</p><button type="button" class="text-button" data-action="open-codex">Answer in Codex ${icon('external')}</button></div></section>` : ''}<section class="detail-section"><div class="files-heading"><h3>Changed files</h3><span class="count">${task.files.length}</span></div>${fileList(task)}${task.files.length ? '<button type="button" class="text-button" data-action="detail-tab" data-tab="changes">Inspect changes '+icon('arrow')+'</button>' : ''}</section></div><div><section class="detail-section"><h3>Checks, review & integration</h3>${milestone(checkPass ? 'checkCircle' : 'circle',checkPass ? 'mint' : 'muted',task.checks,checkPass ? 'Protected checks · saved evidence' : 'Check status from the saved snapshot')}${milestone(task.review.includes('Accepted') ? 'checkCircle' : 'eye',task.review.includes('Accepted') ? 'mint' : 'secondary',task.review,task.mode === 'deepseek_only' ? 'Protected checks govern acceptance' : 'Review is separate from passing checks')}${milestone(integrated ? 'merge' : 'circle',integrated ? 'mint' : 'muted',task.integration,integrated ? 'Saved integration result' : 'Integration is a separate recorded step')}</section>${disclosure('feedback','Review feedback',`<p>${escape(task.feedback)}</p>`)}${disclosure('evidence','Check evidence',checks(task))}<p class="detail-hint">${escape(task.report)}<br>Usage: ${escape(task.usage || 'Not reported')}</p></div></div>`;
   }
   function changesTab(task) {
     return `<section class="detail-section"><h3>Saved changes</h3><p class="outcome-copy">Implemented by ${escape(task.implementer)}. ${escape(task.files.length ? (data.sample ? 'Illustrative saved changes in the design demo.' : task.changeNotice || 'Saved file contents, not a live filesystem view.') : 'No implementation changes are available in this snapshot.')}</p></section><section class="detail-section">${fileList(task)}</section>${disclosure('diff','Inspect saved diff',`<pre class="diff-code">${escape(task.diff)}</pre>`)}${disclosure('saved-output','Saved output',`<p>${escape(task.output)}</p>`)}<section class="detail-section" style="margin-top:24px"><h3>Integration result</h3><p class="outcome-copy">${escape(task.integrationDetail)}</p></section>`;
@@ -218,52 +218,64 @@
   }
   function renderInspector() {
     const inspector = $('#inspector');
+    state.inspectorOpen=state.view==='project';
+    $('#main').hidden=state.inspectorOpen;
+    $('#layout').classList.toggle('project-open',state.inspectorOpen);
     const task = currentTask();
     const empty = !task || ['empty','loading'].includes(currentProject().state);
     inspector.hidden = !state.inspectorOpen;
     $('#layout').classList.toggle('inspector-closed', !state.inspectorOpen);
     if (!state.inspectorOpen) return;
     if (task && !task.evidenceLoaded) setTimeout(() => window.MosaicRuntime.loadEvidence(task.id),0);
+    const returnLabel={recent:'Recent',overview:'Current work',history:'History',timeline:'Shared timeline',projects:'Projects'}[state.detailOrigin?.view]||'Recent';
     if (empty) {
-      inspector.innerHTML = `<div class="inspector-toolbar"><span>Task details</span><button type="button" class="icon-button" data-action="inspector-close" aria-label="Close task details">${icon('close')}</button></div><div class="inspector-empty">${icon('file')}<h2>${currentProject().state === 'loading' ? 'Waiting for assignments' : 'Nothing selected yet'}</h2><p>${currentProject().state === 'loading' ? 'Task details appear once a coordinator snapshot is available.' : 'Select an assignment or a saved result to inspect its outcome and evidence.'}</p></div>`;
+      inspector.innerHTML = `<div class="inspector-toolbar"><button type="button" class="text-button project-back" data-action="inspector-close">${icon('arrow')} Back to ${returnLabel}</button></div><div class="inspector-empty">${icon('file')}<h2 id="detail-title" tabindex="-1">${currentProject().state === 'loading' ? 'Waiting for assignments' : 'Nothing selected yet'}</h2><p>${currentProject().state === 'loading' ? 'Task details appear once a coordinator snapshot is available.' : 'Select an assignment or a saved result to inspect its outcome and evidence.'}</p></div>`;
       return;
     }
-    inspector.innerHTML = `<div class="inspector-toolbar"><span>Task details</span><div class="od-row"><span class="tiny muted">Read-only</span><button type="button" class="icon-button" data-action="inspector-close" aria-label="Close task details">${icon('close')}</button></div></div><div class="inspector-scroll" id="inspector-scroll">${badge(task.status,task.tone,task.status === 'Integrated' ? 'checkCircle' : task.status === 'In review' ? 'eye' : '')}<h2 class="inspector-title" id="detail-title" tabindex="-1">${escape(task.title)}</h2><div class="detail-people">${icon('people')}<span>${escape(task.actor)}</span></div><p class="inspector-description${!data.sample && task.objective.length > 220 && !state.expanded[`brief:${task.id}`] ? ' brief-preview' : ''}">${escape(task.objective)}</p>${!data.sample && task.objective.length > 220 ? `<button type="button" class="text-button" data-action="brief-toggle" aria-expanded="${!!state.expanded[`brief:${task.id}`]}">${state.expanded[`brief:${task.id}`] ? 'Collapse brief' : 'Read full brief'}</button>` : ''}<div class="od-cluster">${modeButton(task.mode)}</div><div class="detail-tabs" role="tablist" aria-label="Task inspection">${[['summary','Summary'],['changes','Changes'],['evidence','Evidence']].map(([id,label]) => `<button type="button" id="tab-${id}" class="detail-tab${state.tab === id ? ' active' : ''}" role="tab" aria-selected="${state.tab === id}" aria-controls="detail-content" tabindex="${state.tab === id ? 0 : -1}" data-action="detail-tab" data-tab="${id}">${label}</button>`).join('')}</div><div id="detail-content" role="tabpanel" aria-labelledby="tab-${state.tab}" tabindex="0">${task.evidenceError ? `<p class="detail-hint" role="status">${escape(task.evidenceError)}</p><button type="button" class="text-button evidence-retry" data-action="retry-evidence">Retry evidence</button>` : ''}${state.tab === 'summary' ? summaryTab(task) : state.tab === 'changes' ? changesTab(task) : evidenceTab(task)}</div></div><footer class="inspector-footer"><button type="button" class="text-button" data-action="task-timeline">View in timeline ${icon('arrow')}</button><button type="button" class="soft-button" data-action="open-codex">Open Codex ${icon('external')}</button></footer>`;
+    const project=currentProject();
+    const picker=project.tasks.length>1 ? `<label class="project-task-picker" for="detail-task-select">Assignment <select id="detail-task-select">${project.tasks.map(id=>`<option value="${escape(id)}"${id===state.task?' selected':''}>${escape(data.tasks[id].title)} · ${escape(data.tasks[id].status)}</option>`).join('')}</select></label>` : '<p class="project-task-count">1 assignment in this project</p>';
+    inspector.innerHTML = `<div class="inspector-toolbar"><button type="button" class="text-button project-back" data-action="inspector-close">${icon('arrow')} Back to ${returnLabel}</button><span class="tiny muted">Project details · Read-only</span></div><div class="inspector-scroll" id="inspector-scroll"><header class="project-page-header"><h1 id="project-title">${escape(project.name)}</h1><div class="project-page-meta">${modeButton(task.mode)}<span>${project.tasks.length} ${project.tasks.length===1?'assignment':'assignments'}</span></div></header>${picker}<div class="project-assignment-head"><div class="task-state-line">${badge(task.status,task.tone,task.status === 'Integrated' ? 'checkCircle' : task.status === 'In review' ? 'eye' : '')}<div class="detail-people">${icon('people')}<span>${escape(task.actor)}</span></div></div><h2 class="inspector-title" id="detail-title" tabindex="-1">${escape(task.title)}</h2>${disclosure('brief','Assignment brief',`<p class="inspector-description">${escape(task.objective)}</p>`) }</div><div class="detail-tabs" role="tablist" aria-label="Task inspection">${[['summary','Summary'],['changes','Changes'],['evidence','Evidence']].map(([id,label]) => `<button type="button" id="tab-${id}" class="detail-tab${state.tab === id ? ' active' : ''}" role="tab" aria-selected="${state.tab === id}" aria-controls="detail-content" tabindex="${state.tab === id ? 0 : -1}" data-action="detail-tab" data-tab="${id}">${label}</button>`).join('')}</div><div id="detail-content" role="tabpanel" aria-labelledby="tab-${state.tab}" tabindex="0">${task.evidenceError ? `<p class="detail-hint" role="status">${escape(task.evidenceError)}</p><button type="button" class="text-button evidence-retry" data-action="retry-evidence">Retry evidence</button>` : ''}${state.tab === 'summary' ? summaryTab(task) : state.tab === 'changes' ? changesTab(task) : evidenceTab(task)}</div></div><footer class="inspector-footer"><button type="button" class="text-button" data-action="task-timeline">View in timeline ${icon('arrow')}</button><button type="button" class="soft-button" data-action="open-codex">Open Codex ${icon('external')}</button></footer>`;
   }
   function render({ focus = '', resetMain = false, preserveInspector = false } = {}) {
     renderChrome();
-    $('#main').innerHTML = ({recent, overview, timeline, history, projects})[state.view]();
+    $('#main').hidden=state.view==='project';
+    $('#main').innerHTML = state.view==='project' ? '' : ({recent, overview, timeline, history, projects})[state.view]();
     if (!preserveInspector) renderInspector();
     restore();
     if (resetMain) $('#main').scrollTop = 0;
     if (focus) $(focus)?.focus({ preventScroll: true });
     save();
   }
-  function selectProject(id) {
-    if (!data.projects.some(p => p.id === id)) return;
-    capture();
-    state.project = id;
-    state.view = 'overview';
-    state.task = state.selections[id] || currentProject().selected;
-    state.tab = state.tabs[state.task] || 'summary';
-    state.inspectorOpen = true;
-    state.timeline = { project:id, task:'all', actor:'all' };
-    render({ focus:'#page-heading' }); motion('#main','view-arrive');
+  function rememberOrigin(focusTask=null,focusProject=null,source=null) {
+    if(state.view!=='project') state.detailOrigin={view:state.view,project:state.project,task:state.task,tab:state.tab,focusTask,focusProject,focusRegion:(source?.closest?.('#main')||document.activeElement?.closest?.('#main'))?'main':'navigation'};
   }
-  function openTask(id) {
-    const task = data.tasks[id];
-    if (!task) return;
-    capture();
-    state.project = task.project;
-    state.task = id;
-    state.selections[task.project] = id;
-    state.tab = state.tabs[id] || 'summary';
-    state.inspectorOpen = true;
-    render({ focus:'#detail-title' }); motion('#inspector','inspector-arrive');
+  function selectProject(id,source=null) {
+    const project=data.projects.find(p=>p.id===id);if(!project)return;
+    capture();rememberOrigin(null,id,source);
+    state.project=id;state.task=state.selections[id]||project.selected;
+    state.tab=state.tabs[state.task]||'summary';state.view='project';state.inspectorOpen=true;
+    state.timeline={project:id,task:'all',actor:'all'};
+    render({focus:'#detail-title'});motion('#inspector','view-arrive');
+  }
+  function openTask(id,source=null) {
+    const task=data.tasks[id];if(!task)return;
+    capture();rememberOrigin(id,null,source);
+    state.project=task.project;state.task=id;state.selections[task.project]=id;
+    state.tab=state.tabs[id]||'summary';state.view='project';state.inspectorOpen=true;
+    render({focus:'#detail-title'});motion('#inspector','view-arrive');
+  }
+  function backToList() {
+    capture();const origin=state.detailOrigin;
+    state.view=origin?.view||'recent';
+    if(origin&&data.projects.some(p=>p.id===origin.project)){state.project=origin.project;state.task=origin.task;state.tab=origin.tab;}
+    state.inspectorOpen=false;state.detailOrigin=null;
+    render();
+    const opener=all('[data-action]').find(e=>((e.closest?.('#main')?'main':'navigation')===origin?.focusRegion)&&((origin?.focusTask&&e.dataset.action==='task'&&e.dataset.task===origin.focusTask)||(origin?.focusProject&&e.dataset.action==='project'&&e.dataset.project===origin.focusProject)));
+    (opener||$('#page-heading'))?.focus({preventScroll:true});motion('#main','view-arrive');
   }
   function navigate(view) {
     capture();
-    state.view = view;
+    state.view = view;state.inspectorOpen=false;state.detailOrigin=null;
     if (view === 'recent') {state.inspectorOpen=false;window.MosaicRuntime.refreshChats();}
     if (view === 'overview') {
       const p = currentProject();
@@ -293,8 +305,8 @@
     if (!button) return;
     const action = button.dataset.action;
     if (action === 'view') navigate(button.dataset.view);
-    else if (action === 'project') selectProject(button.dataset.project);
-    else if (action === 'task') openTask(button.dataset.task);
+    else if (action === 'project') selectProject(button.dataset.project,button);
+    else if (action === 'task') openTask(button.dataset.task,button);
     else if (action === 'detail-tab') {
       const tab = button.dataset.tab;
       if (!['summary','changes','evidence'].includes(tab)) return;
@@ -302,7 +314,7 @@
       renderInspector(); restore(); save(); $(`#tab-${tab}`)?.focus({ preventScroll:true }); motion('#detail-content','tab-arrive');
     }
     else if (action === 'inspector-close') {
-      capture(); state.inspectorOpen = false; render({ focus:'.nav-button.active' });
+      backToList();
     }
     else if (action === 'task-timeline') {
       capture(); const task = currentTask();
@@ -345,6 +357,7 @@
   });
   document.addEventListener('change', event => {
     const control = event.target;
+    if (control.id === 'detail-task-select') { if(currentProject().tasks.includes(control.value))openTask(control.value);return; }
     if (control.id === 'project-select') { selectProject(control.value); return; }
     if (!control.dataset.filter) return;
     capture();
@@ -386,7 +399,7 @@
       tabs[next].click();
     }
     if (event.key === 'Escape' && !$('#info-dialog').open && state.inspectorOpen) {
-      capture(); state.inspectorOpen = false; render({focus:'.nav-button.active'});
+      backToList();
     }
   });
   $('#info-dialog').addEventListener('click', event => {
@@ -405,15 +418,18 @@
   }
   const captureFocus=()=>window.MosaicRuntime.captureFocus();
   const restoreFocus=focus=>window.MosaicRuntime.restoreFocus(focus);
+  function projectPageKey() {
+    const p=currentProject();return JSON.stringify([p.id,p.name,p.state,p.tasks.map(id=>[id,data.tasks[id]?.title,data.tasks[id]?.status])]);
+  }
   window.addEventListener('mosaic:data',event=>{
-    capture();const focused=captureFocus(),inspected=state.task,before=JSON.stringify(currentTask()),projectState=currentProject().state;data=event.detail;
+    capture();const focused=captureFocus(),inspected=state.task,before=JSON.stringify(currentTask()),projectState=currentProject().state,pageKey=projectPageKey();data=event.detail;
     if(pendingSaved && data.projects.some(p=>p.id===pendingSaved.project)){
-      Object.assign(state,{project:pendingSaved.project,view:['recent','overview','timeline','history','projects'].includes(pendingSaved.view)?pendingSaved.view:'overview',selections:pendingSaved.selections||{},tabs:pendingSaved.tabs||{},expanded:pendingSaved.expanded||{}});
-      state.task=data.tasks[pendingSaved.task]?pendingSaved.task:currentProject().selected;state.tab=state.tabs[state.task]||'summary';state.timeline.project=state.project;state.inspectorOpen=state.view!=='recent';pendingSaved=null;
+      Object.assign(state,{project:pendingSaved.project,view:['recent','overview','timeline','history','projects','project'].includes(pendingSaved.view)?pendingSaved.view:'overview',selections:pendingSaved.selections||{},tabs:pendingSaved.tabs||{},expanded:pendingSaved.expanded||{}});
+      state.task=data.tasks[pendingSaved.task]?pendingSaved.task:currentProject().selected;state.tab=state.tabs[state.task]||'summary';state.timeline.project=state.project;state.inspectorOpen=state.view==='project';pendingSaved=null;
     }
     if(!data.projects.some(p=>p.id===state.project)){state.project=data.projects[0].id;state.task=currentProject().selected;state.timeline.project=state.project;}
     if(state.task&&!data.tasks[state.task])state.task=currentProject().selected;
-    render({preserveInspector:inspected===state.task && before===JSON.stringify(currentTask()) && projectState===currentProject().state});restoreFocus(focused);
+    render({preserveInspector:inspected===state.task && before===JSON.stringify(currentTask()) && projectState===currentProject().state && (state.view!=='project'||pageKey===projectPageKey())});restoreFocus(focused);
   });
   window.addEventListener('mosaic:evidence',event=>{
     const {id,key,value}=event.detail,t=data.tasks[id];

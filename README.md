@@ -1,12 +1,12 @@
 # Mosaic for Mac
 
-A native Mac window for the installed Mosaic coordinator, based on the owner's Mosaic Desktop Prototype. Version 1.1.0. AppKit hosts the original local HTML/CSS/JavaScript and fonts in WebKit. No Node, Terminal or browser window is required to run the installed app.
+A native Mac window for the installed Mosaic coordinator, based on the owner's Mosaic Desktop Prototype. Version 1.2.0. AppKit hosts the original local HTML/CSS/JavaScript and fonts in WebKit. No Node, Terminal or browser window is required to run the installed app.
 
 ## Everyday use
 
-Open **Mosaic** from the Dock or `~/Applications/Mosaic.app`. **Recent** is the first navigation item and the default view for a fresh installation. It shows running DeepSeek assignments, waiting work and recently updated projects across all registered goals; select a row to inspect it. Existing saved views are preserved. Registered work refreshes every five seconds while visible. Closed, minimized or fully obscured windows pause polling. Choose a workspace, inspect assignments, browse the shared timeline or search History. Workspaces correspond to saved coordinator goals; projects and chats without registered work are not automatically discovered.
+Open **Mosaic** from the Dock or `~/Applications/Mosaic.app`. **Recent** is the first navigation item and the default view for a fresh installation. It shows running DeepSeek assignments, waiting work and recently updated projects across all registered goals; select a row to open a full project detail page. Existing saved views are preserved. Registered work refreshes every five seconds while visible. Closed, minimized or fully obscured windows pause polling. Choose a workspace, inspect assignments, browse the shared timeline or search History. Workspaces correspond to saved coordinator goals; projects and chats without registered work are not automatically discovered.
 
-The inspector separates outcomes, saved changes, protected checks, review and integration. Open the Changes and Evidence tabs to read bounded saved records. Long assignment briefs collapse by default. Native Codex progress is reported and may become old or unavailable; DeepSeek activity is captured by the coordinator. Old progress does not invalidate saved acceptance or integration. Missing usage remains unknown.
+Project details fill the content area. Use the assignment selector to move through a project, then Summary, Changes and Evidence to inspect the selected assignment. The assignment brief expands on demand. Back returns to the originating list and scroll position; Escape also returns. The page separates outcomes, saved changes, protected checks, review and integration. Open the Changes and Evidence tabs to read bounded saved records. Long assignment briefs collapse by default. Native Codex progress is reported and may become old or unavailable; DeepSeek activity is captured by the coordinator. Old progress does not invalidate saved acceptance or integration. Missing usage remains unknown.
 
 **Recent Codex chats** lists up to20 non-archived local interactive chats, ordered by update time, with their source titles and project folder labels. Search by title or project and choose **Open chat** to open that exact existing conversation. A task offers **Open linked chat** only when its registered host correlation contains that actual chat ID and it is in the current chat list; titles/paths are never used to guess a match. **Open Codex** remains the general app launcher. Instructions, mode selection, answers, pause/stop/continue and approvals stay in Codex. A recent or active Codex conversation does not prove a DeepSeek assignment is running; those are separate sections.
 
@@ -35,6 +35,8 @@ node native/ReviewTests.mjs
 node native/RecentRuntimeTests.mjs
 node native/RecentReviewTests.mjs
 node checks/recent.mjs
+node checks/project-page.mjs
+node native/ProjectPageReviewTests.mjs
 node build.mjs
 node native/BundleTests.mjs
 node native/check-chats.mjs
@@ -71,3 +73,13 @@ Quit Mosaic, drag `~/Applications/Mosaic.app` to Trash, then remove its Dock ico
 - The first live native test exposed a blocking pipe read; switching to available data with safe handle lifetime produced a passing live query and cleanup check.
 - Independent review found paused goals missing from waiting and a child-cleanup gap when quitting immediately after completion. Both were reproduced before correction; regressions pass. Paused goals remain resumable waiting work, and shutdown kills all owned in-flight or terminating metadata children.
 - Independent review and final installed verification are recorded in the private installation record. Earlier closed execution budgets remain closed.
+
+## Restore the previous UI
+
+The known1.1.0 source is saved on GitHub under annotated tag `mosaic-desktop-v1.1.0-before-full-page`. The immutable1.1.0 app and its installation record remain on this Mac. The personal desktop folder includes `Restore Mosaic 1.1.0.command`: quit the Mosaic viewer, then run it to restore only the old app and app installation record. It verifies both bundles and preserves the current app first. Coordinator state, artifacts, credentials and spending are retained. Exact machine paths and restoration checks are in the private installation record.
+
+## 1.2 verification record
+
+The dedicated project route, full content-area replacement, assignment switching, remembered task tabs, Back to Recent/History with original list scroll, Current work overview and live refresh preservation have a protected regression defined before implementation. Native metadata, viewer authentication and model execution are unchanged. Final independent review, installed UI and rollback-check results are recorded outside the bundle.
+
+Independent review reproduced stale sibling-assignment choices during refresh and Back focusing the sidebar duplicate. Project render dependencies and originating-region focus identity now have passing regressions observed failing before correction.

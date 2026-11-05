@@ -72,3 +72,68 @@ input,select { caret-color:var(--mint); }
 @media(max-width:1250px){.recent-grid{grid-template-columns:minmax(0,1fr);grid-template-areas:"live" "chats" "projects";row-gap:28px}.recent-row-state{max-width:130px}}
 
 .recent-task-button[aria-pressed="true"] strong { color:var(--mint); }
+
+/* A project is a page, with one reading surface instead of a parallel drawer. */
+.layout.project-open { display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr); }
+.layout.project-open > #main { display:none; }
+.layout.project-open > .inspector { border:0;background:var(--bg);min-width:0; }
+.project-open .inspector-toolbar { padding:20px 40px;background:var(--bg); }
+.project-back { gap:10px;color:var(--secondary);font-size:14px; }
+.project-back > .od-icon { transform:rotate(180deg); }
+.project-open .inspector-scroll { padding:32px 40px 48px; }
+.project-page-header { padding-bottom:24px;border-bottom:1px solid var(--line);margin-bottom:24px; }
+.project-page-header h1 { font-size:32px;font-weight:500;line-height:1.2;letter-spacing:-.03em;overflow-wrap:anywhere;max-width:40ch;margin:0 0 16px; }
+.project-page-meta { display:flex;gap:20px;align-items:center;flex-wrap:wrap;color:var(--muted);font-size:13px; }
+.project-task-picker { display:flex;align-items:center;gap:16px;font-size:13px;color:var(--secondary);margin:0 0 28px; }
+.project-task-picker select { flex:1;min-width:0;max-width:840px;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:10px 12px; }
+.project-task-count { margin:0 0 24px;color:var(--muted);font-size:13px; }
+.project-open .inspector-title { font-size:24px;max-width:65ch;margin:14px 0; }
+.project-open .inspector-description { max-width:75ch;margin:16px 0;font-size:16px; }
+.project-open .detail-tabs { margin:28px 0;gap:32px; }
+.project-open .detail-tab { font-size:15px;padding-bottom:14px; }
+.project-open #detail-content { max-width:1120px; }
+.project-open .detail-section { margin-bottom:32px; }
+.project-open .detail-section h3 { font-size:16px;font-weight:550; }
+.project-open .outcome-copy,.project-open .disclosure-body p { max-width:75ch; }
+.project-open .file-row,.project-open .file-row code,.project-open .detail-hint { font-size:13px; }
+.project-open .milestone { padding:16px 0; }
+.project-open .milestone strong { font-size:15px; }
+.project-open .milestone small { font-size:12px; }
+.project-open .inspector-footer { background:var(--bg);padding:18px 40px; }
+.project-open .inspector-footer .text-button { font-size:14px; }
+@media(max-width:1250px) {
+ .project-open .inspector-toolbar,.project-open .inspector-footer { padding:18px 24px; }
+ .project-open .inspector-scroll { padding:24px; }
+ .project-page-header h1 { font-size:28px; }
+ .project-task-picker { align-items:flex-start;flex-direction:column;gap:8px; }
+ .project-task-picker select { width:100%; }
+}
+
+.project-open .project-page-header { padding-bottom:20px;margin-bottom:20px; }
+.project-open .project-assignment-head { max-width:1120px; }
+.project-open .project-assignment-head > .disclosure { margin-top:16px; }
+.project-open .project-assignment-head .inspector-description { margin-top:0; }
+.project-open .outcome-copy,.project-open .disclosure-body { overflow-wrap:anywhere; }
+.project-open #detail-content { max-width:1280px; }
+@media(min-width:1400px) {
+ .project-summary-grid { display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:48px; }
+ .project-summary-grid > div { min-width:0; }
+}
+
+.task-state-line { display:flex;align-items:center;gap:16px;flex-wrap:wrap; }
+.project-open .inspector-title:focus { outline:none; }
+.project-task-picker select { min-height:36px; }
+@media(max-height:800px) {
+ .project-open .inspector-toolbar { padding:12px 24px; }
+ .project-open .inspector-scroll { padding:16px 24px 32px; }
+ .project-page-header { display:flex;align-items:center;gap:24px; }
+ .project-open .project-page-header { padding-bottom:16px;margin-bottom:16px; }
+ .project-page-header h1 { flex:1;min-width:0;font-size:22px;margin:0; }
+ .project-page-meta { flex-direction:column;gap:6px;align-items:flex-start;flex:none; }
+ .project-task-picker { flex-direction:row;align-items:center;margin-bottom:16px; }
+ .project-task-picker select { flex:1;width:0; }
+ .project-open .inspector-title { font-size:20px;margin:12px 0; }
+ .project-open .project-assignment-head > .disclosure { margin-top:12px; }
+ .project-open .detail-tabs { margin:16px 0; }
+ .project-open .inspector-footer { padding:12px 24px; }
+}
