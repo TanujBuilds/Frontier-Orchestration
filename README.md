@@ -1,6 +1,6 @@
 # Mosaic for Mac
 
-A native Mac window for the installed Mosaic coordinator, based on the owner's Mosaic Desktop Prototype. Version 1.2.0. AppKit hosts the original local HTML/CSS/JavaScript and fonts in WebKit. No Node, Terminal or browser window is required to run the installed app.
+A native Mac window for the installed Mosaic coordinator, based on the owner's Mosaic Desktop Prototype. Version 1.2.1. AppKit hosts the original local HTML/CSS/JavaScript and fonts in WebKit. No Node, Terminal or browser window is required to run the installed app.
 
 ## Everyday use
 
@@ -83,3 +83,9 @@ The known1.1.0 source is saved on GitHub under annotated tag `mosaic-desktop-v1.
 The dedicated project route, full content-area replacement, assignment switching, remembered task tabs, Back to Recent/History with original list scroll, Current work overview and live refresh preservation have a protected regression defined before implementation. Native metadata, viewer authentication and model execution are unchanged. Final independent review, installed UI and rollback-check results are recorded outside the bundle.
 
 Independent review reproduced stale sibling-assignment choices during refresh and Back focusing the sidebar duplicate. Project render dependencies and originating-region focus identity now have passing regressions observed failing before correction.
+
+## Delegate icon —1.2.1
+
+The owner selected concept20 Delegate: one task branches into focused assignments. The off-white and charcoal SVG in `ui/assets/mosaic.svg` is the editable source for the favicon and Dock icon. The in-app mark uses the same geometry and colors. Native build renders all standard icon representations from that SVG, with transparent outer corners and normal Dock inset; the running app loads its bundled icon at startup. Logo-only delivery preserves the full-page1.2.0 UI.
+
+The previous1.2.0 app and source checkpoint remain available. Personal installation records include a checked `Restore Mosaic 1.2.0.command` for restoring the old icon/full-page app, while the earlier1.1.0 UI restore remains available. Restoring the viewer never restores task state, credentials or spending.
