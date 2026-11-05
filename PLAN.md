@@ -1,12 +1,13 @@
-# Animated Mosaic for Mac
+# Mosaic 1.1 — Recent across projects
 
-Build the supplied OpenDesign prototype into a self-contained AppKit/WKWebView app with its existing typography, colors, layout and interactions. Default to real existing observer data. Native-only viewer credentials; strict local resource and read-only RPC allowlists. Preserve unknowns and the separate acceptance, integration and activity milestones.
+Owner asks to find the most recent/current DeepSeek project without switching project selectors and identify/open Codex conversations. Codex-only chosen explicitly. Preserve the installed dark/cyan design and read-only nature.
 
-1. Protect adapter semantics and trust-boundary regressions before implementation.
-2. Adapt live snapshot/timeline/evidence to the imported UI; remove fictional production copy. Preserve user selection, focus, search, disclosures and scroll across refresh. Retain an explicit labeled design demo for comparison.
-3. Build native window, local resource loader and viewer bridge. Add menus, reopen, window persistence and macOS icon. No additional service.
-4. Add subtle authored entrance, inspector and tab motion with reduced-motion support.
-5. Run protected Node checks, native trust-boundary self-tests, build/sign, render and interact at desktop sizes. Perform one fresh independent final review.
-6. Finish/review/integrate through the existing Codex-only goal. Install ~/Applications/Mosaic.app, verify actual launch and pin to Dock. Record durable facts and usage/removal guide.
+1. Define protected Recent projection checks before implementation. Group live DeepSeek running, waiting work and recently updated projects across all goals. Preserve stored statuses, report ages and unknown timestamps; never promote historical/fixture work to current work.
+2. Add Recent as first global navigation item and initial fresh-install view. Reuse task inspector/navigation and existing refresh/focus preservation. Add searchable recent Codex chats with source titles/project labels and exact Open chat links, distinct from registered Mosaic activity. Do not infer chat-to-task association from similar names/paths.
+3. Use documented Codex app-server metadata interface: bounded one-shot local process sends initialize, initialized and fixed thread/list (state DB only, bounded interactive sources, no history/messages or generation). Existing daemon proxy probe did not answer; standalone stdio metadata query succeeded without a model request. Native returns only chat ID/title/project path/updated time/source status. No raw notifications, credentials, arbitrary executable paths/protocol methods exposed. Cached listed UUID may open only codex://threads/UUID without prompt/query. No conversation created or messaged.
+4. Test errors, timeout/cleanup, malformed/bounded metadata, bridge allowlist and exact links. Retain existing tests. Verify Recent live app and labeled demo at wide/small desktop sizes, inspect tasks and open an existing chat. One independent final read-only source review.
+5. Finish/review/integrate through one new bounded Codex-only goal. Package1.1.0 in a new immutable version, preserve old app/state/coordinator/active work, replace only installed app after quitting. Keep existing Dock binding. Record private installation/memory and GitHub source checkpoint.
 
-Review focus: credentials never reach page/log/URL; no arbitrary network/path/process bridge; actual snapshot states remain truthful; no polling changes owner UI state; rejected or missing evidence is explicit; signed bundle works without source repository; launch/reopen doesn't create duplicate windows or model calls.
+Limits: goal2hours, one coding task90minutes, up to2 operator reviews, one independent reviewer reservation, no DeepSeek requests. Earlier budgets remain closed. No coordinator restart, Spark/auth/network changes or messages to other chats.
+
+Review focus: truthful running/waiting/closed/fixture classification; project-wide recency; no guessed chat identity; fixed read-only Codex messages; bounded bytes/time/process cleanup; no renderer command/URL authority; opening listed chat sends no message; polling preserves focus/scroll/selection; active coordinator work remains intact.
