@@ -9,9 +9,10 @@ const safeInteger=n=>Number.isSafeInteger(n)&&n>=0;
 const fault=code=>Object.assign(Error(code),{waitReason:code});
 
 /** Observation only. invoke(name,input,{signal,timeoutMs}) must use the selected read client. */
-export async function waitForState({invoke,target,id,timeoutMs=30000,signal,now=Date.now,sleep=ms=>delay(ms)}={}){
+export async function waitForState({invoke,target,id,timeoutMs=30000,cursor:startingCursor,signal,now=Date.now,sleep=ms=>delay(ms)}={}){
+ if(startingCursor!==undefined&&!safeInteger(startingCursor))throw Error('Invalid wait input');
  if(typeof invoke!=='function'||!['task','operation'].includes(target)||typeof id!=='string'||!id.trim()||id.length>256||/[\x00-\x1f\x7f]/.test(id)||!Number.isInteger(timeoutMs)||timeoutMs<1||timeoutMs>300000||typeof now!=='function'||typeof sleep!=='function')throw Error('Invalid wait input');
- const deadline=now()+timeoutMs;let status=null,cursor=0,lastEventSeq=null,checks=0;
+ const deadline=now()+timeoutMs;let status=null,cursor=startingCursor??0,lastEventSeq=null,checks=0;
  const result=(outcome,reason)=>({version:1,target,id,outcome,status,cursor,observedAt:now(),checks,lastEventSeq,...(reason?{reason}:{})});
  const request=async(name,input)=>{
   if(signal?.aborted)throw fault('cancelled');const remaining=deadline-now();if(remaining<=0)throw fault('deadline');if(checks>=40)throw fault('request_limit');checks++;
@@ -23,6 +24,7 @@ export async function waitForState({invoke,target,id,timeoutMs=30000,signal,now=
  const observe=async()=>{
   const value=await request(target+'_get',{[target==='task'?'taskId':'operationId']:id});
   if(!value||typeof value!=='object'||value.id!==id){status=null;throw fault('invalid_response');}
+  if(checks===1&&startingCursor===undefined&&safeInteger(value.observerCursor))cursor=value.observerCursor;
   const observed=value.status;
   const state=target==='task'?(taskReady.has(observed)?'ready':taskAttention.has(observed)?'attention':taskWaiting.has(observed)?'waiting':null):Object.hasOwn(operationStates,observed)?operationStates[observed]:null;
   if(!state){status=null;throw fault('unsupported_state');}status=observed;return state;

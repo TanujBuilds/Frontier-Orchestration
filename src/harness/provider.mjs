@@ -3,6 +3,7 @@ import { streamCompletion } from './stream.mjs';
 
 export class LocalProvider extends DeepSeekHttpAdapter {
  constructor({streaming=false,...options}={}){super(options);if(typeof streaming!=='boolean')throw Error('DeepSeek streaming must be boolean');this.streaming=streaming;}
+ async availability(signal){const body=await this.request(this.modelsUrl,{method:'GET'},signal);if(!Array.isArray(body?.data)||!body.data.some(m=>m.id===(this.resolvedModel??this.model)||(!this.model&&!this.resolvedModel&&typeof m.id==='string')))throw Error('Configured provider model is unavailable');return true;}
  async complete(messages,{signal,maxTokens=12000,onContent,expectedModel,onModel,streaming=this.streaming}={}){
   if(typeof streaming!=='boolean'){const error=Error('DeepSeek streaming must be boolean');error.requestOutcome='not_dispatched';throw error;}
   const model=await this.resolveModel(signal);

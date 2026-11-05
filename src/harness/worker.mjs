@@ -5,6 +5,8 @@ import { ResearchAdapter } from './research.mjs';
 import { Integration } from './integration.mjs';
 import { MaintenanceAdapter } from './maintenance.mjs';
 import { Planner } from './planning.mjs';
+import {isOvernightV2} from './overnight.mjs';
+import {OvernightLifecycle} from './overnight-lifecycle.mjs';
 import { LegacyReview } from './legacy-review.mjs';
 
 export class Worker {
@@ -14,6 +16,7 @@ export class Worker {
   this.reviewer=reviewer??null;this.legacyReview=new LegacyReview(this);
   this.integration=new Integration({c:this.c,checksFactory,config});
   this.planner=new Planner(this);
+  this.overnight=new OvernightLifecycle({c:this.c,...(config.environment==='fixture'?{notify:async()=>({fixture:true}),power:{sync(){},close(){}}}:{})});
   this.adapters={coding:new CodingAdapter(this),learning:new MaintenanceAdapter(this),...(config.research?{research:new ResearchAdapter(this)}:{}),...adapters};
  }
  activity(task,type,data={}){
@@ -40,6 +43,7 @@ export class Worker {
   if(typeof model!=='string'||!model.trim()||model.length>200)throw Error('Invalid resolved DeepSeek model identity');
   this.c.store.tx(()=>{const current=this.c.owned(task.id,owner);if(current.providerModel&&current.providerModel!==model){const e=Error('DeepSeek model differs from pinned task model');e.requestOutcome='completed';throw e;}if(!current.providerModel){current.providerModel=model;this.c.store.put('task',current);}});
  }
+ providerClient(){return this.provider??=new LocalProvider({baseUrl:this.config.deepseekBaseUrl,model:this.config.deepseekModelId,streaming:this.config.deepseekStreaming??false});}
  async model(task,owner,key,messages,{maxTokens=12000}={}){
   const reservation=this.c.reserve(task.id,{key,kind:'model'},owner);
   if(reservation.cached){this.pinModel(task,owner,reservation.result.model);this.activity(task,'model.request.completed',{operationId:reservation.id,requestId:reservation.id,model:reservation.result.model??null,finishReason:reservation.result.finishReason??null});return reservation.result;}
@@ -47,7 +51,7 @@ export class Worker {
   try{
    this.activity(task,'model.request.started',{requestId:reservation.id,key});
    if(this.c.store.get('goal',task.goalId).manifest.environment!==(this.config.environment??'live'))throw Error('Approved environment differs from configured providers');
-   this.provider??=new LocalProvider({baseUrl:this.config.deepseekBaseUrl,model:this.config.deepseekModelId,streaming:this.config.deepseekStreaming??false});
+   this.providerClient();
    const expectedModel=this.c.getTask(task.id).providerModel;
    const result=await this.provider.complete(messages,{maxTokens,streaming:this.config.deepseekStreaming??false,signal:AbortSignal.timeout(remaining),expectedModel,onModel:model=>{this.pinModel(task,owner,model);this.activity(task,'model.request.resolved',{operationId:reservation.id,requestId:reservation.id,model});},onContent:content=>{
     if(typeof content!=='string'||captured>=128*1024)return;
@@ -61,15 +65,21 @@ export class Worker {
    this.activity(task,'model.request.completed',{operationId:reservation.id,requestId:reservation.id,model:result.model??null,finishReason:result.finishReason??null});
    this.pinModel(task,owner,result.model);return result;
   }catch(error){
-   this.c.store.tx(()=>{const row=this.c.store.db.prepare('SELECT status,data FROM requests WHERE id=?').get(reservation.id);const data=JSON.parse(row.data);data.error=error.message.slice(0,500);this.c.store.db.prepare('UPDATE requests SET status=?,data=? WHERE id=?').run(row.status==='completed'?'completed':'failed',JSON.stringify(data),reservation.id);});
+   this.c.store.tx(()=>{const row=this.c.store.db.prepare('SELECT status,data FROM requests WHERE id=?').get(reservation.id);const data=JSON.parse(row.data);data.error=error.message.slice(0,500);data.requestOutcome=error.requestOutcome??'unknown';this.c.store.db.prepare('UPDATE requests SET status=?,data=? WHERE id=?').run(row.status==='completed'?'completed':'failed',JSON.stringify(data),reservation.id);});
+   const goal=this.c.store.get('goal',task.goalId);
+   if(isOvernightV2(goal.manifest)&&error.requestOutcome==='not_dispatched'&&/unavailable|connect|timeout|timed out|HTTP (?:429|503)/i.test(error.message)){
+    this.c.store.tx(()=>{const current=this.c.owned(task.id,owner),at=this.c.now();current.providerReconnectStartedAt??=at;current.providerWait={startedAt:current.providerReconnectStartedAt,until:Math.min(current.deadline,goal.deadline,current.providerReconnectStartedAt+goal.manifest.overnightPolicy.reconnectMs),retryAt:at+15000};current.checkpoint={...current.checkpoint,exchange:current.checkpoint.exchange+1};current.status='suspended';current.owner=null;current.reason='Known provider unavailability; original request remains spent';this.c.store.put('task',current);this.c.emit('task.provider_wait',current.goalId,current.id,{until:current.providerWait.until});});
+   }
    // The HTTP client cannot certify that a failed connection stopped remote inference.
    if(error.requestOutcome==='unknown'||(!error.requestOutcome&&/timeout|timed out|ECONN|socket|interrupted|abort|fetch failed|connection failed|HTTP 5\d\d/i.test(error.message)))this.c.markUncertain(task.id,error.message,owner);
    this.activity(task,'model.request.failed',{requestId:reservation.id,outcome:error.requestOutcome??'unknown'});
    throw error;
   }
  }
- async tick(){
+ async tick(){await this.overnight.tick();try{return await this.executeTick();}finally{await this.overnight.tick();}}
+ async executeTick(){
   this.c.expireQuiescent();
+  for(const t of this.c.store.all('task').filter(t=>t.providerWait&&t.status==='suspended'&&t.providerWait.until<=this.c.now()))this.c.store.tx(()=>{t.status='blocked';t.reason='Original provider reconnect window exhausted';this.c.store.put('task',t);this.c.emit('task.blocked',t.goalId,t.id,{reason:t.reason});});
   const automatic=this.c.store.all('task').find(t=>t.status==='ready_to_integrate'&&this.c.eligible(t)&&['checks','legacy'].includes(this.c.store.get('goal',t.goalId).manifest.mode.review));
   if(automatic){try{return await this.integration.accept({taskId:automatic.id,feedback:'Trusted checks passed; no Codex review'},`auto-integrate-${automatic.id}`);}catch(error){this.c.store.tx(()=>{const t=this.c.store.get('task',automatic.id);if(t.status==='ready_to_integrate'){t.status='blocked';t.reason=error.message;this.c.store.put('task',t);this.c.emit('task.blocked',t.goalId,t.id,{reason:t.reason});}});return this.c.getTask(automatic.id);}}
   const planning=await this.planner.tick();if(planning)return planning;
@@ -86,10 +96,14 @@ export class Worker {
     const state=this.c.boundary(task.id,{phase:'responded',result},this.owner);if(state.status!=='running')return state;
     return this.c.completeTask(task.id,result,this.owner,{reviewRequired:true});
    }
+   if(task.providerWait){
+    try{this.providerClient();if(typeof this.provider?.availability!=='function')throw Error('Provider readiness probe unavailable');await this.provider.availability(AbortSignal.timeout(Math.max(1,Math.min(10000,task.providerWait.until-this.c.now()))));this.c.store.tx(()=>{const current=this.c.owned(task.id,this.owner);delete current.providerWait;this.c.store.put('task',current);});task=this.c.getTask(task.id);}
+    catch{this.c.store.tx(()=>{const current=this.c.owned(task.id,this.owner);current.status='suspended';current.owner=null;current.providerWait.retryAt=this.c.now()+15000;this.c.store.put('task',current);});return this.c.getTask(task.id);}
+   }
    const adapter=this.adapters[task.spec.kind];if(!adapter)throw Error(`Capability ${task.spec.kind} is not configured`);
    return await adapter.step(task,this.owner);
   }catch(error){
-   const current=this.c.getTask(task.id);if(current.status==='uncertain')return current;
+   const current=this.c.getTask(task.id);if(current.status==='uncertain'||current.status==='suspended'&&current.providerWait)return current;
    this.c.store.tx(()=>{const t=this.c.owned(task.id,this.owner);t.status='blocked';t.reason=error.message;t.owner=null;this.c.store.put('task',t);this.c.emit('task.blocked',t.goalId,t.id,{reason:t.reason});});return this.c.getTask(task.id);
   }
  }

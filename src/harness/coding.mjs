@@ -1,4 +1,6 @@
 import path from 'node:path';
+import {isOvernightV2,effectiveIntegrationChecks,infrastructureCheckFailure} from './overnight.mjs';
+import {parseOvernightReply,overnightSystem} from './overnight-protocol.mjs';
 import { Journal } from '../project/journal.mjs';
 import { Workspace } from '../project/workspace.mjs';
 import { CheckRunner } from '../project/sandbox.mjs';
@@ -17,9 +19,9 @@ export class CodingAdapter {
  async open(task){
   const {c}=this.worker,g=c.store.get('goal',task.goalId),root=path.join(c.store.root,'coding');
   const journal=await new Journal(root,task.id).load();
-  const permissions={readPaths:task.spec.permissions.readPaths,writePaths:task.spec.permissions.writePaths,checks:g.manifest.project.checks.filter(x=>task.spec.permissions.checks.includes(x.id))};
+  const permissions={readPaths:task.spec.permissions.readPaths,writePaths:task.spec.permissions.writePaths,checks:isOvernightV2(g.manifest)?effectiveIntegrationChecks(c,task,g.manifest):g.manifest.project.checks.filter(x=>task.spec.permissions.checks.includes(x.id))};
   let manifest=journal.last('harness.manifest');
-  if(!manifest){manifest={repo:g.manifest.project.repo,baseCommit:task.checkpoint.executionBase??g.manifest.project.baseCommit,permissions};await journal.append('harness.manifest',manifest);}
+  if(!manifest){manifest={repo:g.manifest.project.repo,baseCommit:task.checkpoint.executionBase??g.manifest.project.baseCommit,permissions,...(isOvernightV2(g.manifest)?{overnightV2:true}:{})};await journal.append('harness.manifest',manifest);}
   else if(digest(manifest.permissions)!==digest(permissions)){
    if(!task.history?.some(h=>h.goalVersion<task.goalVersion))throw Error('Approved scope version transition required');
    manifest={...manifest,permissions};await journal.append('harness.manifest',manifest);
@@ -27,17 +29,19 @@ export class CodingAdapter {
   const workspace=new Workspace(manifest,journal);return {journal,workspace,manifest};
  }
  async step(task,owner){
-  const {c}=this.worker,{journal,workspace,manifest}=await this.open(task),release=await journal.lock();
+  const {c}=this.worker,v2=isOvernightV2(c.store.get('goal',task.goalId).manifest),policy=c.store.get('goal',task.goalId).manifest.overnightPolicy,{journal,workspace,manifest}=await this.open(task),release=await journal.lock();
   try{
    await workspace.initialize();await workspace.recover();
    const checks=this.worker.checksFactory?.(workspace)??new CheckRunner(workspace,{codex:this.worker.config.codexPath??'codex'});
    let cp={...task.checkpoint},phase=cp.phase??'attempt';
    if(!journal.events.some(e=>e.type==='harness.sandbox'&&e.data.permissionsHash===digest(manifest.permissions))){const probe=await checks.verify();await journal.append('harness.sandbox',{...probe,permissionsHash:digest(manifest.permissions)});}
+   if(v2&&!journal.last('harness.stage_preflight')){const ids=c.store.get('goal',task.goalId).manifest.overnightPolicy.preflightCheckIds;const results=await checks.run(manifest.permissions.checks.filter(check=>ids.includes(check.id)),'stage-preflight');await journal.append('harness.stage_preflight',{results});if(!results.every(r=>r.passed))throw Error('Stage infrastructure preflight failed under exact stage read policy; correct approved input scope before spending');}
+   if(v2&&journal.last('harness.stage_preflight')?.results.some(r=>!r.passed))throw Error('Saved stage infrastructure preflight failed; inspect scope');
    if(phase==='attempt'){
-    const attempt=c.beginAttempt(task.id,owner);return this.worker.checkpoint(task,{...cp,phase:'model',attempt,exchange:0},owner);
+    const attempt=c.beginAttempt(task.id,owner);return this.worker.checkpoint(task,{...cp,phase:'model',attempt,exchange:0,...(v2?{batch:0,corrections:0,stalePaths:[],reply:null}:{})},owner);
    }
    if(phase==='model'){
-    if(cp.exchange>=10)throw new AttemptError('Context exchange limit reached');
+    if(cp.exchange>=(v2?policy.maxExchanges:10))throw new AttemptError('Context exchange limit reached');
     const inventory=await workspace.inventory(),context=await selectContext(workspace,cp,inventory),{files}=context;
     cp={...cp,workingSet:context.workingSet};
     this.worker.checkpoint(task,cp,owner,{quiescent:false});
@@ -47,18 +51,19 @@ export class CodingAdapter {
     const input={task:task.spec,files,inventory,feedback:task.feedback,answers:task.answers,memory:task.memory??[],editLimits,attempt:cp.attempt};
     const requestKey=`code-${cp.attempt}-${cp.exchange}`;
     if(!journal.events.some(e=>e.type==='harness.context'&&e.data.key===requestKey))await journal.append('harness.context',{key:requestKey,attempt:cp.attempt,files:files.map(f=>({path:f.path,hash:f.hash,bytes:Buffer.byteLength(f.content??'')}))});
-    const result=await this.worker.model(task,owner,requestKey,[{role:'system',content:system},{role:'user',content:JSON.stringify(input)}]);
+    const result=await this.worker.model(task,owner,requestKey,[{role:'system',content:v2?overnightSystem:system},{role:'user',content:JSON.stringify(input)}]);
     cp={...cp,requestId:c.store.request(task.id,requestKey)?.id??null};
     const state=this.worker.checkpoint(task,cp,owner);if(state.status!=='running')return state;
     if(result.finishReason==='length')throw new AttemptError('Response truncated; submit smaller edits');
-    let reply;try{reply=JSON.parse(result.content);}catch{throw new AttemptError('Invalid JSON; return one bounded action');}
+    if(v2&&!journal.events.some(e=>e.type==='harness.response'&&e.data.key===requestKey))await journal.append('harness.response',{key:requestKey,requestId:cp.requestId,raw:result.content.slice(0,128*1024),rawHash:digest(result.content),truncated:result.content.length>128*1024});
+    let reply;try{reply=v2?parseOvernightReply(result.content,editLimits):JSON.parse(result.content);}catch(error){throw new AttemptError(v2?error.message:'Invalid JSON; return one bounded action');}
     if(!reply||typeof reply!=='object'||Array.isArray(reply))throw new AttemptError('Invalid action object');
     if(reply.type==='ask_supervisor'){
      if(Object.keys(reply).some(k=>!['type','question'].includes(k)))throw new AttemptError('Malformed question action');
      return this.worker.question(task,reply.question,{...cp,exchange:cp.exchange+1},owner);
     }
-    try{keys(reply,['type','paths','edits','summary'],'coding action');}catch(error){throw new AttemptError(error.message);}
-    reply=validateReply(reply);
+    if(!v2){try{keys(reply,['type','paths','edits','summary'],'coding action');}catch(error){throw new AttemptError(error.message);}reply=validateReply(reply);}
+    else await journal.append('harness.validation',{key:requestKey,valid:true,type:reply.type});
     if(reply.type==='submit_changes'){
      if(reply.edits.length>editLimits.maxFiles)throw new AttemptError('Edit batch exceeds pinned file limit; submit smaller batches');
      let bytes=0;for(const edit of reply.edits){
@@ -69,20 +74,24 @@ export class CodingAdapter {
      if(bytes>editLimits.maxBytes)throw new AttemptError('Edit batch exceeds pinned byte limit; submit smaller batches');
     }
     if(reply.type==='needs_approval')throw Error('Assignment needs expanded approval');
-    if(reply.type==='read_files'){const selected=await selectContext(workspace,cp,inventory,reply.paths);this.worker.activity(task,'coding.files.read',{operationId:`read-${requestKey}`,requestId:cp.requestId,files:selected.workingSet.entries.filter(e=>reply.paths.includes(e.path))});if(selected.evicted.length)this.worker.activity(task,'coding.context.evicted',{operationId:`read-evict-${requestKey}`,paths:selected.evicted});return this.worker.checkpoint(task,{...cp,paths:reply.paths,workingSet:selected.workingSet,exchange:cp.exchange+1},owner);}
+    if(reply.type==='read_files'){const selected=await selectContext(workspace,cp,inventory,reply.paths);this.worker.activity(task,'coding.files.read',{operationId:`read-${requestKey}`,requestId:cp.requestId,files:selected.workingSet.entries.filter(e=>reply.paths.includes(e.path))});if(selected.evicted.length)this.worker.activity(task,'coding.context.evicted',{operationId:`read-evict-${requestKey}`,paths:selected.evicted});return this.worker.checkpoint(task,{...cp,paths:reply.paths,...(v2?{stalePaths:(cp.stalePaths??[]).filter(p=>!reply.paths.includes(p))}:{}),workingSet:selected.workingSet,exchange:cp.exchange+1},owner);}
+    if(v2&&reply.type==='finish_stage')return this.worker.checkpoint(task,{...cp,phase:'checks',reply},owner);
+    if(v2&&cp.stalePaths?.length)throw new AttemptError('Stale hash requires fresh read_files: '+cp.stalePaths.join(', '));
+    if(v2&&cp.batch>=policy.maxBatches)throw new AttemptError('Applied batch limit reached; finish_stage or next attempt required');
     this.worker.activity(task,'coding.edit.proposed',{operationId:`proposal-${requestKey}`,requestId:cp.requestId,paths:reply.edits.map(e=>e.path),bytes:reply.edits.reduce((n,e)=>n+Buffer.byteLength(e.content??''),0)});
     return this.worker.checkpoint(task,{...cp,phase:'apply',reply},owner);
    }
    if(phase==='apply'){
-    await workspace.apply(`harness-attempt-${cp.attempt}`,{writePaths:manifest.permissions.writePaths},cp.reply.edits);
-    this.worker.activity(task,'coding.edit.applied',{operationId:`apply-${cp.attempt}`,requestId:cp.requestId??null,paths:cp.reply.edits.map(e=>e.path)});
+    await workspace.apply(v2?`${task.id}/attempt-${cp.attempt}/batch-${cp.batch}`:`harness-attempt-${cp.attempt}`,{writePaths:manifest.permissions.writePaths},cp.reply.edits);
+    this.worker.activity(task,'coding.edit.applied',{operationId:v2?`apply-${cp.attempt}-${cp.batch}`:`apply-${cp.attempt}`,requestId:cp.requestId??null,paths:cp.reply.edits.map(e=>e.path)});
     const changed=new Set(cp.reply.edits.map(e=>e.path));if(cp.workingSet)cp.workingSet={...cp.workingSet,entries:cp.workingSet.entries.map(e=>changed.has(e.path)?{...e,hash:null}:e)};
-    return this.worker.checkpoint(task,{...cp,phase:'checks'},owner);
+    return this.worker.checkpoint(task,{...cp,phase:v2?'model':'checks',...(v2?{batch:cp.batch+1,exchange:cp.exchange+1,reply:null}:{})},owner);
    }
    if(phase==='checks'){
     this.worker.activity(task,'coding.checks.started',{operationId:`checks-start-${cp.attempt}`,requestId:cp.requestId??null,attempt:cp.attempt});
     let results;try{results=await journal.memo(`harness-attempt-${cp.attempt}/checks`,()=>checks.run(manifest.permissions.checks,`attempt-${cp.attempt}`));}catch(error){this.worker.activity(task,'coding.checks.failed',{operationId:`checks-end-${cp.attempt}`,requestId:cp.requestId??null,attempt:cp.attempt,outcome:'error'});throw error;}
     this.worker.activity(task,results.every(r=>r.passed)?'coding.checks.passed':'coding.checks.failed',{operationId:`checks-end-${cp.attempt}`,requestId:cp.requestId??null,attempt:cp.attempt,checks:results.map(r=>({id:r.id,passed:r.passed}))});
+    if(v2&&infrastructureCheckFailure(results))throw Error('Protected-check infrastructure failure; inspect saved check evidence and approved inputs before continuation');
     if(!results.every(r=>r.passed)){
      c.store.tx(()=>{const current=c.owned(task.id,owner);current.feedback.push({text:JSON.stringify(results).slice(-16000),at:c.now(),kind:'check'});c.store.put('task',current);c.emit('checks.failed',task.goalId,task.id,{attempt:cp.attempt});});
      return this.worker.checkpoint(task,{...cp,phase:'attempt'},owner);
@@ -94,6 +103,7 @@ export class CodingAdapter {
   }catch(error){
    if(error instanceof AttemptError){
     c.store.tx(()=>{const current=c.owned(task.id,owner);current.feedback.push({text:error.message,at:c.now(),kind:'protocol'});c.store.put('task',current);c.emit('attempt.protocol_failed',task.goalId,task.id,{reason:error.message,attempt:current.attempts});});
+    if(v2){const cp=c.getTask(task.id).checkpoint,corrections=(cp.corrections??0)+1,stale=/Stale edit hash for (.+); request current file/.exec(error.message);await journal.append('harness.validation',{key:`code-${cp.attempt}-${cp.exchange}`,valid:false,reason:error.message,corrections});return this.worker.checkpoint(task,{...cp,corrections,exchange:cp.exchange+1,phase:corrections<=policy.maxCorrections&&cp.exchange+1<policy.maxExchanges?'model':'attempt',reply:null,stalePaths:stale?[...new Set([...(cp.stalePaths??[]),stale[1]])]:cp.stalePaths??[]},owner);}
     return this.worker.checkpoint(task,{...c.getTask(task.id).checkpoint,phase:'attempt'},owner);
    }
    throw error;

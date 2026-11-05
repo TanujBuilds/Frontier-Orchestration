@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
+import {isOvernightV2} from './overnight.mjs';
+import {assertOvernightPreflight} from './overnight-preflight.mjs';
 import { Store } from './store.mjs';
 import { Registry, normalizeGoal, normalizeTask, digest, text, identifier } from './contracts.mjs';
 import {verifyLocalAcceptance} from './research-review.mjs';
@@ -52,8 +54,8 @@ export class Coordinator {
    }
   }
   if(type==='task.answered')for(const n of this.store.all('notification').filter(n=>n.taskId===taskId&&n.kind==='decision'&&!n.resolved)){n.resolved=true;n.resolvedAt=this.now();this.store.put('notification',n);}
-  const kind=type==='task.question'?'decision':['task.blocked','task.uncertain','legacy_review.failed'].includes(type)?'blocker':type==='goal.finalized'?'completion':['task.result','task.integrated','task.native_finished','learning.promoted'].includes(type)?'result':null;
-  if(kind){const task=taskId?this.store.get('task',taskId):null,title=type==='task.question'?'An answer is needed':type==='goal.finalized'?'Goal '+data.status:type==='learning.promoted'?'Tested procedure available':kind==='blocker'?'Work needs attention':'Saved work is ready';this.store.put('notification',{id:`notice-${seq}`,sequence:seq,goalId,taskId,kind,title,objective:task?.spec.objective??this.store.maybe('goal',goalId)?.manifest.objective??'',at:this.now(),acknowledged:false,resolved:false});}
+  const kind=type==='overnight.attention'?(data.phase==='waiting-answer'?'decision':'blocker'):type==='task.question'?'decision':['task.blocked','task.uncertain','legacy_review.failed'].includes(type)?'blocker':type==='goal.finalized'?'completion':['task.result','task.integrated','task.native_finished','learning.promoted'].includes(type)?'result':null;
+  if(kind&&!(kind==='result'&&isOvernightV2(this.store.maybe('goal',goalId)?.manifest))){const task=taskId?this.store.get('task',taskId):null,title=type==='task.question'?'An answer is needed':type==='goal.finalized'?'Goal '+data.status:type==='learning.promoted'?'Tested procedure available':kind==='blocker'?'Work needs attention':'Saved work is ready';this.store.put('notification',{id:`notice-${seq}`,sequence:seq,goalId,taskId,kind,title,objective:task?.spec.objective??this.store.maybe('goal',goalId)?.manifest.objective??'',at:this.now(),acknowledged:false,resolved:false});}
   return seq;
  });}
  notifications({goalId}={}){return this.store.all('notification').filter(n=>!n.acknowledged&&!n.resolved&&(!goalId||n.goalId===goalId)).sort((a,b)=>b.sequence-a.sequence).slice(0,50);}
@@ -64,10 +66,11 @@ export class Coordinator {
  });}
  activateGoal(input,key){return this.store.command(key,{op:'goal.activate',...input},()=>{
   const g=this.store.get('goal',input.goalId);if(input.hash!==g.hash)throw Error('Exact goal approval hash required');
+  if(g.status==='draft')assertOvernightPreflight(this,g);
   if(g.status==='draft'){g.status='active';g.activatedAt??=this.now();g.deadline??=g.activatedAt+g.manifest.limits.hours*3600000;this.store.put('goal',g);this.emit('goal.activated',g.id,null,{hash:g.hash,version:g.version});}
   return g;
  });}
- getGoal(id){const g=this.store.get('goal',id),planning=this.store.maybe('planning',id);return {...g,planning:planning?{...planning,spent:this.store.spent(id).model??0}:null,tasks:this.store.all('task').filter(t=>t.goalId===id).map(t=>this.getTask(t.id)),reviewerRuns:this.store.all('reviewer').filter(r=>r.goalId===id)};}
+ getGoal(id){const g=this.store.get('goal',id),planning=this.store.maybe('planning',id);return {...g,...(isOvernightV2(g.manifest)?{overnightRun:this.store.maybe('overnight_run',id)??null}:{}),planning:planning?{...planning,spent:this.store.spent(id).model??0}:null,tasks:this.store.all('task').filter(t=>t.goalId===id).map(t=>this.getTask(t.id)),reviewerRuns:this.store.all('reviewer').filter(r=>r.goalId===id)};}
  getTask(id){const t=this.store.get('task',id),local=this.store.spent(id),spent={model:0,search:0,download:0,codexReview:0};for(const k of Object.keys(spent))spent[k]=Math.max(local[k]??0,t.remoteSpent?.[k]??0);return {...t,spent};}
  snapshot(){return {goals:this.store.all('goal').map(g=>this.getGoal(g.id)),notifications:this.notifications(),events:this.store.events(Math.max(0,Number(this.store.db.prepare('SELECT COALESCE(MAX(seq),0) AS n FROM events').get().n)-1000),1000),operations:this.store.all('operation').slice(-30).map(({result,...r})=>r),registry:this.registry.snapshot()};}
  liveGoal(g){if(g.status!=='active')throw Error('Goal is not active');if(this.now()>=g.deadline)throw Error('Goal deadline exceeded');}
@@ -112,13 +115,13 @@ export class Coordinator {
   while(changed){changed=false;for(const t of tasks)if(!TERMINAL.has(t.status))for(const id of t.spec.dependsOn)if(p.get(id)<p.get(t.id)){p.set(id,p.get(t.id));changed=true;}}
   return p;
  }
- eligible(t){const g=this.store.get('goal',t.goalId);return g.status==='active'&&g.deadline>this.now()&&(!t.deadline||t.deadline>this.now())&&!(g.integrationSealed&&t.spec.kind==='coding')&&!t.pauseRequested&&!t.stopRequested&&t.goalVersion===g.version&&t.spec.dependsOn.every(id=>this.store.get('task',id).status==='accepted');}
+ eligible(t){const g=this.store.get('goal',t.goalId);return !(isOvernightV2(g.manifest)&&t.providerWait&&t.providerWait.retryAt>this.now())&&g.status==='active'&&g.deadline>this.now()&&(!t.deadline||t.deadline>this.now())&&!(g.integrationSealed&&t.spec.kind==='coding')&&!t.pauseRequested&&!t.stopRequested&&t.goalVersion===g.version&&t.spec.dependsOn.every(id=>this.store.get('task',id).status==='accepted');}
  expireQuiescent(){return this.store.tx(()=>{
   for(const t of this.store.all('task')){
    const g=this.store.get('goal',t.goalId);
    if(TERMINAL.has(t.status)||t.owner||t.status==='legacy_reviewing'||t.executionActor==='codex'||g.integrationOwner===t.id)continue;
    if(this.now()<Math.min(g.deadline,t.deadline??g.deadline))continue;
-   t.status='partial';t.reason='Original deadline reached; saved evidence retained';this.store.put('task',t);this.emit('task.expired',g.id,t.id,{reason:t.reason});
+   if(isOvernightV2(g.manifest)&&t.reason)t.firstBlocker??={reason:t.reason,at:this.now()};t.status='partial';t.reason='Original deadline reached; saved evidence retained';this.store.put('task',t);this.emit('task.expired',g.id,t.id,{reason:t.reason});
   }
  });}
  requestUrgentYield(){const tasks=this.store.all('task'),p=this.effectivePriorities();for(const active of tasks.filter(t=>t.status==='running'&&t.spec.actor==='deepseek'))if(tasks.some(t=>['queued','suspended'].includes(t.status)&&this.eligible(t)&&p.get(t.id)>p.get(active.id))){active.yieldRequested=true;this.store.put('task',active);this.emit('task.yield_requested',active.goalId,active.id);}}
@@ -179,6 +182,7 @@ export class Coordinator {
  control(input,key){return this.store.command(key,{op:'control',...input},()=>{
   if(!['pause','stop','resume'].includes(input.action))throw Error('Invalid control');
   const g=input.goalId?this.store.get('goal',input.goalId):this.store.get('goal',this.store.get('task',input.taskId).goalId);
+  if(input.action==='resume'&&g.status==='draft'&&isOvernightV2(g.manifest))throw Error('Use exact goal_activate after successful preflight');
   if(input.action==='resume'&&this.now()>=g.deadline)throw Error('Original deadline exceeded');
   const targets=this.store.all('task').filter(t=>input.goalId?t.goalId===g.id:t.id===input.taskId);
   if(input.goalId){if(['completed','partial'].includes(g.status))throw Error('Goal is terminal');g.status=input.action==='resume'?'active':input.action==='stop'?'stopped':'paused';this.store.put('goal',g);}

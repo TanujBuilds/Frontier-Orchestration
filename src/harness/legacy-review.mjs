@@ -1,6 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {ProjectFrontier} from '../project/providers.mjs';
 import {keys,text} from './contracts.mjs';
+import {isOvernightV2} from './overnight.mjs';
 import {git} from '../project/process.mjs';
 
 export class LegacyReview {
@@ -41,8 +42,9 @@ export class LegacyReview {
    return c.store.tx(()=>{
     const t=c.store.get('task',task.id);t.legacyDecision=result;t.feedback.push({kind:'legacy_review',text:result.feedback,decision:result.decision,at:c.now()});t.checkpoint.legacyReviewKey=null;
     t.status=c.now()>=t.deadline?'partial':result.decision==='accept'?'ready_to_integrate':result.decision==='revise'&&t.reviews<t.spec.limits.reviews?'queued':'blocked';
+    if(isOvernightV2(g.manifest)&&t.status==='blocked')t.reason=(result.decision==='blocked'?'Reviewer blocked stage: ':'Review revision budget exhausted: ')+result.feedback;
     if(t.status==='queued')t.checkpoint.phase='attempt';c.store.put('task',t);c.emit('task.legacy_reviewed',g.id,t.id,{decision:result.decision,unverified:result.unverified});return c.getTask(t.id);
    });
-  }finally{await unlock();}
+  }catch(error){if(!isOvernightV2(g.manifest))throw error;return c.store.tx(()=>{const t=c.store.get('task',task.id);t.status='blocked';t.reason=String(error.message).slice(0,2000);c.store.put('task',t);c.emit('task.blocked',g.id,t.id,{reason:t.reason});return c.getTask(t.id);});}finally{await unlock();}
  }
 }

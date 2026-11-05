@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import path from 'node:path';
+import {isOvernightV2,normalizeOvernightPolicy} from './overnight.mjs';
 import { matches, relativePath, validatePermissions } from '../project/contracts.mjs';
 
 export function canonical(value) {
@@ -39,8 +40,8 @@ export const goalInputSchema=objectSchema({
 },['submissionId','objective','acceptance']);
 export const taskInputSchema=objectSchema({submissionId:stringSchema,kind:{type:'string',enum:['coding','research','consult','learning']},actor:{type:'string',enum:['codex','deepseek']},objective:stringSchema,context:stringSchema,acceptance:stringsSchema,dependsOn:stringsSchema,priority:{type:'string',enum:['blocking','normal','background']},permissions:objectSchema({readPaths:stringsSchema,writePaths:stringsSchema,checks:stringsSchema},['readPaths','writePaths','checks']),scope:scopeInputSchema,researchPolicy:researchPolicySchema,limits:{type:'object'}},['submissionId','kind','objective','acceptance']);
 // Historical schema exports remain stable; public dispatch adds the explicit opt-in union.
-export const goalDispatchInputSchema={...goalInputSchema,properties:{...goalInputSchema.properties,researchPolicy:researchPolicyInputSchema}};
-export const taskDispatchInputSchema={...taskInputSchema,properties:{...taskInputSchema.properties,researchPolicy:researchPolicyInputSchema}};
+export const goalDispatchInputSchema={...goalInputSchema,properties:{...goalInputSchema.properties,researchPolicy:researchPolicyInputSchema,overnightPolicy:objectSchema({preflightCheckIds:stringsSchema,finalOnlyCheckIds:stringsSchema,maxBatches:{type:'integer',minimum:1,maximum:20},maxExchanges:{type:'integer',minimum:1,maximum:40},maxCorrections:{type:'integer',minimum:0,maximum:2},reconnectMs:{type:'integer',minimum:1,maximum:1800000}},['preflightCheckIds','finalOnlyCheckIds'])}};
+export const taskDispatchInputSchema={...taskInputSchema,properties:{...taskInputSchema.properties,researchPolicy:researchPolicyInputSchema,role:{type:'string',enum:['implementation','final']}}};
 const baseModes=[
  {id:'collaborative',version:1,planner:'codex',actors:['codex','deepseek'],review:'operator',capabilities:['coding','research','consult','learning']},
  {id:'deepseek_only',version:1,planner:'deepseek',actors:['deepseek'],review:'checks',capabilities:['coding','research','consult','learning']},
@@ -70,6 +71,7 @@ export class Registry {
   const repairResearch=clone(reviewedResearch);repairResearch.version=5;repairResearch.inputSchema.properties.researchPolicy=clone(repairResearchPolicySchema);this.capabilities.set('research@5',repairResearch);
   const targetedResearch=clone(repairResearch);targetedResearch.version=6;targetedResearch.inputSchema.properties.researchPolicy=clone(targetedResearchPolicySchema);this.capabilities.set('research@6',targetedResearch);
   for(const m of baseModes)this.registerMode(m);
+  this.registerMode({...baseModes.find(m=>m.id==='overnight_review'),version:2});
  }
  registerMode(raw){
   keys(raw,['id','version','planner','actors','review','capabilities'],'mode');
@@ -113,7 +115,7 @@ export function normalizeResearchPolicy(raw){
  return clone(raw);
 }
 export function normalizeGoal(raw,registry=new Registry()){
- keys(raw,['submissionId','objective','acceptance','project','mode','modeVersion','scope','limits','environment','researchPolicy'],'goal');
+ keys(raw,['submissionId','objective','acceptance','project','mode','modeVersion','scope','limits','environment','researchPolicy','overnightPolicy'],'goal');
  const environment=raw.environment??'live';if(!['live','fixture'].includes(environment))throw Error('Invalid execution environment');
  const mode=registry.mode(raw.mode,raw.modeVersion),policy=Object.hasOwn(raw,'researchPolicy')?normalizeResearchPolicy(raw.researchPolicy):undefined;
  if(policy?.version===3&&mode.id!=='collaborative')throw Error('Reviewed research requires collaborative mode');
@@ -129,14 +131,17 @@ export function normalizeGoal(raw,registry=new Registry()){
   }
   limits.taskLimits=ceilings;
  }
+ if(isOvernightV2({mode})){limits.taskLimits={...limits.taskLimits,coding:{seconds:7200,...limits.taskLimits?.coding}};if(limits.maxTasks>10)throw Error('Overnight v2 stage cap is ten');}
  integer(limits.hours,'hours',1,24);integer(limits.maxTasks,'maxTasks',1,100);integer(limits.reviewAgentRuns,'reviewAgentRuns',0,10);
  if(mode.review!=='operator'&&limits.reviewAgentRuns)throw Error('Mode prohibits Codex review agents');
  let project=null;
  if(raw.project){keys(raw.project,['repo','baseCommit','readPaths','writePaths','checks'],'project');project=clone(raw.project);text(project.repo,'repository');if(!path.isAbsolute(project.repo))throw Error('Repository must be absolute');if(!/^[a-f0-9]{40}$/.test(project.baseCommit??''))throw Error('Invalid base commit');validatePermissions(project);}
- return {schema:1,environment,submissionId:identifier(raw.submissionId,'submissionId'),objective:text(raw.objective,'objective'),acceptance:strings(raw.acceptance,'acceptance'),project,mode,capabilities:registry.snapshot().capabilities.filter(c=>mode.capabilities.includes(c.id)&&c.version===(policy&&c.id==='research'?(policy.correctionStrategy==='targeted_v1'?6:policy.repairContextVersion===1?5:policy.version+1):1)),scope:sourceScope(raw.scope),limits,...(policy?{researchPolicy:policy}:{})};
+ const overnightPolicy=isOvernightV2({mode})?normalizeOvernightPolicy(raw.overnightPolicy,project):undefined;
+ if(!overnightPolicy&&Object.hasOwn(raw,'overnightPolicy'))throw Error('Overnight policy requires pinned v2');
+ return {schema:1,environment,submissionId:identifier(raw.submissionId,'submissionId'),objective:text(raw.objective,'objective'),acceptance:strings(raw.acceptance,'acceptance'),project,mode,capabilities:registry.snapshot().capabilities.filter(c=>mode.capabilities.includes(c.id)&&c.version===(policy&&c.id==='research'?(policy.correctionStrategy==='targeted_v1'?6:policy.repairContextVersion===1?5:policy.version+1):1)),scope:sourceScope(raw.scope),limits,...(overnightPolicy?{overnightPolicy}:{}),...(policy?{researchPolicy:policy}:{})};
 }
 export function normalizeTask(raw,goal,registry=new Registry()) {
- keys(raw,['submissionId','kind','actor','objective','context','acceptance','dependsOn','priority','permissions','scope','limits','researchPolicy'],'task');
+ keys(raw,['submissionId','kind','actor','objective','context','acceptance','dependsOn','priority','permissions','scope','limits','researchPolicy','role'],'task');
  if(!goal.mode.capabilities.includes(raw.kind)||!TASK_LIMITS[raw.kind])throw Error('Mode prohibits capability');
  const actor=raw.actor??(goal.mode.actors.includes('deepseek')?'deepseek':'codex');if(!goal.mode.actors.includes(actor))throw Error('Mode prohibits actor');
  const policy=Object.hasOwn(goal,'researchPolicy')&&raw.kind==='research'?normalizeResearchPolicy(goal.researchPolicy):undefined;
@@ -152,13 +157,16 @@ export function normalizeTask(raw,goal,registry=new Registry()) {
  let permissions={readPaths:[],writePaths:[],checks:[]};
  if(raw.kind==='coding'){
   if(!goal.project)throw Error('Coding needs an approved project');
+  if(isOvernightV2(goal)&&!raw.permissions)throw Error('Overnight v2 requires explicit scoped permissions and checks');
   permissions=clone(raw.permissions??{readPaths:goal.project.readPaths,writePaths:goal.project.writePaths,checks:goal.project.checks.map(c=>c.id)});
   keys(permissions,['readPaths','writePaths','checks'],'permissions');
   for(const k of ['readPaths','writePaths']){strings(permissions[k],k);for(const s of permissions[k]){relativePath(s.endsWith('/')?s.slice(0,-1):s);const f=s.endsWith('/')?s+'placeholder':s;if(!matches(f,goal.project[k]))throw Error('Task expands scope');}}
   strings(permissions.checks,'checks');if(permissions.checks.some(id=>!goal.project.checks.find(c=>c.id===id)))throw Error('Unknown check');
  }else if(raw.permissions&&canonical(raw.permissions)!==canonical(permissions))throw Error('Non-coding task cannot grant file write scope');
+ if(isOvernightV2(goal)){if(!['implementation','final'].includes(raw.role))throw Error('Overnight v2 requires implementation/final role');if(raw.role==='final'&&goal.project.checks.some(c=>!permissions.checks.includes(c.id)))throw Error('Final stage must run every project check');if(raw.role!=='final'&&permissions.checks.some(id=>goal.overnightPolicy.finalOnlyCheckIds.includes(id)))throw Error('Intermediate stage requests final-only gate');}
+ else if(Object.hasOwn(raw,'role'))throw Error('Stage role requires overnight v2');
  const scope=sourceScope(raw.scope??goal.scope);
  if(goal.scope.includeDomains.length&&(!scope.includeDomains.length||scope.includeDomains.some(d=>!goal.scope.includeDomains.includes(d))))throw Error('Task expands source scope');
  if(goal.scope.excludeDomains.some(d=>!scope.excludeDomains.includes(d)))throw Error('Task removes source exclusion');
- return {submissionId:identifier(raw.submissionId,'submissionId'),kind:raw.kind,actor,objective:text(raw.objective,'objective'),context:raw.context===undefined||raw.context===''?'':text(raw.context,'context',40000),acceptance:strings(raw.acceptance,'acceptance'),dependsOn:strings(raw.dependsOn??[],'dependencies',{empty:true,max:100}),priority,permissions,scope,limits,...(policy?{researchPolicy:policy}:{})};
+ return {submissionId:identifier(raw.submissionId,'submissionId'),kind:raw.kind,actor,objective:text(raw.objective,'objective'),context:raw.context===undefined||raw.context===''?'':text(raw.context,'context',40000),acceptance:strings(raw.acceptance,'acceptance'),dependsOn:strings(raw.dependsOn??[],'dependencies',{empty:true,max:100}),priority,permissions,scope,limits,...(isOvernightV2(goal)?{role:raw.role}:{}),...(policy?{researchPolicy:policy}:{})};
 }

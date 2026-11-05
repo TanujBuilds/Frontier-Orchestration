@@ -1,3 +1,5 @@
+import {isOvernightV2,overnightCompletionReady} from './overnight.mjs';
+import {assertOvernightPreflight} from './overnight-preflight.mjs';
 import {randomUUID} from 'node:crypto';
 import {normalizeGoal,normalizeTask,digest,text} from './contracts.mjs';
 
@@ -18,6 +20,7 @@ export class Goals {
   if(input.hash!==revision.hash)throw Error('Exact revision approval hash required');if(g.hash!==revision.previousHash||revision.status!=='draft')throw Error('Revision is stale');
   if(!quiescent(this.c,g.id))throw Error('Verify quiescent owners before changing an approved version');
   if(this.c.now()>=g.deadline)throw Error('Original deadline exceeded');
+  if(isOvernightV2(revision.manifest))assertOvernightPreflight(this.c,{...g,hash:revision.hash,manifest:revision.manifest});
   this.c.store.put('goal_history',{...g,id:`${g.id}-${g.version}`,goalId:g.id});
   g.manifest=revision.manifest;g.hash=revision.hash;g.version=revision.version;g.deadline=Math.min(g.deadline,g.activatedAt+g.manifest.limits.hours*3600000);this.c.store.put('goal',g);
   revision.status='approved';this.c.store.put('goal_revision',revision);this.c.emit('goal.revision_activated',g.id,null,{id:revision.id,hash:g.hash,version:g.version,deadline:g.deadline});return this.c.getGoal(g.id);
@@ -25,6 +28,7 @@ export class Goals {
  rebind(input,key){return this.c.store.command(key,{op:'task.rebind',...input},()=>{
   const t=this.c.getTask(input.taskId),g=this.c.store.get('goal',t.goalId);this.c.liveGoal(g);
   if(t.owner||t.native?.writerActive||g.integrationPending?.taskId===t.id||['codex_active','legacy_reviewing','accepted'].includes(t.status)||(t.status==='partial'&&!(t.native?.layout==='candidate_v1'&&t.goalVersion<g.version)))throw Error('Task must be quiescent and unfinished');
+  if(isOvernightV2(g.manifest))throw Error('Overnight v2 stage graph changes require a separately validated plan; preserve original IDs and spending');
   const spec=normalizeTask(input.spec??t.spec,g.manifest,this.c.registry);if(spec.submissionId!==t.spec.submissionId||spec.kind!==t.spec.kind)throw Error('Task identity/kind cannot change');
   if(t.startedAt&&spec.actor!==t.spec.actor)throw Error('Started actor changes require explicit takeover');
   let nextNativePermissions=null;if(t.native?.layout==='candidate_v1'){const permissions={readPaths:spec.permissions.readPaths,writePaths:spec.permissions.writePaths,checks:g.manifest.project.checks.filter(x=>spec.permissions.checks.includes(x.id))};if(digest(permissions)!==digest(t.native.manifest.permissions)){if(t.goalVersion>=g.version)throw Error('Changed native scope/checks require an explicitly approved goal version');nextNativePermissions=permissions;}}
@@ -50,6 +54,7 @@ export class Goals {
  finalize(input,key){return this.c.store.command(key,{op:'goal.finalize',...input},()=>{
   const g=this.c.store.get('goal',input.goalId);text(input.summary,'summary',12000);if(g.status==='draft'||['completed','partial'].includes(g.status))throw Error('Goal is not ready for finalization');
   const tasks=this.c.store.all('task').filter(t=>t.goalId===g.id);if(!tasks.length||!quiescent(this.c,g.id))throw Error('Goal has unfinished owners or no accepted work');
+  if(isOvernightV2(g.manifest)&&!input.partial&&!overnightCompletionReady(this.c,g,tasks))throw Error('Overnight v2 requires validated plan, independent reviews, integrations and full final suite');
   const unfinished=tasks.filter(t=>t.status!=='accepted');if(unfinished.length&&!input.partial)throw Error('Goal has unfinished tasks; accepted work is required');
   if(unfinished.some(t=>['queued','suspended','running','codex_ready'].includes(t.status)))throw Error('Stop unfinished work before partial finalization');
   const spending={model:this.c.store.spent(g.id).model??0,search:0,download:0,codexReview:0};for(const t of tasks)for(const [kind,n] of Object.entries(this.c.getTask(t.id).spent))spending[kind]=(spending[kind]??0)+n;

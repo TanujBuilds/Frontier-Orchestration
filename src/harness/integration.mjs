@@ -1,4 +1,5 @@
 import path from 'node:path';
+import {effectiveIntegrationChecks,isOvernightV2} from './overnight.mjs';
 import { repairIntegration } from './integration-repair.mjs';
 import { NativeCandidates } from './native-candidates.mjs';
 import { Journal } from '../project/journal.mjs';
@@ -22,7 +23,7 @@ export class Integration {
  async goalWorkspace(goalId,{native=false,journal:lockedJournal}={}){
   const g=this.c.store.get('goal',goalId);if(g.integrationSealed)throw Error('Preserved partial integration workspace is retired; use a separately approved goal');if(!g.manifest.project)throw Error('Goal has no coding project');
   const journal=lockedJournal??await new Journal(path.join(this.c.store.root,'integration'),g.id).load();
-  const p=g.manifest.project,manifest={repo:p.repo,baseCommit:p.baseCommit,permissions:p};
+  const p=g.manifest.project,manifest={repo:p.repo,baseCommit:p.baseCommit,permissions:p,...(isOvernightV2(g.manifest)?{overnightV2:true}:{})};
   if(!journal.last('workspace.created')){const inspected=await inspectRepository(p.repo,p);if(inspected.baseCommit!==p.baseCommit)throw Error('Approved source revision changed');}
   const workspace=new Workspace(manifest,journal);await workspace.initialize();
   if(!native)await workspace.recover();
@@ -100,7 +101,7 @@ export class Integration {
      await target.journal.append('integration.import.intent',{key:importKey,taskId:t.id,candidateCommit:checkpoint.commit,baseCommit:await git(target.workspace.root,'rev-parse','HEAD'),snapshotBefore:await target.workspace.snapshot(),changes:captured});
     }
     await this.applyChanges(target.workspace,changes,importKey,t.spec.permissions.writePaths);
-    const runner=this.checks(target.workspace);await runner.verify();const results=await runner.run(g.manifest.project.checks,`integrate-${t.id}`);
+    const runner=this.checks(target.workspace);await runner.verify();const results=await runner.run(effectiveIntegrationChecks(this.c,t,g.manifest),`integrate-${t.id}`);
     await target.journal.append('integration.checks',{key:importKey,checks:results,snapshot:await target.workspace.snapshot()});
     if(!results.every(x=>x.passed))throw Error('Integrated checks failed');
     t=this.currentCandidate(t);

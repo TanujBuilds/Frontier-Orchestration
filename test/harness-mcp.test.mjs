@@ -11,7 +11,7 @@ test('real MCP client discovers and invokes the registry without model calls',as
   await client.connect(transport);
   const tools=await client.listTools();assert.ok(tools.tools.some(t=>t.name==='registry_list'));
   const result=await client.callTool({name:'registry_list',arguments:{}});
-  const packet=JSON.parse(result.content[0].text);assert.equal(packet.modes.length,4);
+  const packet=JSON.parse(result.content[0].text);assert.equal(new Set(packet.modes.map(m=>m.id)).size,4);assert.equal(packet.modes.find(m=>m.id==='overnight_review'&&m.version===2).version,2);
   assert.ok(packet.capabilities.find(c=>c.id==='research'));
  }finally{await client.close();}
 });

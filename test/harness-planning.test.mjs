@@ -8,7 +8,7 @@ import {Worker} from '../src/harness/worker.mjs';
 
 function fixture(t,mode='deepseek_only',extra={}){
  const root=mkdtempSync(path.join(os.tmpdir(),'harness-planner-')),c=new Coordinator({root});t.after(()=>{c.close();rmSync(root,{recursive:true,force:true});});
- const g=c.prepareGoal({submissionId:'goal',objective:'Explain durable queues',acceptance:['Two focused answers'],mode,environment:'fixture',...extra},'prepare');c.activateGoal({goalId:g.id,hash:g.hash},'activate');return {c,g,config:{environment:'fixture'}};
+ const g=c.prepareGoal({submissionId:'goal',objective:'Explain durable queues',acceptance:['Two focused answers'],mode,...(mode==='overnight_review'?{modeVersion:1}:{}),environment:'fixture',...extra},'prepare');c.activateGoal({goalId:g.id,hash:g.hash},'activate');return {c,g,config:{environment:'fixture'}};
 }
 const plan={tasks:[{key:'a',kind:'consult',objective:'Explain SQLite durability',acceptance:['Explain WAL']},{key:'b',kind:'consult',objective:'Compare filesystem queues',acceptance:['Explain tradeoffs'],dependsOn:['a']}]};
 test('DeepSeek-only plans validated dependent assignments then executes without Codex',async t=>{

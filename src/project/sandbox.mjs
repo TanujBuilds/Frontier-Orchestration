@@ -3,7 +3,7 @@ import { mkdir, writeFile, readFile, copyFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { accessSync, constants } from 'node:fs';
 import { command } from './process.mjs';
-import { Pause, secretPath, matches } from './contracts.mjs';
+import { Pause, secretPath, matches, digest } from './contracts.mjs';
 
 export class CheckRunner {
   constructor(workspace, { codex = 'codex' } = {}) {
@@ -11,6 +11,11 @@ export class CheckRunner {
     this.codex = codex.includes('/') ? codex : (process.env.PATH ?? '').split(path.delimiter)
       .map(dir => path.join(dir, codex)).find(file => { try { accessSync(file, constants.X_OK); return true; } catch { return false; } });
     if (!this.codex) throw new Pause('Codex CLI is not on PATH; sandbox unavailable', 'isolation');
+  }
+  async stageInputs(){
+    const inventory=await this.workspace.inventory(),version=digest(inventory).slice(0,20),relative='.overnight-output/approved-inputs-'+version,root=await this.workspace.file(relative);await rm(root,{recursive:true,force:true});await mkdir(root,{recursive:true});
+    for(const entry of inventory){const source=await this.workspace.file(entry.path),destination=await this.workspace.file(relative+'/'+entry.path);await mkdir(path.dirname(destination),{recursive:true});await copyFile(source,destination);}
+    this.stagedInputRoot=root;return {root,files:inventory.map(f=>f.path),inventoryHash:digest(inventory)};
   }
   async execute(argv, timeoutMs, signal) {
     if (process.platform !== 'darwin') throw new Pause('Unattended checks currently require the verified Mac sandbox', 'isolation');
@@ -39,7 +44,7 @@ export class CheckRunner {
       env: {
         PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin`,
         TMPDIR: scratch, CI: '1', LANG: 'en_US.UTF-8',
-        HOME: scratch,
+        HOME: scratch,...(this.stagedInputRoot?{MOSAIC_APPROVED_INPUTS:this.stagedInputRoot}:{}),
         PLAYWRIGHT_BROWSERS_PATH: path.join(root, 'node_modules', '.cache', 'ms-playwright'),
       },
     });
@@ -71,6 +76,7 @@ export class CheckRunner {
     } finally { server.close(); }
   }
   async run(checks, key, signal) {
+    if(this.workspace.manifest?.overnightV2)await this.stageInputs();
     const results = [];
     for (const check of checks) {
       for (const file of check.screenshots ?? []) await rm(await this.workspace.file(file), { force: true });

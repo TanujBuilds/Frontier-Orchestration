@@ -2,6 +2,8 @@ import {randomUUID} from 'node:crypto';
 import {setTimeout as delay} from 'node:timers/promises';
 import {keys,integer,text,digest,goalDispatchInputSchema,taskDispatchInputSchema} from './contracts.mjs';
 import {Goals} from './goals.mjs';
+import {isOvernightV2} from './overnight.mjs';
+import {assertOvernightPreflight,OvernightPreflight} from './overnight-preflight.mjs';
 import {Worker} from './worker.mjs';
 import {NativeResearch} from './native-research.mjs';
 import {Agents} from './agents.mjs';
@@ -31,13 +33,14 @@ export class Dispatcher {
   add('workflow_register','Register a validated dependency template using supported capabilities.',{definition:obj},['definition'],true,(i,k)=>c.store.command(k,{op:'workflow.register',...i},()=>{const definition=c.registry.registerWorkflow(i.definition);c.store.put('workflow',{id:`${definition.id}-${definition.version}`,definition});return definition;}));
   add('workflow_submit','Instantiate an exact registered workflow within the approved goal. Dependency mapping and submission are atomic.',{goalId:str,workflowId:str,version:{...number,minimum:1},submissionId:str},['goalId','workflowId','version','submissionId'],true,(i,k)=>c.submitWorkflow(i,k));
   add('goal_prepare','Prepare an exact reviewable goal manifest. Does not activate.',{manifest:goalDispatchInputSchema},['manifest'],true,(i,k)=>c.prepareGoal(i.manifest,k));
+  add('overnight_preflight','Verify the exact approved infrastructure checks in the actual scoped sandbox before activation.',{goalId:str,hash:str},['goalId','hash'],true,(i,k)=>this.launch('overnight_preflight',i,k,()=>new OvernightPreflight({c,checksFactory:worker.checksFactory,config:worker.config}).run(i,k)));
   add('goal_activate','Approve the exact prepared hash and activate within its limits.',{goalId:str,hash:str},['goalId','hash'],true,(i,k)=>c.activateGoal(i,k));
   add('goal_get','Inspect one goal or all goal summaries.',{goalId:str},[],false,i=>i.goalId?c.getGoal(i.goalId):c.snapshot());
   add('goal_revision_prepare','Prepare a changed goal version without resetting spending.',{goalId:str,expectedHash:str,manifest:goalDispatchInputSchema},['goalId','expectedHash','manifest'],true,(i,k)=>this.goals.prepareRevision(i,k));
   add('goal_revision_activate','Activate the exact changed version after quiescence.',{revisionId:str,hash:str},['revisionId','hash'],true,(i,k)=>this.goals.activateRevision(i,k));
   add('goal_finalize','Finalize accepted work, or explicitly partial stopped work, with a hashed receipt.',{goalId:str,summary:str,partial:bool},['goalId','summary'],true,(i,k)=>this.goals.finalize(i,k));
-  add('task_submit','Submit a narrower assignment within the active approved goal. Collaborative consult/coding candidates wait for supervisor review; DeepSeek-only uses checks without Codex.',{goalId:str,task:taskDispatchInputSchema},['goalId','task'],true,(i,k)=>c.submitTask({...i.task,goalId:i.goalId},k));
-  add('task_get','Inspect a task, its checkpoint and counters.',{taskId:str},['taskId'],false,i=>c.getTask(i.taskId));
+  add('task_submit','Submit a narrower assignment within the active approved goal. Collaborative consult/coding candidates wait for supervisor review; DeepSeek-only uses checks without Codex.',{goalId:str,task:taskDispatchInputSchema},['goalId','task'],true,(i,k)=>{if(isOvernightV2(c.store.get('goal',i.goalId).manifest))throw Error('Overnight v2 stages require an atomically validated planner graph');return c.submitTask({...i.task,goalId:i.goalId},k);});
+  add('task_get','Inspect a task, its checkpoint and counters.',{taskId:str},['taskId'],false,i=>({...c.getTask(i.taskId),observerCursor:Number(c.store.db.prepare('SELECT COALESCE(MAX(seq),0) AS n FROM events').get().n)}));
   add('artifacts_list','List only saved allowlisted artifacts with checksums; no arbitrary paths.',{taskId:str},['taskId'],false,i=>this.artifacts.list(i.taskId));
   add('observer_snapshot','Read bounded model/task/agent overviews. No execution controls.',{goalId:str,actor:{...str,enum:['codex','deepseek']}},[],false,i=>this.observer.snapshot(i));
   add('observer_timeline','Read chronological activity with a durable scan cursor; captured and reported provenance are explicit.',{goalId:str,actor:{...str,enum:['codex','deepseek']},after:number,limit:{...number,minimum:1,maximum:200}},[],false,i=>this.observer.timeline(i));
@@ -68,7 +71,7 @@ export class Dispatcher {
   add('native_text_start','Start native Codex consult or maintenance. A DeepSeek handoff requires a reason and verified quiescence.',{taskId:str,reason:str},['taskId'],true,(i,k)=>c.startNativeText(i,k));
   add('native_text_finish','Record a native Codex consult or finalized protected learning result under its original task.',{taskId:str,content:str},['taskId','content'],true,(i,k)=>c.finishNativeText(i,k));
   add('research_action','Run a bounded search/read/finish action for native research.',{taskId:str,action:obj},['taskId','action'],true,(i,k)=>this.launch('research_action',i,k,()=>this.nativeResearch.action(i,`effect-${k}`)));
-  add('operation_get','Inspect a long operation.',{operationId:str},['operationId'],false,i=>c.store.get('operation',i.operationId));
+  add('operation_get','Inspect a long operation.',{operationId:str},['operationId'],false,i=>({...c.store.get('operation',i.operationId),observerCursor:Number(c.store.db.prepare('SELECT COALESCE(MAX(seq),0) AS n FROM events').get().n)}));
   add('questions_list','List unresolved task questions.',{goalId:str},[],false,i=>c.store.all('task').filter(t=>(!i.goalId||t.goalId===i.goalId)&&['awaiting_supervisor','awaiting_user'].includes(t.status)).map(t=>({taskId:t.id,goalId:t.goalId,status:t.status,question:t.questions.at(-1)})));
   add('question_answer','Answer within scope; DeepSeek-only requires a user answer.',{taskId:str,answer:str,responder:{...str,enum:['user','codex']}},['taskId','answer','responder'],true,(i,k)=>c.answer(i,k));
   add('task_priority','Set scheduling priority with a recorded reason.',{taskId:str,priority:{...str,enum:['blocking','normal','background']},reason:str},['taskId','priority','reason'],true,(i,k)=>c.setPriority(i,k));
@@ -88,10 +91,18 @@ export class Dispatcher {
  tools(){return [...this.definitions.values()].map(({fn,mutating,...tool})=>tool);}
  async recoverOperations(owner){
   const lease=this.c.store.get('lease','coordinator');if(lease.token!==owner||lease.pid!==process.pid)throw Error('Current worker lease required for operation recovery');
-  const allowed=new Set(['task_integration_repair','task_integrate','task_takeover','native_start','native_finish','native_release','research_start','research_action','research_reconcile','research_review']);
+  const allowed=new Set(['overnight_preflight','task_integration_repair','task_integrate','task_takeover','native_start','native_finish','native_release','research_start','research_action','research_reconcile','research_review']);
   for(const operation of this.c.store.all('operation').filter(o=>['pending','retryable'].includes(o.status))){
    const command=this.c.store.db.prepare('SELECT hash,result FROM commands WHERE key=?').get(operation.key);
    if(!allowed.has(operation.name)||!command||command.hash!==digest({op:'operation.launch',name:operation.name,input:operation.input})||JSON.parse(command.result).id!==operation.id)throw Error('Saved operation authority could not be verified');
+   if(operation.name==='overnight_preflight'){
+    // A saved successful receipt is replayable. Without it, an orphaned sandbox
+    // check may still be running: fail this operation, never retry it on startup.
+    const receipt=this.c.store.maybe('overnight_preflight',operation.input.goalId),g=this.c.store.get('goal',operation.input.goalId);let recovered;
+    try{if(!receipt?.passed||receipt.approvalHash!==operation.input.hash||g.hash!==operation.input.hash)throw Error('Interrupted preflight requires verified check quiescence and a new exact preflight operation');assertOvernightPreflight(this.c,g);recovered={...operation,status:'completed',result:receipt,finishedAt:this.c.now()};}
+    catch{recovered={...operation,status:'failed',error:'Interrupted preflight: inspect check quiescence, then rerun exact preflight; no inference was dispatched',finishedAt:this.c.now()};}
+    this.c.store.tx(()=>this.c.store.put('operation',recovered));continue;
+   }
    await this.invoke(operation.name,{...operation.input,idempotencyKey:operation.key});
   }
  }
