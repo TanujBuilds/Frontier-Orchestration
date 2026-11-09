@@ -160,3 +160,44 @@ test('saved check outcomes survive later checkpoints and an accepted task retire
  saved.status='accepted';c.store.put('task',saved);
  assert.ok(!actorRows({snapshot:observer.snapshot({goalId:g.id}),goalId:g.id}).some(row=>row.role==='Reviewer'));
 });
+
+test('a 50×24 interactive terminal shows concurrent worker and native assignments',()=>{
+ const events=[{seq:1,at:Date.now(),provenance:'coordinator',summary:'Saved handoff'}];
+ const output=renderTerminal({snapshot,goalId:goal.id,events},{width:50,height:24,interactive:true});
+ assert.match(output,/Fixture Model/);
+ assert.match(output,/Run protected checks/);
+ assert.match(output,/Codex/);
+ assert.match(output,/Independent implementation/);
+ assert.match(output,/captured/);
+ assert.match(output,/reported/);
+ assert.match(output,/Saved handoff/);
+ assert.ok(output.split('\n').length<=24);
+ assert.ok(output.split('\n').every(line=>line.length<=50));
+});
+
+test('passing native candidate checks take precedence over a historical worker check failure',t=>{
+ const root=mkdtempSync(path.join(os.tmpdir(),'mosaic-beta-native-check-'));
+ let at=1000;
+ const workerProfile={displayName:'Fixture Model',baseUrl:'https://provider.example/v1',model:'custom',revision:'revision-a',streaming:false};
+ const c=new Coordinator({root,beta:true,workerProfile,now:()=>at});
+ t.after(()=>{c.close();rmSync(root,{force:true,recursive:true});});
+ const g=c.prepareGoal({submissionId:'g',objective:'Build',acceptance:['Evidence'],project:{repo:root,baseCommit:'a'.repeat(40),readPaths:['src/'],writePaths:['src/'],checks:[{id:'verify',argv:['/bin/true']}]}},'prepare');
+ c.activateGoal({goalId:g.id,hash:g.hash},'activate');
+ const assignment=c.submitTask({goalId:g.id,submissionId:'a',kind:'coding',objective:'Implement',acceptance:['Evidence']},'submit');
+ c.claimNext('owner');
+ c.emit('coding.checks.failed',g.id,assignment.id,{actor:'deepseek',provenance:'captured',checks:[{id:'verify',passed:false}]});
+ const saved=c.getTask(assignment.id);
+ at=2000;
+ saved.status='awaiting_review';
+ saved.owner=null;
+ saved.executionActor='codex';
+ saved.result={summary:'Passing native takeover',checks:[{id:'verify',passed:true}]};
+ c.store.put('task',saved);
+ c.emit('task.native_finished',g.id,assignment.id,{status:saved.status});
+ const observer=new Observer({c}),current=observer.snapshot({goalId:g.id});
+ assert.deepEqual(current.tasks[0].outcome.checks,{passed:1,total:1});
+ assert.equal(current.tasks[0].lastCheck.status,'failed');
+ const reviewer=actorRows({snapshot:current,goalId:g.id}).find(row=>row.role==='Reviewer');
+ assert.deepEqual({status:reviewer.status,state:reviewer.state,at:reviewer.at},{status:'Waiting in Codex',state:'waiting',at:2000});
+ assert.ok(observer.timeline({goalId:g.id}).events.some(event=>event.type==='coding.checks.failed'));
+});

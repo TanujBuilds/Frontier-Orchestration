@@ -20,7 +20,13 @@ function goalFor(state){
  return state.snapshot?.goals.find(g=>g.id===state.goalId)??state.snapshot?.goals.find(g=>g.status==='active')??state.snapshot?.goals[0];
 }
 
-const checksFailed=task=>task.lastCheck?.status==='failed'||task.outcome?.checks?.passed<task.outcome?.checks?.total;
+const candidateReady=new Set(['awaiting_review','awaiting_legacy_review','legacy_reviewing','ready_to_integrate','accepted']);
+function checksFailed(task){
+ const checks=task.outcome?.checks;
+ if(task.actor==='codex'||checks&&candidateReady.has(task.status))return !!checks&&checks.passed<checks.total;
+ if(task.lastCheck)return task.lastCheck.status==='failed';
+ return !!checks&&checks.passed<checks.total;
+}
 const reviewComplete=new Set(['accepted','failed','partial','cancelled','ready_to_integrate','stopped']);
 
 export function actorRows(state){
@@ -51,10 +57,11 @@ export function actorRows(state){
   const failed=task.kind==='coding'&&checksFailed(task);
   if(!awaiting&&!checking&&!failed)continue;
   const reviewing=task.status==='legacy_reviewing'||report?.lastReport.status==='running';
+  const heldByChecks=failed&&!checking&&!awaiting;
   rows.push({id:'review-'+task.id,actor:'Codex',role:'Reviewer',assignment:task.objective,
-   at:report?.lastReport.at??reservation?.at??(failed?task.lastCheck?.at:null)??task.updatedAt,evidence:task.evidenceRef,
-   state:reviewing?'running':failed&&!checking?'blocked':'waiting',
-   status:reviewing?'Reviewing':checking?'Waiting for checks':failed&&!awaiting?'Waiting · checks failed':reservation?'Reserved · waiting':'Waiting in Codex',
+   at:report?.lastReport.at??reservation?.at??(heldByChecks?task.lastCheck?.at:null)??task.updatedAt,evidence:task.evidenceRef,
+   state:reviewing?'running':heldByChecks?'blocked':'waiting',
+   status:reviewing?'Reviewing':checking?'Waiting for checks':heldByChecks?'Waiting · checks failed':reservation?'Reserved · waiting':'Waiting in Codex',
    provenance:report?'reported':'coordinator'});
  }
  return rows;
@@ -89,19 +96,31 @@ function eventText(event){
 function compactMain(state,goal,{width,height,color,selected,offset}){
  const first=value=>lines(value,width)[0];
  const heading=value=>color?accent(first(value)):first(value);
- const rows=actorRows(state),index=Math.min(selected,rows.length-1),row=rows[index];
+ const rows=actorRows(state),index=Math.max(0,Math.min(selected,rows.length-1));
  const frame=[heading('Mosaic Beta')];
  if(state.stale)frame.push(first(state.snapshot?'Disconnected · stale':'Disconnected'));
  if(goal){
   if(height>=8)frame.push(first(goal.objective));
-  if(row){
-   frame.push(first(row.assignment));
-   if(height>=8)frame.push(first(`${index+1}/${rows.length} ${row.status}`));
-   if(height>=10)frame.push(first(row.actor));
+  const end=Math.max(0,state.events.length-offset);
+  if(rows.length){
+   // Reserve the footer, feed heading and the newest visible event.
+   const room=Math.max(1,height-frame.length-2-(end?1:0));
+   const rowHeight=height>=18&&room>=3?3:Math.min(2,room);
+   const count=Math.max(1,Math.floor(room/rowHeight)),start=Math.max(0,Math.min(index,rows.length-count));
+   for(const [offset,row] of rows.slice(start,start+count).entries()){
+    const marker=offset+start===index?'› ':'  ';
+    if(rowHeight>=2){
+     const identity=first(`${marker}${row.actor} · ${row.status}`);
+     frame.push(color?statusColor(identity,row.state):identity);
+    }
+    frame.push(first(rowHeight===1?marker+row.assignment:row.assignment));
+    if(rowHeight===3)frame.push(first(`  ${row.provenance} · updated ${clock(row.at)}`));
+   }
   }else frame.push(first('Idle · no assignments'));
   frame.push(heading('Handoff feed'));
-  const event=state.events[Math.max(0,state.events.length-1-offset)];
-  if(event)frame.push(first(eventText(event)));
+  const room=Math.max(0,height-frame.length-1);
+  for(const event of state.events.slice(Math.max(0,end-room),end))
+   frame.push(first(width>=42?`[${event.provenance}] ${eventText(event)}`:eventText(event)));
  }else if(!state.stale)frame.push(first('Idle · no goals'));
  const footer=first(width<16?'↑↓ g q':'↑↓ Enter g q');
  return [...frame.slice(0,height-1),footer].join('\n');
