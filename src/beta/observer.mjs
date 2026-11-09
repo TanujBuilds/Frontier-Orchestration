@@ -100,6 +100,7 @@ function compactMain(state,goal,{width,height,color,selected,offset}){
  const frame=[heading('Mosaic Beta')];
  if(state.snapshot?.source)frame.push(first('Source: '+state.snapshot.source));
  if(state.stale)frame.push(first(state.snapshot?'Disconnected · stale':'Disconnected'));
+ if(state.currentNotice)frame.push(first(state.currentNotice));
  if(goal){
   if(height>=8)frame.push(first(goal.objective));
   const end=Math.max(0,state.events.length-offset);
@@ -126,7 +127,7 @@ function compactMain(state,goal,{width,height,color,selected,offset}){
   for(const event of state.events.slice(Math.max(0,end-room),end))
    frame.push(first(width>=42?`[${event.provenance}] ${eventText(event)}`:eventText(event)));
  }else if(!state.stale)frame.push(first('Idle · no goals'));
- const footer=first(width<16?'↑↓ g q':'↑↓ Enter g q');
+ const footer=first(width<16?'↑↓ a g q':'↑↓ Enter a g q');
  return [...frame.slice(0,height-1),footer].join('\n');
 }
 
@@ -142,6 +143,7 @@ function polishedMain(state,goal,{width,height,color,selected,offset}){
  if(state.snapshot?.sourceLabel)out.push(quiet(clip('Watching '+state.snapshot.sourceLabel,space)));
  if(state.snapshot?.sourceHint)out.push(quiet(clip(state.snapshot.sourceHint,space)));
  if(state.stale)out.push(tone(clip(state.snapshot?'Disconnected · last observed state is stale':'Disconnected · coordinator state unknown',space),'blocked'));
+ if(state.currentNotice)out.push(...lines(state.currentNotice,space).slice(0,2).map(quiet));
  out.push(quiet('─'.repeat(space)),'');
  if(!goal){
   out.push(bold(state.stale?'Waiting for the coordinator':'Ready when you are'),'');
@@ -187,7 +189,7 @@ function polishedMain(state,goal,{width,height,color,selected,offset}){
   }
   out.push(...(feed.length?feed:[quiet(clip(state.events.length?'No handoffs fit. Enlarge the terminal to see the feed.':'Waiting for the first handoff.',space))]).slice(0,room));
  }
- const keys=space>=70?'↑↓ select   Enter evidence   g goals   PgUp/PgDn history   q quit':'↑↓  Enter evidence  g goals  Pg↑/↓ feed  q quit';
+ const keys=space>=70?'↑↓ select  Enter evidence  a current  g goals  Pg↑/↓ history  q quit':'↑↓ Enter  a current  g goals  Pg↑/↓ feed  q quit';
  const body=out.slice(0,height-3);
  while(body.length<height-3)body.push('');
  return [...body,'',quiet('─'.repeat(space)),quiet(clip(keys,space))].map(line=>margin+line).join('\n');
@@ -215,7 +217,7 @@ function polishedPicker(state,{width,height,color,picker}){
   preview.push(quiet(clip(`${status(goal.status)}  ·  ${String(goal.mode).replaceAll('_',' ')}  ·  ${goal.taskCount??0} assignments`,space)));
   preview.push(quiet(clip('ID: '+goal.id,space)));
  }else if(goal&&height>=8)out.push(quiet(clip(status(goal.status),space)));
- const footer=roomy?(space>=70?'↑↓ choose  Enter open  d details  PgUp/PgDn jump  Esc back  q quit':'↑↓ Enter  d details  Pg↑/↓ jump  Esc back  q quit'):space>=20?'↑↓ Enter d Esc q':space>=12?'↑↓ d Esc q':'↑↓ d q';
+ const footer=roomy?(space>=70?'↑↓ Enter open  a current  d details  Pg↑/↓ jump  Esc back  q quit':'↑↓ Enter  a current  d details  Esc back  q quit'):space>=20?'↑↓ Enter a d Esc q':space>=12?'↑↓ a d Esc q':'↑↓ a q';
  const tail=roomy?['',quiet('─'.repeat(space)),quiet(clip(footer,space))]:[quiet(clip(footer,space))];
  const titleWidth=space-24;
  if(roomy)out.push('',quiet('  '+pad('Goal',titleWidth)+'  '+pad('Status',10)+'  ID'));
@@ -245,6 +247,7 @@ export function renderTerminal(state,{width=80,height=36,color=false,selected=0,
  if(state.snapshot?.sourceLabel)out.push(...lines('Watching '+state.snapshot.sourceLabel,width));
  if(state.snapshot?.sourceHint)out.push(...lines(state.snapshot.sourceHint,width));
  if(state.stale)out.push(...lines(state.snapshot?'Disconnected · last observed state is stale':'Disconnected · coordinator state unknown',width));
+ if(state.currentNotice)out.push(...lines(state.currentNotice,width));
  if(picker!==null&&!detail){
   out.push(...header('Choose a goal'));
   const goals=state.snapshot?.goals??[];
@@ -283,8 +286,8 @@ export function renderTerminal(state,{width=80,height=36,color=false,selected=0,
    out.push(...lines(`${clock(event.at)} [${event.provenance}] ${eventText(event)}`,width));
   }
  }
- const footer=detail?'↑↓ or PgUp/PgDn scroll · Esc back · q quit':picker!==null?'↑↓ choose · Enter select · Esc back · q quit':interactive?'↑↓ rows · Enter evidence · g goals · PgUp/PgDn feed · q quit':'Approvals and decisions stay in Codex.';
- const tail=lines(compact?'↑↓ Esc q':footer,width);
+ const footer=detail?'↑↓ or PgUp/PgDn scroll · a current · Esc back · q quit':picker!==null?'↑↓ choose · Enter select · a current · Esc back · q quit':interactive?'↑↓ rows · Enter evidence · a current · g goals · PgUp/PgDn feed · q quit':'Approvals and decisions stay in Codex.';
+ const tail=lines(compact?'↑↓ a Esc q':footer,width);
  return [...out.slice(0,Math.max(0,height-tail.length-1)),'',...tail].join('\n');
 }
 
@@ -294,15 +297,30 @@ export class TerminalObserver {
   this.state={snapshot:null,stale:false,goalId:null,events:[]};
   this.cursor=null;
   this.fixedGoal=null;
+  this.navigation=0;this.currentRequested=false;this.currentController=null;
  }
  select(goalId){
+  this.navigation++;this.currentRequested=false;this.currentController?.abort();this.state.currentNotice=null;
   this.fixedGoal=goalId;this.state.goalId=goalId;this.state.events=[];this.cursor=null;
  }
+ requestCurrent(){
+  this.navigation++;this.currentController?.abort();this.currentRequested=true;
+  this.state.currentNotice='Finding current project…';
+ }
  async poll(signal){
+  const navigation=this.navigation,requested=this.currentRequested;
   try{
-   const snapshot=await this.invoke('observer_snapshot',{},signal);
+   let current;
+   if(requested){
+    this.currentRequested=false;this.currentController=new AbortController();
+    if(!this.invoke.current)throw Error('Current project lookup unavailable');
+    current=await this.invoke.current(signal?AbortSignal.any([signal,this.currentController.signal]):this.currentController.signal);
+   }
+   const snapshot=current?.snapshot??await this.invoke('observer_snapshot',{},signal);
+   if(navigation!==this.navigation)return this.state;
    const previous=this.state.snapshot;
    if(snapshot.source!==previous?.source){this.fixedGoal=null;this.cursor=null;this.state.events=[];this.state.historyPending=false;}
+   if(current){this.fixedGoal=current.goalId;this.state.currentNotice='Last check: '+current.notice;}
    const goal=(this.fixedGoal?snapshot.goals.find(g=>g.id===this.fixedGoal):null)??snapshot.goals.find(g=>g.status==='active')??snapshot.goals[0];
    if(goal?.id!==this.state.goalId||snapshot.cursor<(previous?.cursor??0)){
     this.cursor=null;this.state.events=[];this.state.goalId=goal?.id??null;this.state.historyPending=false;
@@ -311,11 +329,13 @@ export class TerminalObserver {
    if(goal){
     if(snapshot.overflow?.tasks){
      const selected=await this.invoke('observer_snapshot',{goalId:goal.id},signal);
+     if(navigation!==this.navigation)return this.state;
      if(this.state.goalId===goal.id)this.state.snapshot={...selected,goals:snapshot.goals,source:snapshot.source,sourceLabel:snapshot.sourceLabel,sourceHint:snapshot.sourceHint};
     }
     for(let page=0;page<2;page++){
      const recent=this.cursor===null;
      const result=await this.invoke('observer_timeline',{goalId:goal.id,limit:feedLimit,...(recent?{recent:true}:{after:this.cursor})},signal);
+     if(navigation!==this.navigation)return this.state;
      if(this.state.goalId!==goal.id)break;
      const events=new Map(this.state.events.map(event=>[event.seq,event]));
      for(const event of result.events)if(event.type!=='model.output'&&(recent||event.seq>this.cursor))events.set(event.seq,event);
@@ -326,7 +346,7 @@ export class TerminalObserver {
     }
    }
    this.state.stale=false;
-  }catch{this.state.stale=true;}
+  }catch{if(navigation===this.navigation){this.state.stale=true;if(requested)this.state.currentNotice='Could not refresh the current project · showing saved view. Press a to retry.';}}
   return this.state;
  }
 }
@@ -347,6 +367,10 @@ export async function runObserver({invoke,input=process.stdin,output=process.std
  };
  const keypress=async(_,key={})=>{
   if(key.name==='q'||key.ctrl&&key.name==='c'){close();return;}
+  if(key.name==='a'){
+   picker=null;detail=null;selected=0;offset=0;detailOffset=0;
+   observer.requestCurrent();draw();return;
+  }
   if(key.name==='escape'){if(detail)detail=null;else picker=null;draw();return;}
   if(detail){
    const delta={up:-1,down:1,pageup:-10,pagedown:10}[key.name];

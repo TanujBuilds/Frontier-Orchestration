@@ -20,7 +20,7 @@ async function fixture(t){
  for(const name of ['Mosaic Beta','Mosaic']){
   const root=path.join(home,'Library','Application Support',name,'state');
   await mkdir(root,{recursive:true,mode:0o700});
-  const c=new Coordinator({root,beta:name==='Mosaic Beta'});
+  const c=new Coordinator({root,beta:name==='Mosaic Beta',workerProfile:name==='Mosaic Beta'?{baseUrl:'http://127.0.0.1:1/v1',model:'fixture',displayName:'Fixture',revision:'fixture',streaming:false}:undefined});
   const dispatcher=new Dispatcher({c});
   if(name==='Mosaic')delete dispatcher.definitions.get('observer_timeline').inputSchema.properties.recent;
   const api=await startApi({dispatcher,token:'a'.repeat(64),viewerToken:'b'.repeat(64),headless:true});
@@ -100,4 +100,50 @@ test('changing the active source resets the feed and routes evidence to its owni
  assert.equal(observer.state.goalId,betaGoal.id);
  assert.ok(observer.state.events.length>0);
  assert.ok(observer.state.events.every(e=>e.goalId===betaGoal.id));
+});
+
+test('current shortcut ignores expired active labels and deadline housekeeping across sources',async t=>{
+ const f=await fixture(t),now=Date.now();
+ f.core.c.now=()=>now-10000;
+ const old=f.goal(f.core.c,'Expired project');
+ const record=f.core.c.store.get('goal',old.id);record.deadline=now-100;f.core.c.store.put('goal',record);
+ f.beta.c.now=()=>now-1000;
+ const recent=f.goal(f.beta.c,'Recent project');
+ const done=f.beta.c.store.get('goal',recent.id);done.status='completed';f.beta.c.store.put('goal',done);
+ f.beta.c.emit('goal.finalized',recent.id,null,{});
+ f.core.c.now=()=>now;f.core.c.emit('task.expired',old.id,null,{});
+ const invoke=observerClient(locations(f.home,true));
+ assert.equal(typeof invoke.current,'function');
+ const result=await invoke.current();
+ assert.equal(result.goalId,recent.id);assert.equal(result.snapshot.source,'beta');
+ assert.match(result.notice,/No work currently running/);
+ assert.equal(f.core.c.store.get('goal',old.id).status,'active');
+ assert.equal((await invoke('observer_snapshot')).source,'beta');
+});
+
+test('current shortcut picks the freshest genuinely running worker and honors explicit source',async t=>{
+ const f=await fixture(t),now=Date.now();
+ const create=(service,name,at)=>{
+  service.c.now=()=>at;const g=f.goal(service.c,name);
+  const task=service.c.submitTask({goalId:g.id,submissionId:'work',kind:'consult',objective:'Work',acceptance:['Evidence']},'submit');
+  service.c.claimNext('fixture-worker');
+  service.c.emit('model.request.started',g.id,task.id,{actor:'deepseek',provenance:'captured'});
+  return g;
+ };
+ const core=create(f.core,'Core live',now-1000),beta=create(f.beta,'Beta live',now);
+ const auto=observerClient(locations(f.home,true));assert.equal(typeof auto.current,'function');
+ assert.equal((await auto.current()).goalId,beta.id);
+ const explicit=await observerClient(locations(f.home,true),{source:'core'}).current();
+ assert.equal(explicit.goalId,core.id);assert.equal(explicit.kind,'running');
+});
+
+test('current shortcut does not claim stale native reports are running',async t=>{
+ const f=await fixture(t),now=Date.now(),g=f.goal(f.core.c,'Native project');
+ const tsk=f.core.c.submitTask({goalId:g.id,submissionId:'native',actor:'codex',kind:'consult',objective:'Native work',acceptance:['Evidence']},'submit');
+ const row=f.core.c.getTask(tsk.id);row.status='codex_active';f.core.c.store.put('task',row);
+ f.core.c.store.put('agent',{id:'native',goalId:g.id,taskId:tsk.id,actor:'codex',role:'implementer',lastReport:{status:'running',at:now-180000}});
+ const invoke=observerClient(locations(f.home,true),{source:'core'});assert.equal(typeof invoke.current,'function');
+ const stale=await invoke.current();assert.equal(stale.kind,'unknown');assert.match(stale.notice,/unconfirmed/i);
+ f.core.c.store.put('agent',{id:'native',goalId:g.id,taskId:tsk.id,actor:'codex',role:'implementer',lastReport:{status:'running',at:Date.now()}});
+ assert.equal((await invoke.current()).kind,'running');
 });

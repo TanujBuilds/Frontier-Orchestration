@@ -267,6 +267,24 @@ test('goal details show the full objective and Escape returns to the picker',asy
  }finally{input.emit('keypress','q',{name:'q'});await pending;}
 });
 
+test('a jumps to the current project from main, picker and details without dispatch',async ()=>{
+ for(const keys of [[],['g'],['g','d']]){
+  const input=new EventEmitter();input.isTTY=true;input.isRaw=false;
+  input.setRawMode=v=>{input.isRaw=v;};input.resume=()=>{};input.pause=()=>{};
+  let first,jumped;const ready=new Promise(r=>{first=r;}),current=new Promise(r=>{jumped=r;});
+  const fresh={...goal,id:'recent-goal',objective:'Most recent project',status:'completed'};
+  const frames=[];const output={isTTY:true,columns:80,rows:30,write(value){if(value.includes('Mosaic Beta')){frames.push(stripVTControlCharacters(value));first();if(value.includes('No work currently running'))jumped();}}};
+  const invoke=async name=>{assert.ok(['observer_snapshot','observer_timeline'].includes(name));return name==='observer_snapshot'?{...snapshot,goals:[goal,fresh]}:{events:[],cursor:101,hasMore:false};};
+  invoke.current=async()=>({snapshot:{...snapshot,goals:[goal,fresh]},goalId:fresh.id,notice:'No work currently running · most recent project'});
+  const pending=runObserver({input,output,invoke,noColor:false,pollMs:1});
+  try{
+   await ready;for(const key of keys)input.emit('keypress',key,{name:key});
+   input.emit('keypress','a',{name:'a'});await current;
+   assert.match(frames.at(-1),/Most recent project/);assert.doesNotMatch(frames.at(-1),/Choose a goal|Goal details/);
+  }finally{input.emit('keypress','q',{name:'q'});await pending;}
+ }
+});
+
 test('passing native candidate checks take precedence over a historical worker check failure',t=>{
  const root=mkdtempSync(path.join(os.tmpdir(),'mosaic-beta-native-check-'));
  let at=1000;
@@ -292,4 +310,20 @@ test('passing native candidate checks take precedence over a historical worker c
  const reviewer=actorRows({snapshot:current,goalId:g.id}).find(row=>row.role==='Reviewer');
  assert.deepEqual({status:reviewer.status,state:reviewer.state,at:reviewer.at},{status:'Waiting in Codex',state:'waiting',at:2000});
  assert.ok(observer.timeline({goalId:g.id}).events.some(event=>event.type==='coding.checks.failed'));
+});
+
+test('manual navigation cancels a pending current jump and ignores its late result',async()=>{
+ let finish,lookupSignal;
+ const invoke=async(name)=>name==='observer_snapshot'?snapshot:{events:[],cursor:101,hasMore:false};
+ invoke.current=signal=>{lookupSignal=signal;return new Promise(resolve=>{finish=resolve;});};
+ const observer=new TerminalObserver(invoke);
+ await observer.poll();observer.requestCurrent();
+ const pending=observer.poll();
+ observer.select('manual-selection');
+ assert.equal(lookupSignal.aborted,true);
+ finish({snapshot,goalId:goal.id,notice:'Current project · working now'});
+ await pending;
+ assert.equal(observer.state.goalId,'manual-selection');
+ assert.equal(observer.state.currentNotice,null);
+ assert.equal(observer.state.stale,false);
 });

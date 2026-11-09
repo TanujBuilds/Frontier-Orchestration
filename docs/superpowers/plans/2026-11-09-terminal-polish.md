@@ -19,3 +19,7 @@ Review focus: newest handoffs stay visible after wrapping; selected agent status
 ## Goal picker follow-up
 
 The owner identified the full-instruction goal list as confusing. Extend the same compact visual style to goal selection: one clipped title per row, aligned saved status and short ID, a bounded viewport around the selection, and a separate selected-goal preview. Keep the coordinator's ordering and records intact. Add `d` for full scrollable details, Escape back to the picker, and Page Up/Down jumps. Verify long goals at top/middle/end, narrow windows, source/stale warnings, and opening the exact highlighted goal. Package and install as the next beta patch.
+
+## Current-project shortcut follow-up
+
+The owner approved `a current` from the main view, picker and details. Prefer an unexpired running assignment or planner, breaking ties by actual saved activity. Native work requires a fresh running report; otherwise show that its activity is unconfirmed. If nothing is running, select the most recently worked project and explicitly say so. Exclude expiration housekeeping from recency. Auto source checks both installations, while explicit source selection stays scoped. Keep this a one-shot navigation action with no dispatch/resume; retain the selected service afterward. Bound history scans and disclose unavailable/incomplete evidence. Verify expired labels, source selection, stale reports, modal shortcuts, cancellation and installed PTY behavior.
