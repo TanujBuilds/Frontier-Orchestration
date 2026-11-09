@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {EventEmitter} from 'node:events';
+import {stripVTControlCharacters} from 'node:util';
 import {spawnSync} from 'node:child_process';
 import {Coordinator} from '../src/harness/coordinator.mjs';
 import {Observer} from '../src/harness/observer.mjs';
@@ -204,6 +205,31 @@ test('a 50×24 interactive terminal shows concurrent worker and native assignmen
  assert.match(output,/Saved handoff/);
  assert.ok(output.split('\n').length<=24);
  assert.ok(output.split('\n').every(line=>line.length<=50));
+});
+
+test('styled desktop sizes retain the selected status, newest handoff and quit control',()=>{
+ const events=Array.from({length:20},(_,n)=>({seq:n,at:Date.now(),provenance:'captured',summary:n===19?'Newest handoff':'Older saved event'}));
+ for(const width of [55,80,110]){
+  const output=stripVTControlCharacters(renderTerminal({snapshot,goalId:goal.id,events},{width,height:30,color:true,interactive:true,selected:1}));
+  assert.match(output,/Codex/);
+  assert.match(output,/Running/);
+  assert.match(output,/Newest handoff/);
+  assert.match(output.split('\n').at(-1),/q quit/);
+  assert.equal(output.split('\n').length,30);
+  assert.ok(output.split('\n').every(line=>[...line].length<=width));
+ }
+});
+
+test('a tight styled frame keeps the newest handoff when only one feed line fits',()=>{
+ const g={...goal,objective:'A long objective describing the full application being built and its remaining work'};
+ const t={...native,objective:'A long assignment describing the interface implementation and remaining checks'};
+ const state={snapshot:{...snapshot,sourceLabel:'Mosaic core (frontier-harness)',sourceHint:'Other saved goals: mosaic --source beta',goals:[g],tasks:[t],agents:[]},
+  goalId:g.id,stale:true,historyPending:true,events:[{seq:1,at:Date.now(),provenance:'captured',summary:'Newest handoff with enough detail to wrap onto a second line'}]};
+ const output=stripVTControlCharacters(renderTerminal(state,{width:55,height:24,interactive:true,color:true}));
+ assert.match(output,/Newest handoff/);
+ assert.match(output,/Disconnected/);
+ assert.match(output,/activity unknown/);
+ assert.match(output,/q quit/);
 });
 
 test('passing native candidate checks take precedence over a historical worker check failure',t=>{
