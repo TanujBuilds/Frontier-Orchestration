@@ -84,6 +84,34 @@ test('q restores the TTY and leaves its input usable',async ()=>{
  assert.equal(input.listenerCount('keypress'),0);
 });
 
+test('switching coordinators closes old evidence and ignores a late reply',async ()=>{
+ const input=new EventEmitter();
+ input.isTTY=true;input.isRaw=false;input.setRawMode=value=>{input.isRaw=value;};input.resume=()=>{};input.pause=()=>{};
+ let source='core',finishEvidence,firstFrame,secondFrame,evidenceStarted;
+ const first=new Promise(resolve=>{firstFrame=resolve;}),second=new Promise(resolve=>{secondFrame=resolve;});
+ const started=new Promise(resolve=>{evidenceStarted=resolve;});
+ const frames=[];
+ const output={isTTY:true,columns:100,rows:30,write(value){
+  if(!value.includes('Mosaic Beta'))return;
+  frames.push(value);
+  if(value.includes('Watching core'))firstFrame();
+  if(value.includes('Watching beta'))secondFrame();
+ }};
+ const invoke=async name=>{
+  if(name==='observer_snapshot')return {...snapshot,source,sourceLabel:source};
+  if(name==='observer_evidence'){evidenceStarted();return new Promise(resolve=>{finishEvidence=resolve;});}
+  return {events:[],cursor:101,hasMore:false};
+ };
+ const running=runObserver({input,output,invoke,noColor:false,pollMs:1});
+ try{
+  await first;input.emit('keypress','\r',{name:'return'});await started;
+  source='beta';await second;
+  finishEvidence({text:'Evidence from the old coordinator',provenance:'saved'});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.doesNotMatch(frames.at(-1),/Saved evidence|Evidence from the old coordinator|Loading saved evidence/);
+ }finally{input.emit('keypress','q',{name:'q'});await running;}
+});
+
 test('native reports describe activity and reserved reviewers wait for actual work',()=>{
  const state={snapshot:{...snapshot,agents:[{...snapshot.agents[0],lastReport:{status:'waiting',at:1000}}],
   reviewers:[{id:'review-1',taskId:task.id,goalId:goal.id,status:'reserved',at:1001}]},goalId:goal.id,events:[]};

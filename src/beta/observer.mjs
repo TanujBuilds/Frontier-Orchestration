@@ -98,6 +98,7 @@ function compactMain(state,goal,{width,height,color,selected,offset}){
  const heading=value=>color?accent(first(value)):first(value);
  const rows=actorRows(state),index=Math.max(0,Math.min(selected,rows.length-1));
  const frame=[heading('Mosaic Beta')];
+ if(state.snapshot?.source)frame.push(first('Source: '+state.snapshot.source));
  if(state.stale)frame.push(first(state.snapshot?'Disconnected · stale':'Disconnected'));
  if(goal){
   if(height>=8)frame.push(first(goal.objective));
@@ -120,6 +121,7 @@ function compactMain(state,goal,{width,height,color,selected,offset}){
    else frame.push(...blocks.slice(start,after).flat());
   }else frame.push(first('Idle · no assignments'));
   frame.push(heading('Handoff feed'));
+  if(state.historyPending)frame.push(first('Loading saved handoffs…'));
   const room=Math.max(0,height-frame.length-1);
   for(const event of state.events.slice(Math.max(0,end-room),end))
    frame.push(first(width>=42?`[${event.provenance}] ${eventText(event)}`:eventText(event)));
@@ -135,6 +137,8 @@ export function renderTerminal(state,{width=80,height=36,color=false,selected=0,
  const goal=goalFor(state);
  if(compact&&picker===null&&!detail)return compactMain(state,goal,{width,height,color,selected,offset});
  const out=header(compact?'Mosaic Beta':'Mosaic Beta  /  Terminal observer');
+ if(state.snapshot?.sourceLabel)out.push(...lines('Watching '+state.snapshot.sourceLabel,width));
+ if(state.snapshot?.sourceHint)out.push(...lines(state.snapshot.sourceHint,width));
  if(state.stale)out.push(...lines(state.snapshot?'Disconnected · last observed state is stale':'Disconnected · coordinator state unknown',width));
  if(picker!==null){
   out.push(...header('Choose a goal'));
@@ -168,6 +172,7 @@ export function renderTerminal(state,{width=80,height=36,color=false,selected=0,
    out.push(...blocks.slice(start).flat().slice(0,Math.max(budget,blocks[Math.min(selected,blocks.length-1)].length)));
   }else out.push(...blocks.flat());
   out.push('',...header('Handoff feed'));
+  if(state.historyPending)out.push(...lines('Loading saved handoffs…',width));
   const room=Math.max(0,height-out.length-(interactive?4:2)),end=Math.max(0,state.events.length-offset);
   for(const event of state.events.slice(Math.max(0,end-Math.max(1,room)),end)){
    out.push(...lines(`${clock(event.at)} [${event.provenance}] ${eventText(event)}`,width));
@@ -192,15 +197,16 @@ export class TerminalObserver {
   try{
    const snapshot=await this.invoke('observer_snapshot',{},signal);
    const previous=this.state.snapshot;
+   if(snapshot.source!==previous?.source){this.fixedGoal=null;this.cursor=null;this.state.events=[];this.state.historyPending=false;}
    const goal=(this.fixedGoal?snapshot.goals.find(g=>g.id===this.fixedGoal):null)??snapshot.goals.find(g=>g.status==='active')??snapshot.goals[0];
    if(goal?.id!==this.state.goalId||snapshot.cursor<(previous?.cursor??0)){
-    this.cursor=null;this.state.events=[];this.state.goalId=goal?.id??null;
+    this.cursor=null;this.state.events=[];this.state.goalId=goal?.id??null;this.state.historyPending=false;
    }
    this.state.snapshot=snapshot;
    if(goal){
     if(snapshot.overflow?.tasks){
      const selected=await this.invoke('observer_snapshot',{goalId:goal.id},signal);
-     if(this.state.goalId===goal.id)this.state.snapshot={...selected,goals:snapshot.goals};
+     if(this.state.goalId===goal.id)this.state.snapshot={...selected,goals:snapshot.goals,source:snapshot.source,sourceLabel:snapshot.sourceLabel,sourceHint:snapshot.sourceHint};
     }
     for(let page=0;page<2;page++){
      const recent=this.cursor===null;
@@ -210,6 +216,7 @@ export class TerminalObserver {
      for(const event of result.events)if(event.type!=='model.output'&&(recent||event.seq>this.cursor))events.set(event.seq,event);
      this.state.events=[...events.values()].sort((a,b)=>a.seq-b.seq).slice(-feedLimit);
      this.cursor=Math.max(this.cursor??0,result.cursor);
+     this.state.historyPending=!!result.hasMore;
      if(!result.hasMore)break;
     }
    }
@@ -253,11 +260,12 @@ export async function runObserver({invoke,input=process.stdin,output=process.std
    if(key.name==='pageup')offset=Math.min(Math.max(0,observer.state.events.length-1),offset+6);
    if(key.name==='pagedown')offset=Math.max(0,offset-6);
    if(key.name==='return'&&rows[selected]?.evidence){
+    const source=observer.state.snapshot?.source;
     detail='Loading saved evidence…';detailOffset=0;draw();
     try{
      const evidence=await invoke('observer_evidence',{reference:rows[selected].evidence,length:4096},controller.signal);
-     if(detail==='Loading saved evidence…')detail=`${evidence.provenance} · ${evidence.partial?'partial':'saved'}${evidence.truncated?' · excerpt':''}\n${evidence.text}`;
-    }catch{if(detail==='Loading saved evidence…')detail='Evidence unavailable. Retry after reconnecting.';}
+     if(source===observer.state.snapshot?.source&&detail==='Loading saved evidence…')detail=`${evidence.provenance} · ${evidence.partial?'partial':'saved'}${evidence.truncated?' · excerpt':''}\n${evidence.text}`;
+    }catch{if(source===observer.state.snapshot?.source&&detail==='Loading saved evidence…')detail='Evidence unavailable. Retry after reconnecting.';}
    }
   }
   draw();
@@ -268,7 +276,9 @@ export async function runObserver({invoke,input=process.stdin,output=process.std
  try{
   input.setRawMode(true);input.resume();output.write('\x1b[?1049h\x1b[?25l');
   do{
+   const source=observer.state.snapshot?.source;
    await observer.poll(controller.signal);
+   if(source!==observer.state.snapshot?.source){selected=0;picker=null;detail=null;detailOffset=0;offset=0;}
    selected=Math.min(selected,Math.max(0,actorRows(observer.state).length-1));draw();
    await delay(pollMs,undefined,{signal:controller.signal}).catch(()=>{});
   }while(!controller.signal.aborted);

@@ -6,6 +6,7 @@ import {client} from './client.mjs';
 import {readSettings,setup,setupComplete,doctor} from './setup.mjs';
 import {serveBeta} from './service.mjs';
 import {runObserver} from './observer.mjs';
+import {observerClient} from './sources.mjs';
 import {installedLauncher,uninstall,verifyVersion} from './install.mjs';
 
 const help=`Mosaic Beta
@@ -14,6 +15,8 @@ mosaic                   Open setup or the read-only terminal observer
 mosaic setup             Configure Codex and an optional API worker
 mosaic doctor            Check installation, Codex, MCP and provider discovery
 mosaic status --once     Print saved status and recent handoffs once
+mosaic --source core     Watch the existing frontier-harness installation
+mosaic --source beta     Watch only the separate beta installation
 mosaic mcp               Start the authenticated Codex MCP stdio bridge
 mosaic serve             Run the coordinator in the foreground (fixture or troubleshooting)
 mosaic uninstall         Remove owned beta bindings and retain evidence
@@ -24,8 +27,16 @@ export async function main(args=process.argv.slice(2)){
  let home;
  if(args[0]==='--home'){args.shift();home=args.shift();if(!home)throw Error('Provide an absolute fixture home');}
  if(args.includes('--help')||args[0]==='help'){process.stdout.write(help);return;}
+ let source='auto';
+ const sourceIndex=args.indexOf('--source');
+ if(sourceIndex!==-1){
+  source=args[sourceIndex+1];
+  if(!['auto','beta','core'].includes(source))throw Error('Observer source must be auto, beta or core');
+  args.splice(sourceIndex,2);
+ }
  const paths=locations(home??currentHome(),!!home),command=args.shift();
- if(command==='setup'||!command){
+ if(sourceIndex!==-1&&command&&command!=='status')throw Error('--source is only supported by the terminal observer and status');
+ if(command==='setup'||!command&&sourceIndex===-1){
   let explicitCodex;
   if(args.length===2&&args[0]==='--codex'){args.shift();explicitCodex=args.shift();}
   if(args.length)throw Error('Use mosaic setup [--codex /absolute/path/to/codex]');
@@ -36,7 +47,7 @@ export async function main(args=process.argv.slice(2)){
  }
  if(command==='status'||!command){
   if(args.length&&!(args.length===1&&args[0]==='--once'))throw Error('Use mosaic status [--once]');
-  return runObserver({invoke:client(paths,{viewer:true}),once:args.includes('--once')});
+  return runObserver({invoke:observerClient(paths,{source}),once:args.includes('--once')});
  }
  if(args.length)throw Error('Use mosaic --help for command syntax');
  if(command==='doctor'){
