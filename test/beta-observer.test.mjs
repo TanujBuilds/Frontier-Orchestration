@@ -135,8 +135,11 @@ test('narrow screen preserves the selected assignment and saved handoff',()=>{
  const row={...task,goalId:narrowGoal.id,objective:'Selected assignment'};
  const event={seq:1,at:Date.now(),provenance:'coordinator',summary:'Saved handoff'};
  const output=renderTerminal({snapshot:{goals:[narrowGoal],tasks:[row]},goalId:narrowGoal.id,events:[event]},{width:20,height:10,interactive:true});
+ assert.match(output,/Fixture Model/);
+ assert.match(output,/Running/);
  assert.match(output,/Selected assignment/);
  assert.match(output,/Handoff feed/);
+ assert.match(output,/Saved handoff/);
  assert.ok(output.split('\n').length<=10);
  assert.ok(output.split('\n').every(line=>line.length<=20));
 });

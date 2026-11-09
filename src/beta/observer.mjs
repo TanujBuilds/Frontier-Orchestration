@@ -105,17 +105,19 @@ function compactMain(state,goal,{width,height,color,selected,offset}){
   if(rows.length){
    // Reserve the footer, feed heading and the newest visible event.
    const room=Math.max(1,height-frame.length-2-(end?1:0));
-   const rowHeight=height>=18&&room>=3?3:Math.min(2,room);
-   const count=Math.max(1,Math.floor(room/rowHeight)),start=Math.max(0,Math.min(index,rows.length-count));
-   for(const [offset,row] of rows.slice(start,start+count).entries()){
-    const marker=offset+start===index?'› ':'  ';
-    if(rowHeight>=2){
-     const identity=first(`${marker}${row.actor} · ${row.status}`);
-     frame.push(color?statusColor(identity,row.state):identity);
-    }
-    frame.push(first(rowHeight===1?marker+row.assignment:row.assignment));
-    if(rowHeight===3)frame.push(first(`  ${row.provenance} · updated ${clock(row.at)}`));
-   }
+   const blocks=rows.map((row,rowIndex)=>{
+    const marker=rowIndex===index?'› ':'  ';
+    const joined=lines(`${marker}${row.actor} · ${row.status}`,width);
+    const identity=joined.length===1?joined:[first(marker+row.actor),...lines(row.status,width)];
+    const heading=color?identity.map(line=>statusColor(line,row.state)):identity;
+    const detail=height>=18?[first(`  ${row.provenance} · updated ${clock(row.at)}`)]:[];
+    return [...heading,first(row.assignment),...detail];
+   });
+   let start=index,after=index+1,used=blocks[index].length;
+   while(start>0&&used+blocks[start-1].length<=room)used+=blocks[--start].length;
+   while(after<blocks.length&&used+blocks[after].length<=room)used+=blocks[after++].length;
+   if(used>room)frame.push(...blocks[index].slice(0,room-1),first('› '+rows[index].assignment));
+   else frame.push(...blocks.slice(start,after).flat());
   }else frame.push(first('Idle · no assignments'));
   frame.push(heading('Handoff feed'));
   const room=Math.max(0,height-frame.length-1);
