@@ -1,5 +1,5 @@
 import path from 'node:path';
-import {jsonFile} from './files.mjs';
+import {jsonFile,localDirectory} from './files.mjs';
 import {OBSERVER_TOOLS} from '../harness/observer.mjs';
 
 const MAX_REPLY=8*1024*1024;
@@ -22,6 +22,7 @@ async function responseJson(response){
 export function client(paths,{viewer=false,timeoutMs=viewer?2400:35000}={}){
  return async(name,input={},signal)=>{
   if(viewer&&!OBSERVER_TOOLS.has(name))throw Error('Terminal observer has read-only access');
+  await localDirectory(paths,paths.state,{create:false});
   const cfg=await jsonFile(path.join(paths.state,viewer?'viewer-connection.json':'connection.json'),{privateFile:true,max:8192});
   if(!cfg)throw Error('Mosaic Beta coordinator is unavailable. Run mosaic doctor.');
   let url;

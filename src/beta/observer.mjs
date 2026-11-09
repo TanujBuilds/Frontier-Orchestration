@@ -20,6 +20,9 @@ function goalFor(state){
  return state.snapshot?.goals.find(g=>g.id===state.goalId)??state.snapshot?.goals.find(g=>g.status==='active')??state.snapshot?.goals[0];
 }
 
+const checksFailed=task=>task.lastCheck?.status==='failed'||task.outcome?.checks?.passed<task.outcome?.checks?.total;
+const reviewComplete=new Set(['accepted','failed','partial','cancelled','ready_to_integrate','stopped']);
+
 export function actorRows(state){
  const goal=goalFor(state);
  if(!goal)return [];
@@ -30,26 +33,28 @@ export function actorRows(state){
  for(const task of tasks){
   const native=task.actor==='codex',reports=agents.filter(agent=>agent.taskId===task.id&&agent.actor==='codex'&&agent.role!=='reviewer');
   const report=reports.filter(a=>a.lastReport).sort((a,b)=>b.lastReport.at-a.lastReport.at)[0];
-  const captured=task.provenance==='captured',checks=task.outcome?.checks;
+  const captured=task.provenance==='captured';
   const nativeActive=native&&task.status==='codex_active',reported=report?.lastReport;
   const stateName=nativeActive?(reported&&!report.stale?reported.status:'uncertain'):task.status==='legacy_reviewing'?'awaiting_legacy_review':task.status;
   rows.push({id:task.id,actor:native?'Codex':task.workerProfile?.displayName??workerName,role:report?.role==='explorer'?'Explorer':report?.role==='supervisor'?'Supervisor':'Implementer',assignment:task.objective,
-   status:checks&&checks.passed<checks.total&&task.status==='blocked'?'Checks failed':nativeActive&&stateName==='uncertain'?'Native owner · activity unknown':status(stateName),
+   status:checksFailed(task)&&task.status==='blocked'?'Checks failed':nativeActive&&stateName==='uncertain'?'Native owner · activity unknown':status(stateName),
    state:stateName,at:reported?.at??task.lastActivityAt??task.updatedAt,evidence:task.evidenceRef,provenance:native?(reported?'reported':'coordinator'):captured?'captured':'coordinator'});
  }
  const planning=snapshot.planning?.find(p=>p.goalId===goal.id);
  if(planning&&planning.status!=='completed')rows.unshift({id:'planner',actor:workerName,role:'Planner',assignment:goal.objective,status:status(planning.status),state:planning.status,at:planning.at,provenance:'coordinator'});
  for(const task of tasks){
-  const reservation=snapshot.reviewers?.find(r=>r.goalId===goal.id&&r.taskId===task.id&&r.status==='reserved');
-  const report=agents.find(a=>a.taskId===task.id&&a.role==='reviewer'&&a.lastReport&&!a.stale);
+  if(!['operator','legacy'].includes(reviewPolicy)||reviewComplete.has(task.status))continue;
+  const awaiting=reviewPolicy==='operator'?task.status==='awaiting_review':['awaiting_legacy_review','legacy_reviewing'].includes(task.status);
+  const reservation=awaiting?snapshot.reviewers?.find(r=>r.goalId===goal.id&&r.taskId===task.id&&r.status==='reserved'):null;
+  const report=reservation?agents.find(a=>a.taskId===task.id&&a.role==='reviewer'&&!a.stale&&a.lastReport?.at>=reservation.at):null;
   const checking=task.kind==='coding'&&task.status==='running'&&task.phase==='checks';
-  const checksFailed=task.kind==='coding'&&(task.lastActivity==='Protected checks failed'||task.status==='blocked'&&task.outcome?.checks?.passed<task.outcome?.checks?.total);
-  const awaiting=['awaiting_review','awaiting_legacy_review','legacy_reviewing'].includes(task.status);
-  if(!['operator','legacy'].includes(reviewPolicy)||!reservation&&!report&&!awaiting&&!checking&&!checksFailed)continue;
+  const failed=task.kind==='coding'&&checksFailed(task);
+  if(!awaiting&&!checking&&!failed)continue;
   const reviewing=task.status==='legacy_reviewing'||report?.lastReport.status==='running';
-  rows.push({id:'review-'+task.id,actor:'Codex',role:'Reviewer',assignment:task.objective,at:report?.lastReport.at??reservation?.at??task.updatedAt,evidence:task.evidenceRef,
-   state:checksFailed?'blocked':reviewing?'running':'waiting',
-   status:reviewing?'Reviewing':checksFailed?'Waiting · checks failed':checking?'Waiting for checks':reservation?'Reserved · waiting':'Waiting in Codex',
+  rows.push({id:'review-'+task.id,actor:'Codex',role:'Reviewer',assignment:task.objective,
+   at:report?.lastReport.at??reservation?.at??(failed?task.lastCheck?.at:null)??task.updatedAt,evidence:task.evidenceRef,
+   state:reviewing?'running':failed&&!checking?'blocked':'waiting',
+   status:reviewing?'Reviewing':checking?'Waiting for checks':failed&&!awaiting?'Waiting · checks failed':reservation?'Reserved · waiting':'Waiting in Codex',
    provenance:report?'reported':'coordinator'});
  }
  return rows;
@@ -73,16 +78,51 @@ function lines(value,width){
 const accent=value=>'\x1b[36m'+value+'\x1b[0m';
 const statusColor=(value,state)=>`\x1b[${['blocked','failed'].includes(state)?31:['running','active','accepted','codex_active','completed'].includes(state)?32:33}m${value}\x1b[0m`;
 
+function eventText(event){
+ const actor=event.actor==='deepseek'?event.displayName??'API worker':event.actor==='codex'?'Codex':'';
+ const summary=String(event.summary??'');
+ const legacyActor=event.actor==='deepseek'&&summary.startsWith('DeepSeek ');
+ const text=legacyActor?actor+summary.slice('DeepSeek'.length):summary;
+ return actor&&!legacyActor&&!text.startsWith(actor+' ')?actor+' · '+text:text;
+}
+
+function compactMain(state,goal,{width,height,color,selected,offset}){
+ const first=value=>lines(value,width)[0];
+ const heading=value=>color?accent(first(value)):first(value);
+ const rows=actorRows(state),index=Math.min(selected,rows.length-1),row=rows[index];
+ const frame=[heading('Mosaic Beta')];
+ if(state.stale)frame.push(first(state.snapshot?'Disconnected · stale':'Disconnected'));
+ if(goal){
+  if(height>=8)frame.push(first(goal.objective));
+  if(row){
+   frame.push(first(row.assignment));
+   if(height>=8)frame.push(first(`${index+1}/${rows.length} ${row.status}`));
+   if(height>=10)frame.push(first(row.actor));
+  }else frame.push(first('Idle · no assignments'));
+  frame.push(heading('Handoff feed'));
+  const event=state.events[Math.max(0,state.events.length-1-offset)];
+  if(event)frame.push(first(eventText(event)));
+ }else if(!state.stale)frame.push(first('Idle · no goals'));
+ const footer=first(width<16?'↑↓ g q':'↑↓ Enter g q');
+ return [...frame.slice(0,height-1),footer].join('\n');
+}
+
 export function renderTerminal(state,{width=80,height=36,color=false,selected=0,picker=null,detail=null,detailOffset=0,offset=0,interactive=false}={}){
  width=Math.max(8,Math.min(300,width));height=Math.max(5,Math.min(200,height));
  const header=(value)=>lines(value,width).map(line=>color?accent(line):line);
- const out=header('Mosaic Beta  /  Terminal observer');
+ const compact=interactive&&(width<55||height<18);
  const goal=goalFor(state);
+ if(compact&&picker===null&&!detail)return compactMain(state,goal,{width,height,color,selected,offset});
+ const out=header(compact?'Mosaic Beta':'Mosaic Beta  /  Terminal observer');
  if(state.stale)out.push(...lines(state.snapshot?'Disconnected · last observed state is stale':'Disconnected · coordinator state unknown',width));
  if(picker!==null){
   out.push(...header('Choose a goal'));
   const goals=state.snapshot?.goals??[];
-  goals.slice(Math.max(0,picker-height+5),picker+height).forEach(g=>out.push(...lines(`${goals.indexOf(g)===picker?'›':' '} ${status(g.status)} · ${g.objective} [${g.id}]`,width)));
+  const start=compact?Math.max(0,picker-height+5):Math.max(0,picker-1);
+  for(const [index,g] of goals.slice(start).entries()){
+   const item=lines(`${index+start===picker?'›':' '} ${status(g.status)} · ${g.objective} [${g.id}]`,width);
+   out.push(...(compact?item.slice(0,1):item.slice(0,2)));
+  }
  }else if(detail){
   out.push(...header('Saved evidence'));
   const detailLines=detail.split('\n').flatMap(line=>lines(line,width));
@@ -109,13 +149,11 @@ export function renderTerminal(state,{width=80,height=36,color=false,selected=0,
   out.push('',...header('Handoff feed'));
   const room=Math.max(0,height-out.length-(interactive?4:2)),end=Math.max(0,state.events.length-offset);
   for(const event of state.events.slice(Math.max(0,end-Math.max(1,room)),end)){
-   const actor=event.actor==='deepseek'?event.displayName??'API worker':event.actor==='codex'?'Codex':'';
-   const text=event.summary.replaceAll('DeepSeek',actor||'API worker');
-   out.push(...lines(`${clock(event.at)} [${event.provenance}] ${actor?actor+' · ':''}${text}`,width));
+   out.push(...lines(`${clock(event.at)} [${event.provenance}] ${eventText(event)}`,width));
   }
  }
  const footer=picker!==null?'↑↓ choose · Enter select · Esc back · q quit':detail?'↑↓ or PgUp/PgDn scroll · Esc back · q quit':interactive?'↑↓ rows · Enter evidence · g goals · PgUp/PgDn feed · q quit':'Approvals and decisions stay in Codex.';
- const tail=lines(footer,width);
+ const tail=lines(compact?'↑↓ Esc q':footer,width);
  return [...out.slice(0,Math.max(0,height-tail.length-1)),'',...tail].join('\n');
 }
 

@@ -129,3 +129,34 @@ sys.exit(9)
   assert.match(result.stdout,/\x1b\[\?25h/);
  }
 });
+
+test('narrow screen preserves the selected assignment and saved handoff',()=>{
+ const narrowGoal={...goal,id:'7a40b167-97c6-4b0c-abb3-0105e00c21ab',objective:'Check the fixture goal'};
+ const row={...task,goalId:narrowGoal.id,objective:'Selected assignment'};
+ const event={seq:1,at:Date.now(),provenance:'coordinator',summary:'Saved handoff'};
+ const output=renderTerminal({snapshot:{goals:[narrowGoal],tasks:[row]},goalId:narrowGoal.id,events:[event]},{width:20,height:10,interactive:true});
+ assert.match(output,/Selected assignment/);
+ assert.match(output,/Handoff feed/);
+ assert.ok(output.split('\n').length<=10);
+ assert.ok(output.split('\n').every(line=>line.length<=20));
+});
+
+test('saved check outcomes survive later checkpoints and an accepted task retires reviewer reports',t=>{
+ const root=mkdtempSync(path.join(os.tmpdir(),'mosaic-beta-check-state-'));
+ const workerProfile={displayName:'Fixture Model',baseUrl:'https://provider.example/v1',model:'custom',revision:'revision-a',streaming:false};
+ const c=new Coordinator({root,beta:true,workerProfile});
+ t.after(()=>{c.close();rmSync(root,{force:true,recursive:true});});
+ const g=c.prepareGoal({submissionId:'g',objective:'Build',acceptance:['Evidence'],project:{repo:root,baseCommit:'a'.repeat(40),readPaths:['src/'],writePaths:['src/'],checks:[{id:'verify',argv:['/bin/true']}]}},'prepare');
+ c.activateGoal({goalId:g.id,hash:g.hash},'activate');
+ const assignment=c.submitTask({goalId:g.id,submissionId:'a',kind:'coding',objective:'Implement',acceptance:['Evidence']},'submit');
+ c.claimNext('owner');
+ c.emit('coding.checks.failed',g.id,assignment.id,{actor:'deepseek',provenance:'captured',checks:[{id:'verify',passed:false}]});
+ c.emit('execution.checkpoint',g.id,assignment.id,{actor:'deepseek',provenance:'captured',phase:'attempt'});
+ const saved=c.getTask(assignment.id);
+ saved.status='blocked';saved.owner=null;c.store.put('task',saved);
+ const observer=new Observer({c}),blocked=observer.snapshot({goalId:g.id});
+ assert.match(actorRows({snapshot:blocked,goalId:g.id}).find(row=>row.id===saved.id).status,/checks failed/i);
+ c.store.put('agent',{id:'review-agent',goalId:g.id,taskId:saved.id,actor:'codex',role:'reviewer',lastReport:{status:'running',at:Date.now()}});
+ saved.status='accepted';c.store.put('task',saved);
+ assert.ok(!actorRows({snapshot:observer.snapshot({goalId:g.id}),goalId:g.id}).some(row=>row.role==='Reviewer'));
+});

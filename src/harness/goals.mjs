@@ -15,6 +15,7 @@ export class Goals {
  });}
  activateRevision(input,key){return this.c.store.command(key,{op:'goal.revise.activate',...input},()=>{
   const revision=this.c.store.get('goal_revision',input.revisionId),g=this.c.store.get('goal',revision.goalId);
+  if(['completed','partial'].includes(g.status))throw Error('Goal is terminal');
   if(input.hash!==revision.hash)throw Error('Exact revision approval hash required');if(g.hash!==revision.previousHash||revision.status!=='draft')throw Error('Revision is stale');
   this.c.verifyGoalBinding(revision);
   if(!quiescent(this.c,g.id))throw Error('Verify quiescent owners before changing an approved version');
@@ -51,11 +52,13 @@ export class Goals {
  });}
  finalize(input,key){return this.c.store.command(key,{op:'goal.finalize',...input},()=>{
   const g=this.c.store.get('goal',input.goalId);text(input.summary,'summary',12000);if(g.status==='draft'||['completed','partial'].includes(g.status))throw Error('Goal is not ready for finalization');
-  const tasks=this.c.store.all('task').filter(t=>t.goalId===g.id);if(!tasks.length||!quiescent(this.c,g.id))throw Error('Goal has unfinished owners or no accepted work');
+  const tasks=this.c.store.all('task').filter(t=>t.goalId===g.id);
+  const emptyStopped=this.c.beta&&g.status==='stopped'&&input.partial===true&&!tasks.length;
+  if(!tasks.length&&!emptyStopped||!quiescent(this.c,g.id))throw Error('Goal has unfinished owners or no accepted work');
   const unfinished=tasks.filter(t=>t.status!=='accepted');if(unfinished.length&&!input.partial)throw Error('Goal has unfinished tasks; accepted work is required');
   if(unfinished.some(t=>['queued','suspended','running','codex_ready'].includes(t.status)))throw Error('Stop unfinished work before partial finalization');
   const spending={model:this.c.store.spent(g.id).model??0,search:0,download:0,codexReview:0};for(const t of tasks)for(const [kind,n] of Object.entries(this.c.getTask(t.id).spent))spending[kind]=(spending[kind]??0)+n;
   const receipt={schema:1,goalId:g.id,approvalHash:g.hash,goalVersion:g.version,mode:g.manifest.mode,capabilities:g.manifest.capabilities,environment:g.manifest.environment,deadline:g.deadline,finishedAt:this.c.now(),summary:input.summary,spending,nativeCodexUsage:'host accounting; token totals unavailable',tasks:tasks.map(t=>({id:t.id,hash:t.hash,status:t.status,goalVersion:t.goalVersion,attempts:t.attempts,reviews:t.reviews,deadline:t.deadline,resultHash:digest(t.result),integration:t.integration??null,memory:(t.memory??[]).map(x=>({id:x.id,version:x.version,recipeHash:x.recipeHash}))}))};
-  g.status=unfinished.length?'partial':'completed';g.receipt=receipt;g.receiptHash=digest(receipt);this.c.store.put('goal',g);this.c.emit('goal.finalized',g.id,null,{status:g.status,receiptHash:g.receiptHash});return {goalId:g.id,status:g.status,receipt,receiptHash:g.receiptHash};
+  g.status=unfinished.length||emptyStopped?'partial':'completed';g.receipt=receipt;g.receiptHash=digest(receipt);this.c.store.put('goal',g);this.c.emit('goal.finalized',g.id,null,{status:g.status,receiptHash:g.receiptHash});return {goalId:g.id,status:g.status,receipt,receiptHash:g.receiptHash};
  });}
 }

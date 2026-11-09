@@ -107,6 +107,10 @@ export class Observer {
    const task=selected[index],row=rows[index];row.outcome=outcome(task);
    if(this.c.beta){
     row.updatedAt=this.c.store.db.prepare('SELECT at FROM events WHERE task_id=? ORDER BY seq DESC LIMIT 1').get(task.id)?.at??null;
+    if(task.spec.kind==='coding'){
+     const check=this.c.store.db.prepare("SELECT at,type,json_extract(data,'$.attempt') AS attempt FROM events WHERE task_id=? AND type IN ('coding.checks.passed','coding.checks.failed','checks.failed') ORDER BY seq DESC LIMIT 1").get(task.id);
+     row.lastCheck=check?{status:check.type==='coding.checks.passed'?'passed':'failed',at:check.at,attempt:check.attempt}:null;
+    }
     if(row.actor==='deepseek'){
      row.workerProfile=taskProfile(this.c.store,task)??null;
      if(!row.lastActivityAt)row.provenance='coordinator';

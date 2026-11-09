@@ -33,7 +33,9 @@ mosaic setup
 mosaic uninstall
 ```
 
-Doctor checks model discovery with the configured API worker. It does not send a completion. The status command also works when redirected to a file. Uninstall removes only owned, unchanged beta bindings and retains the beta versions, private settings and evidence. An existing non-beta launcher or MCP registration is preserved. Resolve active or prepared beta work in Codex before updating or uninstalling.
+Doctor checks model discovery with the configured API worker. It does not send a completion. The status command also works when redirected to a file. Uninstall removes only owned, unchanged beta bindings and retains the beta versions, private settings and evidence. An existing non-beta launcher or MCP registration is preserved. Resolve active or prepared beta work in Codex before reconfiguring, updating or uninstalling. If a prepared worker-bound revision blocks maintenance, stop its goal and finalize it as partial in Codex to retire the revision. Setup can resume a saved, approved change after interruption. If you reinstall after uninstalling, open `mosaic` to restore the bindings with your retained settings.
+
+For isolated local verification, use `./install --home /absolute/disposable/directory --no-path`. Put a fixture Codex executable under that directory, run `mosaic setup`, then start the isolated coordinator with `mosaic serve`. In this mode setup and doctor use a private fixture MCP registration. Host Codex registration and sign-in checks belong to a normal installation.
 
 ## Validation scope
 

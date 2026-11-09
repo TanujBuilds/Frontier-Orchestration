@@ -45,23 +45,17 @@ test('standalone installer verifies integrity, is idempotent and refuses a forei
  const setup=run(launcher,['setup']);
  assert.match(setup.stdout+setup.stderr,/Codex CLI|codex login/i);
  assert.match((await lstat(path.join(home,'Library','Application Support','Mosaic Beta'))).mode.toString(8),/700$/);
+ const installedVersion=path.join(home,'Library','Application Support','Mosaic Beta','versions','0.1.0-beta.98');
+ await rm(installedVersion,{recursive:true});
+ const repaired=install();
+ assert.equal(repaired.status,0,repaired.stderr);
+ assert.equal(run(launcher,['--help']).status,0,'reinstall restores the launcher runtime');
  const codex=path.join(home,'.local','bin','codex');
- await writeFile(codex,`#!/bin/sh
-state="$(dirname "$0")/fixture-registration.json"
-case "$*" in
-  "login status") exit 0 ;;
-  "mcp list --json") if [ -e "$state" ]; then cat "$state"; else echo '[]'; fi ;;
-  "mcp add mosaic-beta -- "*)
-    shift 4
-    printf '[{"name":"mosaic-beta","enabled":true,"transport":{"type":"stdio","command":"%s","args":["mcp"]}}]\n' "$1" > "$state" ;;
-  "mcp remove mosaic-beta") rm -f "$state" ;;
-  *) exit 2 ;;
-esac
-`,{mode:0o755});
+ await writeFile(codex,'#!/bin/sh\nexit 11\n',{mode:0o755});
  const root=path.join(home,'Library','Application Support','Mosaic Beta'),config=path.join(root,'config','settings.json');
- const reg=path.join(home,'.local','bin','fixture-registration.json');
- const foreignMcp='[{"name":"mosaic-beta","enabled":true,"transport":{"type":"stdio","command":"/foreign","args":["mcp"]}}]';
- await writeFile(reg,foreignMcp);
+ const reg=path.join(root,'config','isolated-mcp.json');
+ const foreignMcp=JSON.stringify({name:'mosaic-beta',enabled:true,transport:{type:'stdio',command:launcher,args:['mcp']}});
+ await writeFile(reg,foreignMcp,{mode:0o600});
  const denied=run(launcher,['setup'],'1\ny\n');
  assert.notEqual(denied.status,0);
  assert.match(denied.stderr,/foreign/);

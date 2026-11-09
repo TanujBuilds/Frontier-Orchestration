@@ -1,5 +1,5 @@
 import {execFile} from 'node:child_process';
-import {access,mkdir,realpath,rm,rmdir} from 'node:fs/promises';
+import {access,mkdir,readdir,realpath,rm,rmdir} from 'node:fs/promises';
 import {constants} from 'node:fs';
 import {createInterface} from 'node:readline';
 import {randomUUID} from 'node:crypto';
@@ -8,9 +8,9 @@ import {promisify} from 'node:util';
 import path from 'node:path';
 import {LocalProvider} from '../harness/provider.mjs';
 import {workerEndpoint,workerProfile} from '../harness/worker-profile.mjs';
-import {atomic,entry,fileBytes,hash,jsonFile,saveJson,shellQuote,withLock} from './files.mjs';
+import {atomic,entry,fileBytes,hash,jsonFile,localDirectory,saveJson,shellQuote,withLock} from './files.mjs';
 import {client} from './client.mjs';
-import {launchAgent,rollbackLaunchAgent,startLaunchAgent,stopForMaintenance,verifyLaunchAgent} from './service.mjs';
+import {assertMaintenanceIdle,launchAgent,startLaunchAgent,stopForMaintenance,verifyLaunchAgent} from './service.mjs';
 import {canonical} from '../harness/contracts.mjs';
 
 const exec=promisify(execFile);
@@ -65,7 +65,7 @@ async function codexLogin(codex){
  try{await cli(codex,'login','status');return true;}catch{return false;}
 }
 
-async function registration(codex){
+async function hostRegistration(codex){
  try{
   const {stdout}=await cli(codex,'mcp','list','--json');
   const servers=JSON.parse(stdout);
@@ -76,15 +76,51 @@ async function registration(codex){
 
 function expectedRegistration(server,paths){
  const transport=server?.transport;
- return server?.enabled!==false&&transport?.type==='stdio'&&transport.command===paths.launcher&&
+ return server?.name===mcpName&&server.enabled!==false&&transport?.type==='stdio'&&transport.command===paths.launcher&&
   JSON.stringify(transport.args??[])==='["mcp"]'&&Object.keys(transport.env??{}).length===0&&!(transport.env_vars??[]).length&&!transport.cwd;
 }
 
 function fingerprint(value){return hash(canonical(value));}
-const addMcp=(codex,paths)=>cli(codex,'mcp','add',mcpName,'--',paths.launcher,'mcp');
-const removeMcp=codex=>cli(codex,'mcp','remove',mcpName);
+function codexRegistrations(paths){
+ if(paths.isolated)return {
+  get:()=>jsonFile(paths.isolatedMcp,{privateFile:true,max:8192}),
+  add:()=>saveJson(paths.isolatedMcp,{name:mcpName,enabled:true,transport:{type:'stdio',command:paths.launcher,args:['mcp']}}),
+  remove:()=>rm(paths.isolatedMcp,{force:true})
+ };
+ return {
+  get:hostRegistration,
+  add:codex=>cli(codex,'mcp','add',mcpName,'--',paths.launcher,'mcp'),
+  remove:codex=>cli(codex,'mcp','remove',mcpName)
+ };
+}
+
+function expectedNewRegistration(server,paths){
+ return expectedRegistration(server,paths)&&!server.disabled_reason&&server.startup_timeout_sec==null&&server.tool_timeout_sec==null&&
+  Object.keys(server).every(key=>['name','enabled','disabled_reason','transport','startup_timeout_sec','tool_timeout_sec','auth_status'].includes(key))&&
+  Object.keys(server.transport).every(key=>['type','command','args','env','env_vars','cwd'].includes(key));
+}
+
+async function bindingReceipt(paths){
+ await localDirectory(paths,paths.configDir,{create:false});
+ return jsonFile(paths.ownership,{privateFile:true,max:8192});
+}
+export async function readSetupIntent(paths){
+ await localDirectory(paths,paths.configDir,{create:false});
+ const intent=await jsonFile(paths.setupIntent,{privateFile:true,max:32768});
+ if(intent&&(intent.schema!==1||!intent.settings||typeof intent.settings.codexPath!=='string'||
+    !/^[a-f0-9]{64}$/.test(intent.previousConfigHash??'')||typeof intent.hadAgent!=='boolean'||
+    ![intent.previousMcpHash,intent.previousSkillHash].every(hash=>hash===null||/^[a-f0-9]{64}$/.test(hash))))
+  throw Error('Invalid private setup intent. Inspect Mosaic Beta settings before continuing.');
+ return intent;
+}
+
+export async function setupComplete(paths){
+ const receipt=await bindingReceipt(paths);
+ return !await entry(paths.setupIntent)&&!!receipt?.mcpHash&&!!receipt?.skillHash&&receipt.complete!==false;
+}
 
 export async function readSettings(paths){
+ await localDirectory(paths,paths.configDir,{create:false});
  const value=await jsonFile(paths.config,{privateFile:true,max:16384});
  if(!value)return null;
  if(value.schema!==1||typeof value.codexPath!=='string'||!path.isAbsolute(value.codexPath))throw Error('Invalid Mosaic Beta configuration. Run mosaic setup.');
@@ -98,24 +134,27 @@ export async function readSettings(paths){
 
 async function askSession(input,output,work){
  const queue=[];
- let waiter,closed=false,masked=false;
- const sink=new Writable({write(chunk,_,callback){if(!masked)output.write(chunk);callback();}});
+ let waiter,closed=false,echo=false;
+ const sink=new Writable({write(chunk,_,callback){if(echo)output.write(chunk);callback();}});
  if(output.isTTY){
   sink.isTTY=true;sink.columns=output.columns;sink.rows=output.rows;
  }
  const rl=createInterface({input,output:sink,terminal:!!input.isTTY&&!!output.isTTY,historySize:0});
- rl.on('line',line=>{if(waiter){const next=waiter;waiter=null;next(line);}else queue.push(line);});
+ rl.on('line',line=>{
+  // readline can process more pasted characters before an awaiting prompt resumes.
+  echo=false;
+  if(waiter){const next=waiter;waiter=null;next(line);}else queue.push(line);
+ });
  const finish=()=>{closed=true;const next=waiter;waiter=null;next?.(null);};
  rl.on('SIGINT',()=>rl.close());rl.on('close',finish);
  const ask=async(prompt,{secret=false}={})=>{
   if(secret&&!input.isTTY)throw Error('Bearer keys can only be entered in an interactive terminal.');
   output.write(prompt);
-  masked=secret;
   try{
-   const answer=queue.length?queue.shift():closed?null:await new Promise(resolve=>{waiter=resolve;});
+   const answer=queue.length?queue.shift():closed?null:await new Promise(resolve=>{waiter=resolve;echo=!secret;});
    if(answer===null)throw Error('Setup interrupted. Run mosaic setup to resume.');
    return answer.trim();
-  }finally{masked=false;if(secret)output.write('\n');}
+  }finally{echo=false;if(secret)output.write('\n');}
  };
  try{return await work(ask);}finally{rl.close();}
 }
@@ -161,14 +200,72 @@ async function configureWorker(ask,output,previous){
  return {profile:final,...(apiKey?{apiKey}:{})};
 }
 
-export async function setup(paths,{explicitCodex,input=process.stdin,output=process.stdout}={}){
+async function inspectSkill(paths){
+ const directory=path.dirname(paths.skill);
+ await localDirectory(paths,path.dirname(directory),{create:false});
+ const info=await entry(directory);
+ if(info&&!info.isDirectory())throw Error('Existing mosaic-beta skill directory is foreign. Preserve '+directory);
+ return {directory,info,bytes:await fileBytes(paths.skill,{max:16384})};
+}
+
+async function applySetup(paths,intent,registrations,{recovering=false}={}){
+ const settings=intent.settings,codex=await findCodex(paths,settings.codexPath);
+ if(!codex)throw Error('The Codex CLI used by the interrupted setup is unavailable.');
+ const current=await readSettings(paths),currentHash=fingerprint(current);
+ const changed=currentHash!==fingerprint(settings);
+ if(changed&&currentHash!==intent.previousConfigHash)
+  throw Error('Private settings changed since setup began. Preserve them and inspect the pending setup with mosaic doctor.');
+ let saved=await registrations.get(codex);
+ if(saved&&(!expectedRegistration(saved,paths)||(intent.previousMcpHash?fingerprint(saved)!==intent.previousMcpHash:!expectedNewRegistration(saved,paths))))
+  throw Error('Existing mosaic-beta MCP registration is foreign or has changed. Preserve it and inspect the beta registration.');
+ const {directory,info,bytes}=await inspectSkill(paths);
+ if(bytes&&(bytes.toString()!==skill||intent.previousSkillHash&&hash(bytes)!==intent.previousSkillHash)||
+    !bytes&&info&&(intent.previousSkillHash|| (await readdir(directory)).length))
+  throw Error('Existing mosaic-beta skill has changed. Preserve '+paths.skill);
+ const allowUnrecorded=!intent.hadAgent;
+ await verifyLaunchAgent(paths,{allowUnrecorded});
+ if(changed)await stopForMaintenance(paths,{allowUnrecorded,recovering});
+ if(!saved){
+  try{await registrations.add(codex);}catch{throw Error('Could not add the beta MCP registration. Run mosaic setup to retry.');}
+  saved=await registrations.get(codex);
+ }
+ if(!expectedNewRegistration(saved,paths)&&(!intent.previousMcpHash||!saved||fingerprint(saved)!==intent.previousMcpHash))
+  throw Error('The beta MCP registration does not match the approved launcher.');
+ if(!bytes){
+  await localDirectory(paths,path.dirname(directory));
+  if(!info)await mkdir(directory,{mode:0o700});
+  await atomic(paths.skill,skill);
+ }
+ if(changed)await saveJson(paths.config,settings);
+ await startLaunchAgent(paths,{allowUnrecorded});
+ await saveJson(paths.ownership,{schema:1,complete:true,mcpHash:fingerprint(saved),skillHash:hash(skill),codex,
+  ...(!paths.isolated?{launchAgentHash:hash(launchAgent(paths))}:{})});
+ await rm(paths.setupIntent);
+}
+
+function printCompletion(paths,output,{resumed=false}={}){
+ if(resumed)output.write('Resumed interrupted setup.\n');
+ output.write(paths.isolated?'Setup saved. Isolated registration stays inside the fixture home. Start it with mosaic serve.\n':
+  'Setup saved. Reopen Codex so it loads the new MCP server.\n');
+ output.write('\nStarter prompt\n'+starter+'\n');
+}
+
+export async function setup(paths,{explicitCodex,input=process.stdin,output=process.stdout,registrations=codexRegistrations(paths)}={}){
+ if(await entry(paths.setupIntent)){
+  await withLock(paths,async()=>{
+   const intent=await readSetupIntent(paths);
+   if(intent)await applySetup(paths,intent,registrations,{recovering:true});
+  });
+  printCompletion(paths,output,{resumed:true});
+  return true;
+ }
  const old=await readSettings(paths);
  const codex=await findCodex(paths,explicitCodex??old?.codexPath);
  if(!codex){
   output.write('Codex CLI is required. Install it from https://developers.openai.com/codex/cli, run codex login, then run mosaic setup again.\n');
   return false;
  }
- if(!await codexLogin(codex)){
+ if(!paths.isolated&&!await codexLogin(codex)){
   output.write('Sign in with codex login, then run mosaic setup again.\n');
   return false;
  }
@@ -178,47 +275,28 @@ export async function setup(paths,{explicitCodex,input=process.stdin,output=proc
   const worker=choice==='2'?await configureWorker(ask,output,old?.worker):null;
   const settings={schema:1,codexPath:codex,worker};
   const {launcher,skill:skillFile,config,plist}=paths;
-  output.write(`\nPrivate settings: ${config}\nCodex MCP: ${shellQuote(codex)} mcp add mosaic-beta -- ${shellQuote(launcher)} mcp\nSkill: ${skillFile}\n`);
+  const registrationPreview=paths.isolated?`Isolated MCP: ${paths.isolatedMcp} → ${shellQuote(launcher)} mcp`:
+   `Codex MCP: ${shellQuote(codex)} mcp add mosaic-beta -- ${shellQuote(launcher)} mcp`;
+  output.write(`\nPrivate settings: ${config}\n${registrationPreview}\nSkill: ${skillFile}\n`);
   if(!paths.isolated)output.write(`LaunchAgent: ${plist}\n`);
   output.write(worker?`Worker: ${worker.profile.displayName} · ${worker.profile.baseUrl} · ${worker.profile.model} · ${worker.profile.streaming?'streaming':'completed'}\n`:'Worker: Codex only\n');
   if(!yes(await ask('Apply these beta settings and registrations? [y/N] ')))return false;
   return withLock(paths,async()=>{
+   if(await entry(paths.setupIntent))throw Error('Another setup already has pending changes. Run mosaic setup to resume.');
    const current=await readSettings(paths);
    if(canonical(current)!==canonical(old))throw Error('Mosaic Beta setup changed while the prompt was open. Run mosaic setup again.');
-   const ownership=await jsonFile(paths.ownership,{privateFile:true,max:8192});
-   const existing=await registration(codex);
-   if(existing&&(!expectedRegistration(existing,paths)||ownership?.mcpHash!==fingerprint(existing)))throw Error('Existing mosaic-beta MCP registration is foreign or has changed. Preserve it and inspect codex mcp list.');
-   const savedSkill=await fileBytes(skillFile,{max:16384});
-   if(savedSkill&&(!ownership||hash(savedSkill)!==ownership.skillHash||savedSkill.toString()!==skill))throw Error('Existing mosaic-beta skill is foreign or has changed. Preserve '+skillFile);
-   if(!savedSkill&&await entry(path.dirname(skillFile)))throw Error('Existing mosaic-beta skill directory is foreign. Preserve '+path.dirname(skillFile));
-   const existed=await verifyLaunchAgent(paths);
-   const changed=canonical(current)!==canonical(settings);
-   const registered=changed?await stopForMaintenance(paths):false;
-   let addedMcp=false,addedSkill=false,configChanged=false;
-   try{
-    if(!existing){try{await addMcp(codex,paths);}catch{throw Error('Codex could not add the mosaic-beta MCP registration. Inspect codex mcp list.');}addedMcp=true;}
-    const saved=await registration(codex);
-    if(!expectedRegistration(saved,paths))throw Error('The beta MCP registration does not match the installed launcher.');
-    if(!savedSkill){
-     await mkdir(path.dirname(path.dirname(skillFile)),{recursive:true,mode:0o700});
-     await mkdir(path.dirname(skillFile),{mode:0o700});addedSkill=true;
-     await atomic(skillFile,skill);
-    }
-    if(changed){await saveJson(config,settings);configChanged=true;}
-    await startLaunchAgent(paths);
-    await saveJson(paths.ownership,{schema:1,mcpHash:fingerprint(saved),skillHash:hash(skill),codex,...(!paths.isolated?{launchAgentHash:hash(launchAgent(paths))}:{})});
-   }catch(error){
-    const rollbackErrors=[];
-    const recover=async action=>{try{await action();}catch{rollbackErrors.push('beta rollback step failed');}};
-    if(configChanged)await recover(()=>current?saveJson(config,current):rm(config,{force:true}));
-    if(changed||!existed)await recover(()=>rollbackLaunchAgent(paths,{existed,registered}));
-    if(addedSkill)await recover(async()=>{await rm(skillFile,{force:true});await rmdir(path.dirname(skillFile));});
-    if(addedMcp)await recover(async()=>{if(expectedRegistration(await registration(codex),paths))await removeMcp(codex);});
-    if(rollbackErrors.length)throw Error(error.message+' Some beta bindings need inspection with mosaic doctor.');
-    throw error;
-   }
-   output.write('Setup saved. Reopen Codex so it loads the new MCP server.\n\nStarter prompt\n'+starter+'\n');
-   if(paths.isolated)output.write('Start the isolated coordinator with mosaic serve.\n');
+   const ownership=await bindingReceipt(paths),existing=await registrations.get(codex);
+   if(existing&&(!expectedRegistration(existing,paths)||ownership?.mcpHash!==fingerprint(existing)))
+    throw Error('Existing mosaic-beta MCP registration is foreign or has changed. Preserve it and inspect the beta registration.');
+   const {info,bytes}=await inspectSkill(paths);
+   if(bytes&&(!ownership||hash(bytes)!==ownership.skillHash||bytes.toString()!==skill)||!bytes&&info)
+    throw Error('Existing mosaic-beta skill is foreign or has changed. Preserve '+skillFile);
+   const hadAgent=await verifyLaunchAgent(paths);
+   if(fingerprint(current)!==fingerprint(settings))await assertMaintenanceIdle(paths);
+   const intent={schema:1,settings,hadAgent,previousConfigHash:fingerprint(current),previousMcpHash:existing?fingerprint(existing):null,previousSkillHash:bytes?hash(bytes):null};
+   await saveJson(paths.setupIntent,intent);
+   await applySetup(paths,intent,registrations);
+   printCompletion(paths,output);
    return true;
   });
  });
@@ -229,18 +307,24 @@ export async function doctor(paths,output=process.stdout){
  const check=(name,ok,detail)=>checks.push({name,ok,detail});
  let settings;
  try{settings=await readSettings(paths);}catch{check('Settings',false,'Invalid private config. Run mosaic setup.');}
+ try{
+  if(settings&&!await setupComplete(paths))check('Setup',false,'Setup needs attention. Run mosaic setup to restore or resume its bindings.');
+ }catch{check('Setup',false,'Cannot read the private beta binding receipt. Inspect the beta settings directory.');}
  check('Installation',!!await entry(paths.launcher),'Expected launcher '+paths.launcher);
  if(!checks.some(item=>item.name==='Settings'))check('Settings',!!settings,settings?'Private setup saved.':'Run mosaic setup.');
  const codex=await findCodex(paths,settings?.codexPath);
  check('Codex CLI',!!codex,codex??'Install the Codex CLI, then run codex login.');
  if(codex){
-  const login=await codexLogin(codex);
-  check('Codex sign-in',login,login?'Signed in.':'Run codex login.');
+  if(!paths.isolated){
+   const login=await codexLogin(codex);
+   check('Codex sign-in',login,login?'Signed in.':'Run codex login.');
+  }
+  const checkName=paths.isolated?'Isolated MCP fixture':'Codex MCP';
   try{
-   const server=await registration(codex),ownership=await jsonFile(paths.ownership,{privateFile:true,max:8192});
+   const server=await codexRegistrations(paths).get(codex),ownership=await bindingReceipt(paths);
    const own=expectedRegistration(server,paths)&&ownership?.mcpHash===fingerprint(server);
-   check('Codex MCP',own,own?'mosaic-beta points to this launcher.':'Run mosaic setup or inspect a conflicting mosaic-beta entry.');
-  }catch{check('Codex MCP',false,'Cannot read registration. Check codex mcp list.');}
+   check(checkName,own,own?(paths.isolated?'Fixture registration points to this launcher; host registration and sign-in are outside this check.':'mosaic-beta points to this launcher.'):'Run mosaic setup or inspect a conflicting mosaic-beta entry.');
+  }catch{check(checkName,false,paths.isolated?'Cannot read fixture registration. Run mosaic setup.':'Cannot read registration. Check codex mcp list.');}
  }
  try{await client(paths,{viewer:true})('tools_list');check('Coordinator',true,'Authenticated viewer connection ready.');}
  catch{check('Coordinator',false,paths.isolated?'Start the isolated instance with mosaic serve.':'Run mosaic setup to repair the LaunchAgent.');}
@@ -258,19 +342,24 @@ export async function doctor(paths,output=process.stdout){
  return checks.every(item=>item.ok);
 }
 
-export async function removeCodexBindings(paths,output=process.stdout){
- const ownership=await jsonFile(paths.ownership,{privateFile:true,max:8192});
- if(!ownership)return;
- const codex=await findCodex(paths,ownership.codex);
- if(codex){
-  const existing=await registration(codex);
-  if(existing&&expectedRegistration(existing,paths)&&fingerprint(existing)===ownership.mcpHash)await removeMcp(codex);
+export async function removeCodexBindings(paths,output=process.stdout,intent=null){
+ const ownership=await bindingReceipt(paths);
+ if(!ownership&&!intent)return;
+ const registrations=codexRegistrations(paths);
+ const codex=paths.isolated?null:await findCodex(paths,intent?.settings.codexPath??ownership?.codex);
+ if(paths.isolated||codex){
+  const existing=await registrations.get(codex);
+  const owned=existing&&expectedRegistration(existing,paths)&&
+   (fingerprint(existing)===(ownership?.mcpHash??intent?.previousMcpHash)||intent&&!intent.previousMcpHash&&expectedNewRegistration(existing,paths));
+  if(owned)await registrations.remove(codex);
   else if(existing)output.write('Preserved modified mosaic-beta MCP registration.\n');
  }else output.write('Codex CLI unavailable. Inspect the mosaic-beta MCP registration manually.\n');
- let bytes;
- try{bytes=await fileBytes(paths.skill,{max:16384});}catch{output.write('Preserved modified mosaic-beta skill.\n');return;}
- if(bytes&&hash(bytes)===ownership.skillHash){
+ let saved;
+ try{saved=await inspectSkill(paths);}catch{output.write('Preserved modified mosaic-beta skill.\n');return;}
+ if(saved.bytes&&(hash(saved.bytes)===(ownership?.skillHash??intent?.previousSkillHash)||intent&&!intent.previousSkillHash&&saved.bytes.toString()===skill)){
   await rm(paths.skill);
-  await rmdir(path.dirname(paths.skill)).catch(error=>{if(error.code!=='ENOTEMPTY')throw error;});
- }else if(bytes)output.write('Preserved modified mosaic-beta skill.\n');
+  await rmdir(saved.directory).catch(error=>{if(error.code!=='ENOTEMPTY')throw error;});
+ }else if(saved.bytes)output.write('Preserved modified mosaic-beta skill.\n');
+ else if(saved.info&&intent&&!intent.previousSkillHash)
+  await rmdir(saved.directory).catch(error=>{if(error.code!=='ENOTEMPTY')throw error;});
 }

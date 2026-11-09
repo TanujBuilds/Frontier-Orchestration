@@ -1,12 +1,12 @@
-import {cp,mkdir,rename,rm} from 'node:fs/promises';
+import {cp,rename,rm} from 'node:fs/promises';
 import {createInterface} from 'node:readline/promises';
 import {fileURLToPath} from 'node:url';
 import {randomUUID} from 'node:crypto';
 import path from 'node:path';
 import {isEntry} from '../harness/entry.mjs';
 import {verifyPackage} from '../harness/package.mjs';
-import {atomic,currentHome,entry,fileBytes,hash,jsonFile,locations,saveJson,shellQuote,withLock} from './files.mjs';
-import {removeCodexBindings} from './setup.mjs';
+import {atomic,currentHome,entry,fileBytes,hash,jsonFile,localDirectory,locations,saveJson,shellQuote,withLock} from './files.mjs';
+import {readSetupIntent,removeCodexBindings} from './setup.mjs';
 import {rollbackLaunchAgent,startLaunchAgent,stopForMaintenance,verifyLaunchAgent} from './service.mjs';
 
 const versionPattern=/^\d+\.\d+\.\d+(?:-beta\.\d+)?$/;
@@ -22,6 +22,7 @@ function launcherFor(paths,version){
 }
 
 export async function installedLauncher(paths){
+ await localDirectory(paths,path.dirname(paths.launcher),{create:false});
  const receipt=await jsonFile(paths.installation,{privateFile:true,max:8192});
  const bytes=await fileBytes(paths.launcher,{max:16384}).catch(()=>{throw Error('Existing launcher is foreign. Preserve '+paths.launcher);});
  if(bytes&&(!receipt||!versionPattern.test(receipt.version)||hash(bytes)!==receipt.launcherHash||bytes.toString()!==launcherFor(paths,receipt.version)))
@@ -65,13 +66,16 @@ export async function install(paths,payload,{noPath=false}={}){
  const installed=path.join(paths.versions,version);
  return withLock(paths,async()=>{
   const old=await installedLauncher(paths);
-  if(await entry(installed)){
+  if(old.receipt?.version===version&&old.receipt.contentHash!==manifest.contentHash)
+   throw Error('The installed version receipt has different integrity checksums. Choose a new version.');
+  const present=!!await entry(installed);
+  if(present){
    const existing=await verifyVersion(installed,version);
    if(existing.contentHash!==manifest.contentHash)throw Error('Version already installed with different integrity checksums. Choose a new version.');
   }
   const launcher=launcherFor(paths,version);
   let receipt={schema:1,version,contentHash:manifest.contentHash,launcherHash:hash(launcher),...(old.receipt?.pathBlock?{pathBlock:old.receipt.pathBlock,pathFileCreated:old.receipt.pathFileCreated}:{})};
-  const switched=!old.bytes||old.receipt.version!==version;
+  const switched=!present||!old.bytes||old.receipt.version!==version;
   if(switched){
    const existed=await verifyLaunchAgent(paths);
    const registered=await stopForMaintenance(paths);
@@ -83,7 +87,7 @@ export async function install(paths,payload,{noPath=false}={}){
      await verifyVersion(staged,version);
      await rename(staged,installed);newVersion=true;
     }
-    await mkdir(path.dirname(paths.launcher),{recursive:true,mode:0o700});
+    await localDirectory(paths,path.dirname(paths.launcher));
     await atomic(paths.launcher,launcher,{mode:0o755});changed=true;
     await saveJson(paths.installation,receipt);receiptChanged=true;
     if(registered)await startLaunchAgent(paths);
@@ -112,10 +116,15 @@ export async function uninstall(paths){
    if(!/foreign or changed/.test(error.message))throw error;
    process.stdout.write('Preserved modified mosaic launcher.\n');return {receipt:null,bytes:null};
   });
-  const owned=await verifyLaunchAgent(paths);
-  await stopForMaintenance(paths);
+  const intent=await readSetupIntent(paths);
+  const allowUnrecorded=!!intent&&!intent.hadAgent;
+  const owned=await verifyLaunchAgent(paths,{allowUnrecorded});
+  await stopForMaintenance(paths,{allowUnrecorded});
+  const ownership=await jsonFile(paths.ownership,{privateFile:true,max:8192});
+  if(ownership)await saveJson(paths.ownership,{...ownership,complete:false});
   if(owned)await rm(paths.plist);
-  await removeCodexBindings(paths);
+  await removeCodexBindings(paths,process.stdout,intent);
+  if(intent)await rm(paths.setupIntent);
   if(receipt?.pathBlock){
    const info=await entry(paths.zshrc);
    let existing;

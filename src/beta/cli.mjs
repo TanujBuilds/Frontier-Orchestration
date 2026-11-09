@@ -3,7 +3,7 @@ import {startMcp} from '../harness/mcp.mjs';
 import path from 'node:path';
 import {currentHome,locations} from './files.mjs';
 import {client} from './client.mjs';
-import {readSettings,setup,doctor} from './setup.mjs';
+import {readSettings,setup,setupComplete,doctor} from './setup.mjs';
 import {serveBeta} from './service.mjs';
 import {runObserver} from './observer.mjs';
 import {installedLauncher,uninstall,verifyVersion} from './install.mjs';
@@ -29,7 +29,7 @@ export async function main(args=process.argv.slice(2)){
   let explicitCodex;
   if(args.length===2&&args[0]==='--codex'){args.shift();explicitCodex=args.shift();}
   if(args.length)throw Error('Use mosaic setup [--codex /absolute/path/to/codex]');
-  if(command==='setup'||!await readSettings(paths)){
+  if(command==='setup'||!await readSettings(paths)||!await setupComplete(paths)){
    if(!await setup(paths,{explicitCodex}))process.exitCode=1;
    return;
   }

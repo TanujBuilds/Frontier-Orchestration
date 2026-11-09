@@ -36,6 +36,14 @@ export function launchAgent(paths){
 }
 
 function assertIdle(db) {
+ const revision=db.prepare(`SELECT revision.id FROM records AS revision JOIN records AS goal
+  ON goal.kind='goal' AND goal.id=json_extract(revision.data,'$.goalId')
+  WHERE revision.kind='goal_revision' AND json_extract(revision.data,'$.status')='draft'
+   AND json_extract(revision.data,'$.manifest.workerProfile') IS NOT NULL
+   AND json_extract(goal.data,'$.status') NOT IN ('completed','partial')
+   AND json_extract(goal.data,'$.hash')=json_extract(revision.data,'$.previousHash')
+   AND json_extract(goal.data,'$.deadline')>? LIMIT 1`).get(Date.now());
+ if(revision)throw Error('A prepared worker-bound revision is still current. Stop and finalize its goal as partial in Codex, or supersede the revision, before maintenance.');
  const guard=db.prepare(`SELECT kind FROM records WHERE
   (kind='goal' AND json_extract(data,'$.status') IN ('draft','active','paused')) OR
   (kind='task' AND (json_extract(data,'$.owner') IS NOT NULL OR json_extract(data,'$.native.writerActive')=1)) OR
@@ -46,7 +54,7 @@ function assertIdle(db) {
  if(guard)throw Error('Mosaic Beta has prepared, active or unresolved work. Resolve it in Codex before maintenance.');
 }
 
-async function diskIdle(paths){
+export async function assertMaintenanceIdle(paths){
  const file=path.join(paths.state,'harness.sqlite3');
  const info=await entry(file);
  if(!info)return;
@@ -72,8 +80,8 @@ export async function verifyLaunchAgent(paths,{allowUnrecorded=false}={}){
  return !!old;
 }
 
-export async function stopForMaintenance(paths){
- const owned=await verifyLaunchAgent(paths);
+export async function stopForMaintenance(paths,{allowUnrecorded=false,recovering=false}={}){
+ const owned=await verifyLaunchAgent(paths,{allowUnrecorded});
  const registered=owned&&await loaded(paths);
  if(await online(paths)){
   if(paths.isolated||!registered)throw Error('Stop the foreground Mosaic Beta coordinator before maintenance.');
@@ -81,16 +89,20 @@ export async function stopForMaintenance(paths){
   for(let i=0;i<20&&await online(paths);i++)await delay(150);
   if(await online(paths))throw Error('Mosaic Beta coordinator did not stop safely');
  }else{
-  if(registered)throw Error('The registered Mosaic Beta coordinator is unreachable. Run mosaic doctor before maintenance.');
-  await diskIdle(paths);
+  if(registered){
+   if(!recovering)throw Error('The registered Mosaic Beta coordinator is unreachable. Run mosaic doctor before maintenance.');
+   await startLaunchAgent(paths,{allowUnrecorded});
+   return stopForMaintenance(paths,{allowUnrecorded});
+  }
+  await assertMaintenanceIdle(paths);
  }
  if(registered)await launchctl('bootout',serviceId());
  return registered;
 }
 
-export async function startLaunchAgent(paths){
+export async function startLaunchAgent(paths,{allowUnrecorded=false}={}){
  if(paths.isolated)return false;
- const owned=await verifyLaunchAgent(paths);
+ const owned=await verifyLaunchAgent(paths,{allowUnrecorded});
  if(!owned){
   await mkdir(path.dirname(paths.plist),{recursive:true,mode:0o700});
   await atomic(paths.plist,launchAgent(paths));
