@@ -39,4 +39,8 @@ For isolated local verification, use `./install --home /absolute/disposable/dire
 
 ## Validation scope
 
-This is a private terminal beta. Local tests use isolated directories, fixture Codex registrations, and local HTTP responses. Release validation still requires a separate clean macOS account or VM, an actual Spark coding task, a hosted-provider coding task and a real Codex review. Research remains parked.
+On November 9, 2026, the Apple Silicon package `0.1.0-beta.102` (`fb368a1`) completed a live overnight coding task in an isolated home on the development Mac. The existing Spark service handled one planning request and one coding request. The protected check passed, Codex accepted the candidate in one independent review, and the coordinator integrated the change and finalized the goal. The fixture processes shut down after the run.
+
+The full test suite passed 690 tests at `4372a38`. The beta and harness observer suites passed 26 tests at `f931136`, including the 20-column renderer change made after the live-tested build.
+
+Setup and LaunchAgent registration on a separate clean macOS account or VM and a live hosted-provider coding task remain unverified.
