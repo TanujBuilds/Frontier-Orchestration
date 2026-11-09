@@ -76,6 +76,24 @@ export class Worker {
    throw error;
   }
  }
+ nextIdleCheck(startedAt){
+  const {store}=this.c;
+  let next=Infinity;
+  const consider=at=>{if(at>startedAt)next=Math.min(next,at);};
+  for(const goal of store.all('goal'))consider(goal.deadline);
+  for(const task of store.all('task')){
+   if(!['accepted','failed','partial','cancelled'].includes(task.status))consider(task.deadline);
+   if(task.status==='suspended'){
+    consider(task.providerWait?.retryAt);
+    consider(task.providerWait?.until);
+   }
+  }
+  for(const planning of store.all('planning')){
+   consider(planning.providerWait?.retryAt);
+   consider(planning.providerWait?.until);
+  }
+  return next;
+ }
  async tick(){await this.overnight.tick();try{return await this.executeTick();}finally{await this.overnight.tick();}}
  async executeTick(){
   this.c.expireQuiescent();

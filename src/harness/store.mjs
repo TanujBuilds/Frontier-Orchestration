@@ -9,18 +9,55 @@ export class Store {
   this.root=path.resolve(root);mkdirSync(this.root,{recursive:true,mode:0o700});
   this.db=new DatabaseSync(path.join(this.root,'harness.sqlite3'));
   const version=this.db.prepare('PRAGMA user_version').get().user_version;if(![0,1].includes(version)){this.db.close();this.db=null;throw Error(`Unsupported harness database schema version ${version}`);}
-  chmodSync(path.join(this.root,'harness.sqlite3'),0o600);this.depth=0;
+  chmodSync(path.join(this.root,'harness.sqlite3'),0o600);this.depth=0;this.commitListeners=new Set();
   this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
    CREATE TABLE IF NOT EXISTS records(kind TEXT NOT NULL,id TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(kind,id));
+   -- The kind-only index also orders matching rows by rowid. The primary
+   -- key orders by id and requires a temporary sort of full record payloads.
+   CREATE INDEX IF NOT EXISTS records_kind ON records(kind);
    CREATE TABLE IF NOT EXISTS submissions(kind TEXT NOT NULL,scope TEXT NOT NULL,key TEXT NOT NULL,id TEXT NOT NULL,hash TEXT NOT NULL,PRIMARY KEY(kind,scope,key));
    CREATE TABLE IF NOT EXISTS commands(key TEXT PRIMARY KEY,hash TEXT NOT NULL,result TEXT NOT NULL);
    CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT,at INTEGER NOT NULL,goal_id TEXT,task_id TEXT,type TEXT NOT NULL,data TEXT NOT NULL);
    CREATE TABLE IF NOT EXISTS requests(id TEXT PRIMARY KEY,task_id TEXT NOT NULL,key TEXT NOT NULL,kind TEXT NOT NULL,status TEXT NOT NULL,data TEXT NOT NULL,UNIQUE(task_id,key));
    CREATE INDEX IF NOT EXISTS requests_task ON requests(task_id,kind);
    PRAGMA user_version=1;`);
+  this.readChanges=this.db.prepare('SELECT total_changes() AS n');
+  this.readDataVersion=this.db.prepare('PRAGMA data_version');
  }
  close(){if(this.db){this.db.close();this.db=null;}}
- tx(fn){if(this.depth)return fn();this.db.exec('BEGIN IMMEDIATE');this.depth++;try{const value=fn();if(value?.then)throw Error('Async work cannot run inside state transaction');this.db.exec('COMMIT');return value;}catch(e){this.db.exec('ROLLBACK');throw e;}finally{this.depth--;}}
+ tx(fn){
+  if(this.depth)return fn();
+  this.db.exec('BEGIN IMMEDIATE');
+  this.depth++;
+  let value;
+  try{
+   value=fn();
+   if(value?.then)throw Error('Async work cannot run inside state transaction');
+   this.db.exec('COMMIT');
+  }catch(error){
+   this.db.exec('ROLLBACK');
+   throw error;
+  }finally{this.depth--;}
+  for(const wake of this.commitListeners)wake();
+  return value;
+ }
+ revision(){
+  return this.readChanges.get().n+':'+this.readDataVersion.get().data_version;
+ }
+ waitForChange(revision,timeout,signal){
+  if(signal.aborted||this.revision()!==revision)return Promise.resolve();
+  return new Promise(resolve=>{
+   const wake=()=>{
+    clearTimeout(timer);
+    this.commitListeners.delete(wake);
+    signal.removeEventListener('abort',wake);
+    resolve();
+   };
+   const timer=setTimeout(wake,timeout);
+   this.commitListeners.add(wake);
+   signal.addEventListener('abort',wake,{once:true});
+  });
+ }
  get(kind,id){const row=this.db.prepare('SELECT data FROM records WHERE kind=? AND id=?').get(kind,id);if(!row)throw Error(`Unknown ${kind}: ${id}`);return JSON.parse(row.data);}
  maybe(kind,id){try{return this.get(kind,id);}catch(e){if(e.message.startsWith('Unknown '))return null;throw e;}}
  all(kind){return this.db.prepare('SELECT data FROM records WHERE kind=? ORDER BY rowid').all(kind).map(r=>JSON.parse(r.data));}
