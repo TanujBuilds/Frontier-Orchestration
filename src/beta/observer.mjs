@@ -189,7 +189,7 @@ function polishedMain(state,goal,{width,height,color,selected,offset}){
   }
   out.push(...(feed.length?feed:[quiet(clip(state.events.length?'No handoffs fit. Enlarge the terminal to see the feed.':'Waiting for the first handoff.',space))]).slice(0,room));
  }
- const keys=space>=70?'↑↓ select  Enter evidence  a current  g goals  Pg↑/↓ history  q quit':'↑↓ Enter  a current  g goals  Pg↑/↓ feed  q quit';
+ const keys=space>=70?'↑↓ select  Enter evidence  a current  g goals  [ older  ] newer  q quit':'↑↓ Enter  a current  g goals  [/] feed  q quit';
  const body=out.slice(0,height-3);
  while(body.length<height-3)body.push('');
  return [...body,'',quiet('─'.repeat(space)),quiet(clip(keys,space))].map(line=>margin+line).join('\n');
@@ -217,7 +217,7 @@ function polishedPicker(state,{width,height,color,picker}){
   preview.push(quiet(clip(`${status(goal.status)}  ·  ${String(goal.mode).replaceAll('_',' ')}  ·  ${goal.taskCount??0} assignments`,space)));
   preview.push(quiet(clip('ID: '+goal.id,space)));
  }else if(goal&&height>=8)out.push(quiet(clip(status(goal.status),space)));
- const footer=roomy?(space>=70?'↑↓ Enter open  a current  d details  Pg↑/↓ jump  Esc back  q quit':'↑↓ Enter  a current  d details  Esc back  q quit'):space>=20?'↑↓ Enter a d Esc q':space>=12?'↑↓ a d Esc q':'↑↓ a q';
+ const footer=roomy?(space>=70?'↑↓ Enter open  a current  d details  [/] jump  Esc back  q quit':'↑↓ Enter  a current  d details  Esc back  q quit'):space>=20?'↑↓ Enter a d Esc q':space>=12?'↑↓ a d Esc q':'↑↓ a q';
  const tail=roomy?['',quiet('─'.repeat(space)),quiet(clip(footer,space))]:[quiet(clip(footer,space))];
  const titleWidth=space-24;
  if(roomy)out.push('',quiet('  '+pad('Goal',titleWidth)+'  '+pad('Status',10)+'  ID'));
@@ -286,7 +286,7 @@ export function renderTerminal(state,{width=80,height=36,color=false,selected=0,
    out.push(...lines(`${clock(event.at)} [${event.provenance}] ${eventText(event)}`,width));
   }
  }
- const footer=detail?'↑↓ or PgUp/PgDn scroll · a current · Esc back · q quit':picker!==null?'↑↓ choose · Enter select · a current · Esc back · q quit':interactive?'↑↓ rows · Enter evidence · a current · g goals · PgUp/PgDn feed · q quit':'Approvals and decisions stay in Codex.';
+ const footer=detail?'↑↓ or [/] scroll · a current · Esc back · q quit':picker!==null?'↑↓ choose · Enter select · a current · Esc back · q quit':interactive?'↑↓ rows · Enter evidence · a current · g goals · [ older · ] newer · q quit':'Approvals and decisions stay in Codex.';
  const tail=lines(compact?'↑↓ a Esc q':footer,width);
  return [...out.slice(0,Math.max(0,height-tail.length-1)),'',...tail].join('\n');
 }
@@ -366,6 +366,7 @@ export async function runObserver({invoke,input=process.stdin,output=process.std
   output.write('\x1b[H\x1b[2J'+renderTerminal(observer.state,{width:output.columns,height:output.rows,color:true,interactive:true,selected,picker,detail,detailTitle,detailOffset,offset}));
  };
  const keypress=async(_,key={})=>{
+  if(!key.ctrl&&!key.meta&&(_==='['||_===']'))key={...key,name:_==='['?'pageup':'pagedown'};
   if(key.name==='q'||key.ctrl&&key.name==='c'){close();return;}
   if(key.name==='a'){
    picker=null;detail=null;selected=0;offset=0;detailOffset=0;

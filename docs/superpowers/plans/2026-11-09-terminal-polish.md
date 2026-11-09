@@ -23,3 +23,7 @@ The owner identified the full-instruction goal list as confusing. Extend the sam
 ## Current-project shortcut follow-up
 
 The owner approved `a current` from the main view, picker and details. Prefer an unexpired running assignment or planner, breaking ties by actual saved activity. Native work requires a fresh running report; otherwise show that its activity is unconfirmed. If nothing is running, select the most recently worked project and explicitly say so. Exclude expiration housekeeping from recency. Auto source checks both installations, while explicit source selection stays scoped. Keep this a one-shot navigation action with no dispatch/resume; retain the selected service afterward. Bound history scans and disclose unavailable/incomplete evidence. Verify expired labels, source selection, stale reports, modal shortcuts, cancellation and installed PTY behavior.
+
+## Mac history keys
+
+The owner approved single-key `[ older` / `] newer` controls because their Mac keyboard has no dedicated Page Up/Down keys. Add them as aliases of the existing page actions, including goal-list and detail paging, and show the bracket keys in the footer. Keep Page Up/Down available. This small navigation change uses the existing observer checks and an installed pseudoterminal smoke check; no coordinator changes or inference.
