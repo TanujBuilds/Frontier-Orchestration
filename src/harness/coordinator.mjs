@@ -4,12 +4,14 @@ import { Store } from './store.mjs';
 import { Registry, normalizeGoal, normalizeTask, digest, text, identifier } from './contracts.mjs';
 import {verifyLocalAcceptance} from './research-review.mjs';
 import { Learning } from './learning.mjs';
+import {workerProfile as normalizeWorkerProfile} from './worker-profile.mjs';
 
 const TERMINAL=new Set(['accepted','failed','partial','cancelled']);
 const SLOT=new Set(['running','uncertain','taking_over']);
 const rank={background:0,normal:1,blocking:2};
 export class Coordinator {
- constructor({root,now=Date.now,registry=new Registry()}={}){
+ constructor({root,now=Date.now,registry=new Registry(),beta=false,workerProfile,verifyCurrentWorker}={}){
+  this.beta=beta;this.verifyCurrentWorker=verifyCurrentWorker;this.workerProfile=workerProfile?normalizeWorkerProfile(workerProfile):null;
   this.store=new Store(root);this.now=now;this.registry=registry;
   for(const record of this.store.all('mode')){const m=record.definition??record;if(!this.registry.modes.has(`${m.id}@${m.version}`))this.registry.registerMode(m);}
   for(const record of this.store.all('workflow')){const w=record.definition??record;if(!this.registry.workflows.has(`${w.id}@${w.version}`))this.registry.registerWorkflow(w);}
@@ -58,13 +60,37 @@ export class Coordinator {
  });}
  notifications({goalId}={}){return this.store.all('notification').filter(n=>!n.acknowledged&&!n.resolved&&(!goalId||n.goalId===goalId)).sort((a,b)=>b.sequence-a.sequence).slice(0,50);}
  ackNotification(input,key){return this.store.command(key,{op:'notification.ack',...input},()=>{const n=this.store.get('notification',input.notificationId);n.acknowledged=true;n.acknowledgedAt=this.now();this.store.put('notification',n);return n;});}
- prepareGoal(raw,key){const manifest=normalizeGoal(raw,this.registry);return this.store.command(key,{op:'goal.prepare',manifest},()=>{
+ goalManifest(raw){
+  if(!this.beta)return normalizeGoal(raw,this.registry);
+  if(raw.researchPolicy)throw Error('Research is parked in Mosaic Beta');
+  const manifest=normalizeGoal({...raw,mode:raw.mode??(this.workerProfile?'collaborative':'codex_only')},this.registry);
+  if(!['collaborative','deepseek_only','codex_only','overnight_review'].includes(manifest.mode.id)||manifest.mode.version!==1)throw Error('Select a built-in Mosaic Beta workflow');
+  manifest.mode={...manifest.mode,capabilities:manifest.mode.capabilities.filter(id=>id!=='research')};
+  manifest.capabilities=manifest.capabilities.filter(capability=>capability.id!=='research');
+  if(manifest.mode.actors.includes('deepseek')){
+   this.verifyCurrentWorker?.();
+   if(!this.workerProfile)throw Error('Configure an API worker in mosaic setup or use codex_only');
+   manifest.workerProfile=this.workerProfile;
+  }
+  return manifest;
+ }
+ verifyWorkerBinding(goal){
+  const approved=goal.manifest.workerProfile;
+  if(!approved&&!this.beta)return;
+  this.verifyCurrentWorker?.();
+  if(!approved||!this.workerProfile||digest(approved)!==digest(this.workerProfile))
+   throw Error('Approved API worker profile changed. Prepare and approve a goal with the current worker profile.');
+ }
+ verifyGoalBinding(goal){
+  if(goal.manifest.mode.actors.includes('deepseek'))this.verifyWorkerBinding(goal);
+ }
+ prepareGoal(raw,key){const manifest=this.goalManifest(raw);return this.store.command(key,{op:'goal.prepare',manifest},()=>{
   const g=this.store.submission('goal','',manifest.submissionId,digest(manifest),id=>({id,manifest,hash:digest(manifest),version:1,status:'draft',createdAt:this.now(),activatedAt:null,deadline:null}));
   this.emit('goal.prepared',g.id,null,{hash:g.hash});return g;
  });}
  activateGoal(input,key){return this.store.command(key,{op:'goal.activate',...input},()=>{
   const g=this.store.get('goal',input.goalId);if(input.hash!==g.hash)throw Error('Exact goal approval hash required');
-  if(g.status==='draft'){g.status='active';g.activatedAt??=this.now();g.deadline??=g.activatedAt+g.manifest.limits.hours*3600000;this.store.put('goal',g);this.emit('goal.activated',g.id,null,{hash:g.hash,version:g.version});}
+  if(g.status==='draft'){this.verifyGoalBinding(g);g.status='active';g.activatedAt??=this.now();g.deadline??=g.activatedAt+g.manifest.limits.hours*3600000;this.store.put('goal',g);this.emit('goal.activated',g.id,null,{hash:g.hash,version:g.version});}
   return g;
  });}
  getGoal(id){const g=this.store.get('goal',id),planning=this.store.maybe('planning',id);return {...g,planning:planning?{...planning,spent:this.store.spent(id).model??0}:null,tasks:this.store.all('task').filter(t=>t.goalId===id).map(t=>this.getTask(t.id)),reviewerRuns:this.store.all('reviewer').filter(r=>r.goalId===id)};}
@@ -137,7 +163,10 @@ export class Coordinator {
   if(t.spec.actor!=='deepseek'||!g.manifest.mode.actors.includes('deepseek'))throw Error('Mode prohibits model actor');
   const budget={model:'modelCalls',search:'searches',download:'downloads'}[kind];if(!budget||!t.spec.limits[budget])throw Error('Unsupported request kind');
   if((this.store.spent(taskId)[kind]??0)>=t.spec.limits[budget])throw Error('Request budget limit reached');
-  const id=randomUUID(),data={owner,reservedAt:this.now()};this.store.db.prepare('INSERT INTO requests VALUES(?,?,?,?,?,?)').run(id,taskId,key,kind,'reserved',JSON.stringify(data));
+  if(kind==='model')this.verifyWorkerBinding(g);
+  const profile=kind==='model'?g.manifest.workerProfile:null;
+  if(profile&&!t.workerProfile){t.workerProfile=profile;this.store.put('task',t);}
+  const id=randomUUID(),data={owner,reservedAt:this.now(),...(profile?{workerProfile:profile}:{})};this.store.db.prepare('INSERT INTO requests VALUES(?,?,?,?,?,?)').run(id,taskId,key,kind,'reserved',JSON.stringify(data));
   this.emit('request.reserved',t.goalId,taskId,{id,key,kind});return {id,task_id:taskId,key,kind,status:'reserved',...data,cached:false};
  });}
  saveRequest(id,result){return this.store.tx(()=>{const row=this.store.db.prepare('SELECT * FROM requests WHERE id=?').get(id);if(!row)throw Error('Unknown request');const data=JSON.parse(row.data);
@@ -194,6 +223,6 @@ export class Coordinator {
   this.emit('work.control',g.id,input.taskId??null,{action:input.action});return input.goalId?this.getGoal(g.id):this.getTask(input.taskId);
  });}
  markUncertain(taskId,reason,owner){return this.store.tx(()=>{const t=this.owned(taskId,owner);t.status='uncertain';t.reason=reason;this.store.put('task',t);this.emit('task.uncertain',t.goalId,t.id,{reason});return this.getTask(t.id);});}
- reserveReviewer(input,key){return this.store.command(key,{op:'reviewer.reserve',...input},()=>{const t=this.store.get('task',input.taskId),g=this.store.get('goal',t.goalId);this.liveGoal(g);if(g.manifest.mode.review!=='operator')throw Error('Mode prohibits reviewer');const runs=this.store.all('reviewer').filter(r=>r.goalId===g.id);if(runs.some(r=>r.status==='reserved'))throw Error('A reviewer is already active');if(runs.length>=g.manifest.limits.reviewAgentRuns)throw Error('Reviewer budget limit reached');const run={id:randomUUID(),goalId:g.id,taskId:t.id,status:'reserved',at:this.now()};this.store.put('reviewer',run);this.emit('reviewer.reserved',g.id,t.id,{id:run.id});return run;});}
+ reserveReviewer(input,key){return this.store.command(key,{op:'reviewer.reserve',...input},()=>{const t=this.store.get('task',input.taskId),g=this.store.get('goal',t.goalId);this.liveGoal(g);if(g.manifest.mode.review!=='operator')throw Error('Mode prohibits reviewer');if(this.beta&&t.spec.kind==='coding'&&!['awaiting_review','ready_to_integrate'].includes(t.status))throw Error('Wait for the protected checks before reserving a reviewer');const runs=this.store.all('reviewer').filter(r=>r.goalId===g.id);if(runs.some(r=>r.status==='reserved'))throw Error('A reviewer is already active');if(runs.length>=g.manifest.limits.reviewAgentRuns)throw Error('Reviewer budget limit reached');const run={id:randomUUID(),goalId:g.id,taskId:t.id,status:'reserved',at:this.now()};this.store.put('reviewer',run);this.emit('reviewer.reserved',g.id,t.id,{id:run.id});return run;});}
  finishReviewer(input,key){return this.store.command(key,{op:'reviewer.finish',...input},()=>{const r=this.store.get('reviewer',input.reservationId);if(r.status!=='reserved')throw Error('Reviewer is already finalized');r.status=input.error?'failed':'completed';r.result=input.result??null;r.error=input.error??null;this.store.put('reviewer',r);this.emit('reviewer.finished',r.goalId,r.taskId,{id:r.id,status:r.status});return r;});}
 }

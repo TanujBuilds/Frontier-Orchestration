@@ -18,15 +18,15 @@ const defaultRoot=path.join(os.homedir(),'Library','Application Support','Fronti
 async function atomic(file,value){await mkdir(path.dirname(file),{recursive:true,mode:0o700});const tmp=file+'.'+randomUUID()+'.tmp';await writeFile(tmp,JSON.stringify(value,null,2),{mode:0o600});await rename(tmp,file);}
 async function connection(root){return JSON.parse(await readFile(path.join(root,'connection.json'),'utf8'));}
 async function invoke(root,name,input){const cfg=await connection(root),url=new URL(cfg.url);if(url.protocol!=='http:'||url.hostname!=='127.0.0.1')throw Error('Authenticated loopback coordinator required');const response=await fetch(new URL('/api/invoke',url),{method:'POST',headers:{authorization:'Bearer '+cfg.token,'content-type':'application/json'},body:JSON.stringify({name,input}),signal:AbortSignal.timeout(35000)}),result=await response.json();if(!response.ok)throw Error(result.error??'Coordinator request failed');return result;}
-export async function serve({root,configFile,port}){
- const raw=configFile?JSON.parse(await readFile(configFile,'utf8')):{},config={...raw,deepseekBaseUrl:raw.deepseekBaseUrl??raw.DEEPSEEK_BASE_URL,deepseekModelId:raw.deepseekModelId??raw.DEEPSEEK_MODEL_ID},owner=randomUUID(),c=new Coordinator({root});c.acquireWorker(owner);
+export async function serve({root,configFile,port,runtimeConfig,headless=false,canStop,verifyCurrentWorker}){
+ const raw=runtimeConfig??(configFile?JSON.parse(await readFile(configFile,'utf8')):{}),config={...raw,deepseekBaseUrl:raw.deepseekBaseUrl??raw.DEEPSEEK_BASE_URL,deepseekModelId:raw.deepseekModelId??raw.DEEPSEEK_MODEL_ID},owner=randomUUID(),c=new Coordinator({root,beta:config.beta,workerProfile:config.workerProfile,verifyCurrentWorker});c.acquireWorker(owner);
  const provider=config.environment==='fixture'?{complete:async()=>({content:config.fixtureReply??'Fixture answer',model:'fixture-no-model',usage:{}})}:undefined;
  const worker=new Worker({c,owner,config,provider}),dispatcher=new Dispatcher({c,worker,config});let quitting=false;
  for(const task of c.store.all('task').filter(t=>t.status==='uncertain')){try{c.recoverSaved(task.id,owner);}catch{/* Ambiguous model/backend ownership stays held. */}}
  for(const planning of c.store.all('planning').filter(p=>p.status==='uncertain')){try{c.recoverPlanning(planning.id,owner);}catch{/* Pending planner calls remain spent and exclusive. */}}
- const stop=()=>{quitting=true;};process.once('SIGTERM',stop);process.once('SIGINT',stop);dispatcher.onStop=stop;
+ const stop=()=>{quitting=true;};process.once('SIGTERM',stop);process.once('SIGINT',stop);dispatcher.onStop=()=>{canStop?.(c);if(canStop)dispatcher.quiescing=true;stop();};
  let old;try{old=await connection(root);}catch(error){if(error.code!=='ENOENT')throw error;}
- const token=old?.token??randomBytes(32).toString('hex'),viewerToken=old?.viewerToken??randomBytes(32).toString('hex'),api=await startApi({dispatcher,token,viewerToken,port,trustedOrigins:config.observerOrigins??[]});
+ const token=old?.token??randomBytes(32).toString('hex'),viewerToken=old?.viewerToken??randomBytes(32).toString('hex'),api=await startApi({dispatcher,token,viewerToken,port,headless,trustedOrigins:config.observerOrigins??[]});
  await atomic(path.join(root,'connection.json'),{url:api.url,token,viewerToken});await atomic(path.join(root,'viewer-connection.json'),{url:api.url,token:viewerToken,role:'viewer'});await atomic(path.join(root,'service.json'),{pid:process.pid,owner,url:api.url,node:process.versions.node,startedAt:Date.now()});
  process.stdout.write(JSON.stringify({status:'ready',url:api.url,root,node:process.versions.node})+'\n');
  try{

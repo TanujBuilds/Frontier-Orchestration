@@ -7,7 +7,7 @@ const equal=(a,b)=>timingSafeEqual(createHash('sha256').update(String(a)).digest
 const problem=(status,message)=>Object.assign(Error(message),{status});
 async function body(request,max=1048576){let size=0,raw='',oversized=false;for await(const chunk of request){size+=chunk.length;if(size>max)oversized=true;else raw+=chunk;}if(oversized)throw problem(413,'Request body exceeds limit');return raw;}
 
-export async function startApi({dispatcher,token,viewerToken, trustedOrigins=[],port=0,host='127.0.0.1'}={}){
+export async function startApi({dispatcher,token,viewerToken, trustedOrigins=[],port=0,host='127.0.0.1',headless=false}={}){
  if(host!=='127.0.0.1'||typeof token!=='string'||token.length<32)throw Error('Authenticated loopback configuration required');
  if(viewerToken!==undefined&&(typeof viewerToken!=='string'||viewerToken.length<32||equal(viewerToken,token)))throw Error('Viewer key must be distinct from the operator key and at least32 characters');
  if(!Array.isArray(trustedOrigins)||trustedOrigins.length>10)throw Error('Explicit private HTTPS origins required');
@@ -32,6 +32,7 @@ export async function startApi({dispatcher,token,viewerToken, trustedOrigins=[],
    const expectedOrigin=requestOrigin(request);
    const pathname=new URL(request.url,url).pathname;
    if(pathname==='/api/health'&&request.method==='GET')return send(200,{status:'ready',version:'0.1.0'});
+   if(headless&&pathname!=='/api/invoke'&&pathname!=='/api/session')throw problem(404,'Unknown route');
    const publicAssets={'/login.js':['login.js','text/javascript; charset=utf-8'],'/style.css':['style.css','text/css; charset=utf-8'],'/nunito.ttf':['nunito.ttf','font/ttf']};
    if(request.method==='GET'&&publicAssets[pathname]){const [file,type]=publicAssets[pathname],data=await readFile(new URL('dashboard/'+file,import.meta.url));return send(200,data,type);}
    if(pathname==='/login'&&request.method==='GET')return send(200,'<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Connect to Mosaic</title><link rel="stylesheet" href="/style.css"><script src="/login.js" defer></script><body><main class="login panel"><h1>Mosaic</h1><p class="muted">Connect to your local coordinator.</p><form method="post"><label>Connection key <input name="token" type="password" required autocomplete="off"></label><button class="primary">Connect</button></form><p role="alert"></p></main></body></html>','text/html; charset=utf-8');
@@ -41,6 +42,7 @@ export async function startApi({dispatcher,token,viewerToken, trustedOrigins=[],
     const id=secret();sessions.set(id,{role,csrf:secret(),expires:Date.now()+8*3600000});response.setHeader('set-cookie',`frontier_session=${id}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800${expectedOrigin.startsWith('https:')?'; Secure':''}`);response.writeHead(303,{location:'/'});response.end();return;
    }
    const suppliedBearer=request.headers.authorization?.startsWith('Bearer ')?request.headers.authorization.slice(7):null,bearerRole=suppliedBearer&&equal(suppliedBearer,token)?'operator':suppliedBearer&&viewerToken&&equal(suppliedBearer,viewerToken)?'viewer':null,bearer=!!bearerRole,cookie=request.headers.cookie?.split(';').map(s=>s.trim()).find(s=>s.startsWith('frontier_session='))?.slice(17),session=cookie?sessions.get(cookie):null;
+   if(headless&&!bearer)throw problem(401,'Authentication required');
    if(!bearer&&(!session||session.expires<Date.now())){if(pathname==='/'&&request.method==='GET'){response.writeHead(303,{location:'/login'});response.end();return;}throw problem(401,'Authentication required');}
    const role=bearerRole??session.role;
    if(pathname==='/'&&request.method==='GET'){response.writeHead(303,{location:'/observer'});response.end();return;}

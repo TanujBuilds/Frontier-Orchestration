@@ -19,6 +19,11 @@ const label=type=>({
  'request.reserved':'Request budget reserved','request.saved':'Request result saved'
  })[type]??type.replaceAll('.',' ');
 const trim=value=>String(value).slice(0,2000);
+function taskProfile(store,task) {
+ if(task.workerProfile)return task.workerProfile;
+ const goal=store.get('goal',task.goalId);
+ return (task.goalVersion===goal.version?goal:store.maybe('goal_history',`${goal.id}-${task.goalVersion}`))?.manifest.workerProfile;
+}
 function outcome(t){
  const result=t.result??{},integration=t.integration,checks=integration?.checks??result.checks;
  const files=[...new Set([...(Array.isArray(result.changes)?result.changes:[]),...(Array.isArray(result.newFiles)?result.newFiles:[])].map(x=>x?.path).filter(x=>typeof x==='string'))].slice(0,50).map(x=>x.slice(0,200));
@@ -56,10 +61,21 @@ export class Observer {
   if(event.type==='coding.files.read'&&Array.isArray(d.files))summary='Read '+d.files.map(f=>f.path).filter(x=>typeof x==='string').join(', ');
   if(d.reason&&typeof d.reason==='string')summary+=': '+d.reason;
   const artifactIds=[...(event.task_id?['task-'+event.task_id]:[]),...(requestId?['request-'+requestId]:[])];
-  return normalizeActivityEvent({version:1,seq:event.seq,at:event.at,goalId:event.goal_id,taskId:event.task_id,agentId:d.agentId??null,requestId,type:event.type,actor,provenance:['captured','reported','coordinator'].includes(d.provenance)?d.provenance:event.type==='agent.reported'?'reported':'coordinator',summary:trim(summary),artifactIds});
+  const normalized=normalizeActivityEvent({version:1,seq:event.seq,at:event.at,goalId:event.goal_id,taskId:event.task_id,agentId:d.agentId??null,requestId,type:event.type,actor,provenance:['captured','reported','coordinator'].includes(d.provenance)?d.provenance:event.type==='agent.reported'?'reported':'coordinator',summary:trim(summary),artifactIds});
+  if(!this.c.beta||actor!=='deepseek')return normalized;
+  const task=event.task_id?this.c.store.maybe('task',event.task_id):null,goal=event.goal_id?this.c.store.maybe('goal',event.goal_id):null;
+  const row=requestId?this.c.store.db.prepare('SELECT data FROM requests WHERE id=?').get(requestId):null;
+  const profile=(row?JSON.parse(row.data).workerProfile:null)??(task?taskProfile(this.c.store,task):goal?.manifest.workerProfile);
+  return profile?{...normalized,displayName:profile.displayName}:normalized;
  }
  timeline(raw={}){
-  const q=normalizeObserverQuery(raw);if(q.goalId)this.c.store.get('goal',q.goalId);
+  const {recent,...query}=raw,q=normalizeObserverQuery(query);if(q.goalId)this.c.store.get('goal',q.goalId);
+  if(recent){
+   if(q.after||q.actor)throw Error('Recent history accepts goalId and limit');
+   const events=this.c.store.db.prepare("SELECT * FROM events WHERE (? IS NULL OR goal_id=?) AND type NOT IN ('model.output','execution.checkpoint') AND NOT (type='task.checkpoint' AND json_extract(data,'$.status')='running') ORDER BY seq DESC LIMIT ?").all(q.goalId,q.goalId,q.limit).reverse().map(row=>this.normalized({...row,data:JSON.parse(row.data)}));
+   const cursor=Number(this.c.store.db.prepare('SELECT COALESCE(MAX(seq),0) AS n FROM events').get().n);
+   return {events,cursor,scanned:events.length,hasMore:false};
+  }
   const events=[];let cursor=q.after,scanned=0;
   for(const event of this.c.store.events(q.after,1000)){
    cursor=event.seq;scanned++;
@@ -87,10 +103,21 @@ export class Observer {
    const actor=t.executionActor??t.spec.actor,event=this.c.store.db.prepare("SELECT seq,at,type,data FROM events WHERE task_id=? AND type!='model.output' AND (?!='deepseek' OR json_extract(data,'$.provenance')='captured') ORDER BY seq DESC LIMIT 1").get(t.id,actor),last=event?{...event,data:JSON.parse(event.data)}:null,registered=agents.find(a=>a.taskId===t.id&&a.actor===actor);
    return {id:t.id,goalId:t.goalId,objective:trim(t.spec.objective),objectiveTruncated:t.spec.objective.length>2000,kind:t.spec.kind,actor,status:t.status,phase:last?.data.phase??t.checkpoint?.phase??null,priority:t.priority??t.spec.priority,provenance:actor==='codex'?'reported':'captured',lastActivityAt:actor==='codex'?registered?.lastReport?.at??null:last?.at??null,lastActivity:actor==='codex'?registered?.lastReport?.summary??null:last?label(last.type):null,model:actor==='codex'?registered?.model??{requested:null,resolved:null}:{requested:null,resolved:typeof (t.providerModel??t.result?.model)==='string'?trim(t.providerModel??t.result.model):null},spent:this.c.getTask(t.id).spent,usage:actor==='codex'?{reportedTokens:null,completedModelRequests:0,usageUnavailable:null}:this.usage(t.id),deadline:t.deadline,question:t.questions?.length?{...t.questions.at(-1),text:trim(t.questions.at(-1).text??'')}:null,candidate:t.native?{layout:t.native.layout??'legacy',writerActive:t.native.writerActive??null,baseCommit:t.native.baseCommit??null,commit:t.native.commit??null}:null,evidenceRef:'task-'+t.id};
   });
-  for(let index=0;index<rows.length;index++)rows[index].outcome=outcome(selected[index]);
-  const goals=this.c.store.db.prepare("SELECT data FROM records WHERE kind='goal' AND (? IS NULL OR id=?) ORDER BY json_extract(data,'$.status')='active' DESC,rowid DESC LIMIT 100").all(q.goalId,q.goalId).map(r=>{const g=JSON.parse(r.data);return {id:g.id,objective:trim(g.manifest.objective),status:g.status,mode:g.manifest.mode.id,environment:g.manifest.environment,deadline:g.deadline,maxTasks:g.manifest.limits.maxTasks,taskCount:this.c.store.db.prepare("SELECT COUNT(*) AS n FROM records WHERE kind='task' AND json_extract(data,'$.goalId')=?").get(g.id).n};});
+  for(let index=0;index<rows.length;index++){
+   const task=selected[index],row=rows[index];row.outcome=outcome(task);
+   if(this.c.beta){
+    row.updatedAt=this.c.store.db.prepare('SELECT at FROM events WHERE task_id=? ORDER BY seq DESC LIMIT 1').get(task.id)?.at??null;
+    if(row.actor==='deepseek'){
+     row.workerProfile=taskProfile(this.c.store,task)??null;
+     if(!row.lastActivityAt)row.provenance='coordinator';
+    }
+   }
+  }
+  const goals=this.c.store.db.prepare("SELECT data FROM records WHERE kind='goal' AND (? IS NULL OR id=?) ORDER BY json_extract(data,'$.status')='active' DESC,rowid DESC LIMIT 100").all(q.goalId,q.goalId).map(r=>{const g=JSON.parse(r.data);return {id:g.id,objective:trim(g.manifest.objective),status:g.status,mode:g.manifest.mode.id,...(this.c.beta?{reviewPolicy:g.manifest.mode.review,workerProfile:g.manifest.workerProfile??null}:{}),environment:g.manifest.environment,deadline:g.deadline,maxTasks:g.manifest.limits.maxTasks,taskCount:this.c.store.db.prepare("SELECT COUNT(*) AS n FROM records WHERE kind='task' AND json_extract(data,'$.goalId')=?").get(g.id).n};});
   const cursor=Number(this.c.store.db.prepare('SELECT COALESCE(MAX(seq),0) AS n FROM events').get().n);
-  return {version:1,generatedAt:this.c.now(),cursor,goals,tasks:rows,agents,queue:rows.filter(t=>queueStates.has(t.status)),attention:rows.filter(t=>attentionStates.has(t.status)).map(t=>({taskId:t.id,goalId:t.goalId,status:t.status,objective:t.objective,instruction:'Continue in Codex to inspect and decide.'})),overflow:{tasks:tasks.length>500},limits:{goals:100,tasks:500,agents:500},nativeAccounting:'unavailable unless supplied by the native host'};
+  const reviewers=this.c.beta?this.c.store.db.prepare("SELECT data FROM records WHERE kind='reviewer' AND (? IS NULL OR json_extract(data,'$.goalId')=?) ORDER BY rowid DESC LIMIT 100").all(q.goalId,q.goalId).map(r=>{const {id,taskId,goalId,status,at,finishedAt}=JSON.parse(r.data);return {id,taskId,goalId,status,at:finishedAt??at};}):undefined;
+  const planning=this.c.beta?this.c.store.db.prepare("SELECT data FROM records WHERE kind='planning' AND (? IS NULL OR json_extract(data,'$.goalId')=?) ORDER BY rowid DESC LIMIT 100").all(q.goalId,q.goalId).map(r=>{const {goalId,status,reason}=JSON.parse(r.data);const event=this.c.store.db.prepare("SELECT at FROM events WHERE goal_id=? AND type LIKE 'planning.%' ORDER BY seq DESC LIMIT 1").get(goalId);return {goalId,status,reason,at:event?.at??null};}):undefined;
+  return {version:1,...(this.c.beta?{reviewers,planning}:{}),generatedAt:this.c.now(),cursor,goals,tasks:rows,agents,queue:rows.filter(t=>queueStates.has(t.status)),attention:rows.filter(t=>attentionStates.has(t.status)).map(t=>({taskId:t.id,goalId:t.goalId,status:t.status,objective:t.objective,instruction:'Continue in Codex to inspect and decide.'})),overflow:{tasks:tasks.length>500},limits:{goals:100,tasks:500,agents:500},nativeAccounting:'unavailable unless supplied by the native host'};
  }
  async artifactsList(raw){keys(raw,['taskId'],'artifact query');identifier(raw.taskId,'task ID');return (await this.artifacts.list(raw.taskId,{limit:100})).map(a=>({...a,reference:'artifact-'+a.id}));}
  async evidence(raw){
@@ -100,7 +127,7 @@ export class Observer {
   else if(raw.reference.startsWith('request-')){
    const id=raw.reference.slice(8);identifier(id,'request ID');const row=this.c.store.db.prepare('SELECT * FROM requests WHERE id=?').get(id);if(!row)throw Error('Unknown saved request');this.c.store.get('task',row.task_id);const data=JSON.parse(row.data);partial=row.status!=='completed';provenance='captured';
    const chunks=partial?this.c.store.db.prepare("SELECT json_extract(data,'$.content') AS content FROM events WHERE task_id=? AND type='model.output' AND json_extract(data,'$.requestId')=? ORDER BY seq").all(row.task_id,id).map(r=>typeof r.content==='string'?r.content:'').join(''):null;
-   bytes=Buffer.from(JSON.stringify({status:row.status,partial,result:data.result??null,error:data.error??null,...(partial?{visiblePartial:chunks.slice(0,128*1024),warning:'Incomplete visible output; not a validated action or completed result.'}:{})},null,2));
+   bytes=Buffer.from(JSON.stringify({status:row.status,partial,result:data.result??null,error:data.error??null,...(data.workerProfile?{workerProfile:data.workerProfile}:{}),...(partial?{visiblePartial:chunks.slice(0,128*1024),warning:'Incomplete visible output; not a validated action or completed result.'}:{})},null,2));
   }else if(raw.reference.startsWith('artifact-')){const id=raw.reference.slice(9),record=this.c.store.get('artifact',id);this.c.store.get('task',record.taskId);bytes=(await this.artifacts.read(id)).data;}
   else throw Error('Unknown evidence reference kind');
   return {reference:raw.reference,partial,provenance,...window(bytes,start,length)};
