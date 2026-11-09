@@ -193,18 +193,59 @@ function polishedMain(state,goal,{width,height,color,selected,offset}){
  return [...body,'',quiet('─'.repeat(space)),quiet(clip(keys,space))].map(line=>margin+line).join('\n');
 }
 
-export function renderTerminal(state,{width=80,height=36,color=false,selected=0,picker=null,detail=null,detailOffset=0,offset=0,interactive=false}={}){
+function polishedPicker(state,{width,height,color,picker}){
+ const roomy=width>=55&&height>=24,margin=roomy?'  ':'',space=roomy?Math.min(104,width-4):width;
+ const paint=(value,codes)=>color?`\x1b[${codes}m${value}\x1b[0m`:value;
+ const quiet=value=>paint(value,'2'),bold=value=>paint(value,'1');
+ const clip=(value,size)=>{const wrapped=lines(value,size);return wrapped.length>1?lines(value,size-1)[0].trimEnd()+'…':wrapped[0];};
+ const cells=value=>[...clean(value)].reduce((n,c)=>n+(/[\p{Script=Han}\p{Script=Hangul}\p{Script=Hiragana}\p{Script=Katakana}\p{Extended_Pictographic}]/u.test(c)?2:1),0);
+ const pad=(value,size)=>{const text=clip(value,size);return text+' '.repeat(Math.max(0,size-cells(text)));};
+ const goals=state.snapshot?.goals??[],index=Math.max(0,Math.min(picker,goals.length-1)),goal=goals[index];
+ const count=goals.length?`${index+1}/${goals.length}`:'0/0';
+ const out=[bold(clip(roomy?'▦ Mosaic Beta':'Mosaic Beta',space))];
+ if(height>=18&&state.snapshot?.sourceLabel)out.push(quiet(clip('Watching '+state.snapshot.sourceLabel,space)));
+ if(state.stale)out.push(paint(clip('Disconnected · saved goals may be stale',space),'33'));
+ if(roomy)out.push(quiet('─'.repeat(space)),'');
+ out.push(space<count.length+4?quiet(count):bold(clip('Choose a goal',space-count.length-1))+' '+quiet(count));
+ const preview=[];
+ if(roomy&&goal){
+  preview.push('',bold('Selected goal')+quiet('  ·  d for full details'));
+  const objective=lines(goal.objective,space);
+  preview.push(...objective.slice(0,3).map((line,i)=>i===2&&objective.length>3?clip(line+' …',space):line));
+  preview.push(quiet(clip(`${status(goal.status)}  ·  ${String(goal.mode).replaceAll('_',' ')}  ·  ${goal.taskCount??0} assignments`,space)));
+  preview.push(quiet(clip('ID: '+goal.id,space)));
+ }else if(goal&&height>=8)out.push(quiet(clip(status(goal.status),space)));
+ const footer=roomy?(space>=70?'↑↓ choose  Enter open  d details  PgUp/PgDn jump  Esc back  q quit':'↑↓ Enter  d details  Pg↑/↓ jump  Esc back  q quit'):space>=20?'↑↓ Enter d Esc q':space>=12?'↑↓ d Esc q':'↑↓ d q';
+ const tail=roomy?['',quiet('─'.repeat(space)),quiet(clip(footer,space))]:[quiet(clip(footer,space))];
+ const titleWidth=space-24;
+ if(roomy)out.push('',quiet('  '+pad('Goal',titleWidth)+'  '+pad('Status',10)+'  ID'));
+ const capacity=Math.max(1,Math.min(roomy?12:100,height-out.length-preview.length-tail.length));
+ const start=Math.max(0,Math.min(index-Math.floor(capacity/2),goals.length-capacity));
+ for(const [i,g] of goals.slice(start,start+capacity).entries()){
+  const chosen=i+start===index,marker=chosen?'› ':'  ',title=clip(g.objective,roomy?titleWidth:space-2);
+  const identity=chosen?paint(marker+pad(title,roomy?titleWidth:space-2),'1;36'):marker+pad(title,roomy?titleWidth:space-2);
+  out.push(roomy?identity+'  '+(color?statusColor(pad(status(g.status),10),g.status):pad(status(g.status),10))+'  '+quiet(clean(g.id).slice(0,8)):identity);
+ }
+ if(!goals.length)out.push(quiet(clip('No saved goals yet.',space)));
+ out.push(...preview);
+ const body=out.slice(0,height-tail.length);
+ while(body.length<height-tail.length)body.push('');
+ return [...body,...tail].map(line=>margin+line).join('\n');
+}
+
+export function renderTerminal(state,{width=80,height=36,color=false,selected=0,picker=null,detail=null,detailTitle='Saved evidence',detailOffset=0,offset=0,interactive=false}={}){
  width=Math.max(8,Math.min(300,width));height=Math.max(5,Math.min(200,height));
  const header=(value)=>lines(value,width).map(line=>color?accent(line):line);
  const compact=interactive&&(width<55||height<24);
  const goal=goalFor(state);
+ if(interactive&&picker!==null&&!detail)return polishedPicker(state,{width,height,color,picker});
  if(compact&&picker===null&&!detail)return compactMain(state,goal,{width,height,color,selected,offset});
  if(interactive&&picker===null&&!detail)return polishedMain(state,goal,{width,height,color,selected,offset});
  const out=header(compact?'Mosaic Beta':'Mosaic Beta  /  Terminal observer');
  if(state.snapshot?.sourceLabel)out.push(...lines('Watching '+state.snapshot.sourceLabel,width));
  if(state.snapshot?.sourceHint)out.push(...lines(state.snapshot.sourceHint,width));
  if(state.stale)out.push(...lines(state.snapshot?'Disconnected · last observed state is stale':'Disconnected · coordinator state unknown',width));
- if(picker!==null){
+ if(picker!==null&&!detail){
   out.push(...header('Choose a goal'));
   const goals=state.snapshot?.goals??[];
   const start=compact?Math.max(0,picker-height+5):Math.max(0,picker-1);
@@ -213,7 +254,7 @@ export function renderTerminal(state,{width=80,height=36,color=false,selected=0,
    out.push(...(compact?item.slice(0,1):item.slice(0,2)));
   }
  }else if(detail){
-  out.push(...header('Saved evidence'));
+  out.push(...header(detailTitle));
   const detailLines=detail.split('\n').flatMap(line=>lines(line,width));
   out.push(...detailLines.slice(Math.min(detailOffset,Math.max(0,detailLines.length-1))));
  }else if(!goal){
@@ -242,7 +283,7 @@ export function renderTerminal(state,{width=80,height=36,color=false,selected=0,
    out.push(...lines(`${clock(event.at)} [${event.provenance}] ${eventText(event)}`,width));
   }
  }
- const footer=picker!==null?'↑↓ choose · Enter select · Esc back · q quit':detail?'↑↓ or PgUp/PgDn scroll · Esc back · q quit':interactive?'↑↓ rows · Enter evidence · g goals · PgUp/PgDn feed · q quit':'Approvals and decisions stay in Codex.';
+ const footer=detail?'↑↓ or PgUp/PgDn scroll · Esc back · q quit':picker!==null?'↑↓ choose · Enter select · Esc back · q quit':interactive?'↑↓ rows · Enter evidence · g goals · PgUp/PgDn feed · q quit':'Approvals and decisions stay in Codex.';
  const tail=lines(compact?'↑↓ Esc q':footer,width);
  return [...out.slice(0,Math.max(0,height-tail.length-1)),'',...tail].join('\n');
 }
@@ -299,14 +340,14 @@ export async function runObserver({invoke,input=process.stdin,output=process.std
  }
  const controller=new AbortController(),close=()=>controller.abort();
  const originalRaw=!!input.isRaw,wasFlowing=input.readableFlowing===true;
- let selected=0,picker=null,detail=null,detailOffset=0,offset=0;
+ let selected=0,picker=null,detail=null,detailTitle='Saved evidence',detailOffset=0,offset=0;
  const draw=()=>{
   if(controller.signal.aborted)return;
-  output.write('\x1b[H\x1b[2J'+renderTerminal(observer.state,{width:output.columns,height:output.rows,color:true,interactive:true,selected,picker,detail,detailOffset,offset}));
+  output.write('\x1b[H\x1b[2J'+renderTerminal(observer.state,{width:output.columns,height:output.rows,color:true,interactive:true,selected,picker,detail,detailTitle,detailOffset,offset}));
  };
  const keypress=async(_,key={})=>{
   if(key.name==='q'||key.ctrl&&key.name==='c'){close();return;}
-  if(key.name==='escape'){detail=null;picker=null;draw();return;}
+  if(key.name==='escape'){if(detail)detail=null;else picker=null;draw();return;}
   if(detail){
    const delta={up:-1,down:1,pageup:-10,pagedown:10}[key.name];
    if(delta){detailOffset=Math.max(0,Math.min(4096,detailOffset+delta));draw();}
@@ -316,6 +357,12 @@ export async function runObserver({invoke,input=process.stdin,output=process.std
   if(picker!==null){
    if(key.name==='up')picker=Math.max(0,picker-1);
    if(key.name==='down')picker=Math.min(goals.length-1,picker+1);
+   if(key.name==='pageup')picker=Math.max(0,picker-10);
+   if(key.name==='pagedown')picker=Math.min(goals.length-1,picker+10);
+   if(key.name==='d'&&goals[picker]){
+    const g=goals[picker];detailTitle='Goal details';detailOffset=0;
+    detail=`${g.objective}\n\nStatus: ${status(g.status)}\nWorkflow: ${g.mode}\nAssignments: ${g.taskCount??0}\nDeadline: ${clock(g.deadline)}\nID: ${g.id}`;
+   }
    if(key.name==='return'&&goals[picker]){observer.select(goals[picker].id);picker=null;selected=0;offset=0;}
   }else{
    if(key.name==='g'&&goals.length)picker=Math.max(0,goals.findIndex(g=>g.id===observer.state.goalId));
@@ -325,7 +372,7 @@ export async function runObserver({invoke,input=process.stdin,output=process.std
    if(key.name==='pagedown')offset=Math.max(0,offset-6);
    if(key.name==='return'&&rows[selected]?.evidence){
     const source=observer.state.snapshot?.source;
-    detail='Loading saved evidence…';detailOffset=0;draw();
+    detailTitle='Saved evidence';detail='Loading saved evidence…';detailOffset=0;draw();
     try{
      const evidence=await invoke('observer_evidence',{reference:rows[selected].evidence,length:4096},controller.signal);
      if(source===observer.state.snapshot?.source&&detail==='Loading saved evidence…')detail=`${evidence.provenance} · ${evidence.partial?'partial':'saved'}${evidence.truncated?' · excerpt':''}\n${evidence.text}`;
@@ -343,6 +390,7 @@ export async function runObserver({invoke,input=process.stdin,output=process.std
    const source=observer.state.snapshot?.source;
    await observer.poll(controller.signal);
    if(source!==observer.state.snapshot?.source){selected=0;picker=null;detail=null;detailOffset=0;offset=0;}
+   if(picker!==null)picker=Math.max(0,Math.min(picker,(observer.state.snapshot?.goals.length??0)-1));
    selected=Math.min(selected,Math.max(0,actorRows(observer.state).length-1));draw();
    await delay(pollMs,undefined,{signal:controller.signal}).catch(()=>{});
   }while(!controller.signal.aborted);

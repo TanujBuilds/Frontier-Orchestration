@@ -15,3 +15,7 @@ Inherit the user's terminal font and background. Use terminal palette cyan for M
 3. Run the full suite, review the diff, package a new beta and update the installed copy. Verify installed health and terminal output without dispatching models. Save a local preview and installation handoff.
 
 Review focus: newest handoffs stay visible after wrapping; selected agent status remains readable; footer fits; status is never represented by color alone; source labels and disconnected state remain prominent.
+
+## Goal picker follow-up
+
+The owner identified the full-instruction goal list as confusing. Extend the same compact visual style to goal selection: one clipped title per row, aligned saved status and short ID, a bounded viewport around the selection, and a separate selected-goal preview. Keep the coordinator's ordering and records intact. Add `d` for full scrollable details, Escape back to the picker, and Page Up/Down jumps. Verify long goals at top/middle/end, narrow windows, source/stale warnings, and opening the exact highlighted goal. Package and install as the next beta patch.

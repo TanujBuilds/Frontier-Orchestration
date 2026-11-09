@@ -232,6 +232,41 @@ test('a tight styled frame keeps the newest handoff when only one feed line fits
  assert.match(output,/q quit/);
 });
 
+test('goal picker bounds long rows and keeps the selected goal visible across viewport sizes',()=>{
+ const goals=Array.from({length:25},(_,i)=>({...goal,id:`goal-${i}`,objective:`Project ${i}: `+'Long instructions for the assignment. '.repeat(20),status:i%2?'completed':'active'}));
+ for(const [width,height] of [[20,10],[55,24],[80,30],[160,50]])for(const picker of [0,12,24]){
+  const output=stripVTControlCharacters(renderTerminal({snapshot:{...snapshot,goals},events:[]},{width,height,picker,color:true,interactive:true}));
+  assert.match(output,new RegExp(`Project ${picker}`));
+  assert.match(output,new RegExp(`${picker+1}/25`));
+  assert.ok(output.split('\n').length<=height);
+  assert.ok(output.split('\n').every(line=>[...line].length<=width));
+  assert.match(output.split('\n').at(-1),/q/);
+  if(width>=55){assert.match(output,/Selected goal/);assert.match(output,new RegExp(`ID: goal-${picker}\\b`));}
+ }
+});
+
+test('goal details show the full objective and Escape returns to the picker',async ()=>{
+ const input=new EventEmitter();input.isTTY=true;input.isRaw=false;
+ input.setRawMode=value=>{input.isRaw=value;};input.resume=()=>{};input.pause=()=>{};
+ let firstFrame;
+ const ready=new Promise(resolve=>{firstFrame=resolve;});
+ const frames=[];
+ const output={isTTY:true,columns:80,rows:30,write(value){if(value.includes('Mosaic Beta')){frames.push(stripVTControlCharacters(value));firstFrame();}}};
+ const invoke=async name=>name==='observer_snapshot'?snapshot:{events:[],cursor:101,hasMore:false};
+ const pending=runObserver({input,output,invoke,noColor:false,pollMs:1000});
+ try{
+  await ready;
+  input.emit('keypress','g',{name:'g'});
+  input.emit('keypress','d',{name:'d'});
+  assert.match(frames.at(-1),/Goal details/);
+  assert.match(frames.at(-1),/goal-1/);
+  input.emit('keypress',null,{name:'escape'});
+  assert.match(frames.at(-1),/Choose a goal/);
+  input.emit('keypress','\r',{name:'return'});
+  assert.doesNotMatch(frames.at(-1),/Choose a goal/);
+ }finally{input.emit('keypress','q',{name:'q'});await pending;}
+});
+
 test('passing native candidate checks take precedence over a historical worker check failure',t=>{
  const root=mkdtempSync(path.join(os.tmpdir(),'mosaic-beta-native-check-'));
  let at=1000;
