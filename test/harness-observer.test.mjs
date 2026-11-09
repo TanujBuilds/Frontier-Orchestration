@@ -104,3 +104,31 @@ test('invalidated replacement does not inherit historical review acceptance',t=>
  task.status='awaiting_review';task.result={summary:'Replacement candidate'};task.reviewed=true;f.c.store.put('task',task);
  assert.equal(f.observer.snapshot({}).tasks.find(t=>t.id===task.id).outcome.review,'No recorded review');
 });
+
+test('unchanged observer polls reuse history while clock and committed changes stay visible',t=>{
+ const {c,observer,g,native}=fixture(t);
+ let now=c.now();
+ c.now=()=>now;
+ c.store.put('agent',{id:'idle-agent',goalId:g.id,taskId:native.id,actor:'codex',role:'implementer',lastReport:{summary:'Saved report',status:'running',at:now}});
+ const query={goalId:g.id};
+ const first=observer.snapshot(query);
+ assert.equal(first.agents[0].stale,false);
+ assert.equal(first.goals[0].taskCount,2);
+ const prepare=c.store.db.prepare.bind(c.store.db);
+ let historyQueries=0;
+ c.store.db.prepare=sql=>{
+  if(/FROM (records|events)/i.test(sql))historyQueries++;
+  return prepare(sql);
+ };
+ now+=120001;
+ const later=observer.snapshot(query);
+ assert.equal(later.generatedAt,now);
+ assert.equal(later.agents[0].stale,true);
+ assert.equal(historyQueries,0,'unchanged viewer polls must not read saved history again');
+ later.tasks[0].objective='caller mutation';
+ assert.equal(observer.snapshot(query).tasks[0].objective,first.tasks[0].objective);
+ const task=c.store.get('task',native.id);
+ c.store.tx(()=>c.store.put('task',{...task,status:'accepted'}));
+ assert.equal(observer.snapshot(query).tasks.find(row=>row.id===task.id).status,'accepted');
+ assert.ok(observer.snapshot({actor:'deepseek'}).tasks.every(row=>row.actor==='deepseek'));
+});
