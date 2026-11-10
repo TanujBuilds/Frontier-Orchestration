@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
-import { lstat, realpath } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { lstat, open, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { digest, goalDispatchInputSchema, normalizeGoal } from './contracts.mjs';
@@ -24,7 +25,7 @@ const issue = (code, field, message) => ({ code, field, message });
 
 function sensitivePath(file) {
   return secretPath(file) || file.split('/').some(part =>
-    /^(?:\.envrc|\.docker|\.gnupg|\.kube|\.secrets|id_(?:rsa|dsa|ecdsa|ed25519)(?:\.pub)?|(?:secrets?|credentials?|tokens?)\.(?:json|toml|ya?ml|ini|txt))$/i.test(part));
+    /^(?:\.envrc|\.docker|\.gnupg|\.kube|id_(?:rsa|dsa|ecdsa|ed25519)(?:\.pub)?|\.?(?:secrets?|credentials?|tokens?)(?:\.(?:json|toml|ya?ml|ini|txt))?)$/i.test(part));
 }
 
 function validScope(scope) {
@@ -123,21 +124,67 @@ const gitSettings = [
   'status.submoduleSummary=false', 'status.renames=false', 'protocol.allow=never',
 ];
 
-function checkoutGit(repo) {
+function checkoutGit(repo, { discover = true } = {}) {
   const searchPath = (process.env.PATH ?? '').split(path.delimiter).filter(dir => path.isAbsolute(dir)).join(path.delimiter);
   // Whitelist the environment so Git cannot inherit alternate repository or config selectors.
   const env = {
     PATH: searchPath || '/usr/bin:/bin', LC_ALL: 'C', GIT_OPTIONAL_LOCKS: '0', GIT_CONFIG_NOSYSTEM: '1',
     GIT_CONFIG_GLOBAL: '/dev/null', GIT_ATTR_NOSYSTEM: '1', GIT_NO_LAZY_FETCH: '1',
     GIT_NO_REPLACE_OBJECTS: '1', GIT_TERMINAL_PROMPT: '0', GIT_ALLOW_PROTOCOL: '',
+    ...(discover ? {} : { GIT_DIR: '/dev/null' }),
   };
-  return async (args, settings = []) => {
-    const options = [...gitSettings, ...settings].flatMap(setting => ['-c', setting]);
-    const { stdout } = await runGit('git', ['--no-pager', ...options, ...args], {
+  const options = gitSettings.flatMap(setting => ['-c', setting]);
+  return async (args, input) => {
+    const pending = runGit('git', ['--no-pager', ...options, ...args], {
       cwd: repo, env, encoding: 'utf8', timeout: 3000, maxBuffer: 8 * 1024 * 1024,
     });
+    if (input !== undefined) {
+      pending.child.stdin.on('error', () => {});
+      pending.child.stdin.end(input);
+    }
+    const { stdout } = await pending;
     return stdout;
   };
+}
+
+async function configNames(git, pattern, options = []) {
+  try { return await git(['config', ...options, '--null', '--name-only', '--get-regexp', pattern]); }
+  catch (error) { if (error.code === 1 && !error.stderr) return ''; throw error; }
+}
+
+async function commonGitDir(gitDir) {
+  let pointer;
+  try { pointer = await open(path.join(gitDir, 'commondir'), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
+  catch (error) { if (error.code === 'ENOENT') return gitDir; throw error; }
+  try {
+    const stat = await pointer.stat();
+    const buffer = Buffer.alloc(4097);
+    if (!stat.isFile() || stat.size >= buffer.length) throw Error();
+    const { bytesRead } = await pointer.read(buffer);
+    const value = buffer.toString('utf8', 0, bytesRead).replace(/\r?\n$/, '');
+    if (bytesRead !== stat.size || !value || value !== value.trim() || /[\x00-\x1f\x7f\ufffd]/.test(value)) throw Error();
+    return path.resolve(gitDir, value);
+  } finally { await pointer.close(); }
+}
+
+async function safeGitConfig(repo, dotGit) {
+  const entry = await lstat(dotGit);
+  if (!entry.isDirectory() && (!entry.isFile() || entry.size > 4096)) return false;
+  // Ordinary Git discovery reads config includes before it processes its flags.
+  // Resolve metadata and inspect explicit config files from outside the checkout.
+  const git = checkoutGit(path.parse(repo).root, { discover: false });
+  const gitDir = (await git(['rev-parse', '--resolve-git-dir', dotGit])).replace(/\n$/, '');
+  if (!path.isAbsolute(gitDir)) return false;
+  const common = await commonGitDir(gitDir);
+  const configs = [path.join(common, 'config'), path.join(gitDir, 'config.worktree')];
+  for (const file of configs) {
+    let stat;
+    try { stat = await lstat(file); }
+    catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+    if (!stat.isFile() || stat.size > 1024 * 1024) return false;
+    if (await configNames(git, '^(include|includeif\\..*)\\.path$', ['--file', file, '--no-includes'])) return false;
+  }
+  return true;
 }
 
 async function inspectCheckout(project) {
@@ -145,6 +192,14 @@ async function inspectCheckout(project) {
   let repo, git;
   try {
     repo = await realpath(project.repo);
+  } catch { return failure('unresolved_repository', 'Select the exact root of an accessible Git worktree.'); }
+  try {
+    if (!await safeGitConfig(repo, path.join(repo, '.git'))) throw Error();
+  } catch (error) {
+    if (error.code === 'ENOENT') return failure('unresolved_repository', 'Select the exact root of an accessible Git worktree.');
+    return failure('unsupported_config', 'Select a checkout with verifiable Git metadata and config files without includes or symlinks.');
+  }
+  try {
     git = checkoutGit(repo);
     const root = (await git(['rev-parse', '--show-toplevel'])).replace(/\n$/, '');
     if (await realpath(root) !== repo) throw Error();
@@ -161,27 +216,30 @@ async function inspectCheckout(project) {
 
   try {
     const dirty = () => failure('dirty_repository', 'The selected checkout must be clean, including staged and untracked changes.');
+    const filter = () => failure('unsupported_git_filter', 'Choose a checkout without configured Git clean or process filters or tracked paths using filter attributes.');
     // The worktree probe ignores submodules to avoid entering other checkouts.
     // Compare the cached index separately so this cannot hide staged gitlinks.
     const staged = await git(['diff-index', '--cached', '--name-only', '-z', '--no-renames', '--no-ext-diff', '--no-textconv', '--ignore-submodules=none', baseCommit]);
     if (staged) return dirty();
-    // Git status can run configured clean/process filters when checking a changed stat.
-    // Use only config names, never values, and override all external filter drivers.
-    const filters = await git(['config', '--null', '--name-only', '--get-regexp', '^filter\\..*\\.(clean|process|required)$'])
-      .catch(error => { if (error.code === 1 && !error.stderr) return ''; throw error; });
-    const filterKeys = [...new Set(filters.split('\0').filter(Boolean))];
-    if (filterKeys.some(key => !/^filter\.[a-z0-9._-]+\.(?:clean|process|required)$/i.test(key))) {
-      return failure('unsupported_git_filter', 'Git contains a filter driver name that cannot be safely disabled for inspection.');
-    }
-    const settings = filterKeys.map(key => `${key}=${key.endsWith('.required') ? 'false' : ''}`);
+    // Git status can run clean/process filters when checking a changed stat.
+    // Disabling a transforming filter could make a dirty checkout appear clean.
+    const filters = await configNames(git, '^filter\\..*\\.(clean|process|required)$');
+    if (filters) return filter();
     const index = (await git(['ls-files', '-v', '--stage', '-z'])).split('\0').filter(Boolean);
-    if (index.some(entry => !/^H (?:100644|100755|120000) [0-9a-f]{40} 0\t/.test(entry))) {
+    if (index.some(entry => entry.includes('\ufffd') || !/^H (?:100644|100755|120000) [0-9a-f]{40} 0\t/.test(entry))) {
       return failure('unsupported_index', 'Use a checkout with a complete index and no submodules or hidden tracked changes.');
     }
-    const status = await git(['status', '--porcelain=v1', '-z', '--untracked-files=normal', '--ignore-submodules=all'], settings);
+    const tracked = new Map(index.map(entry => [entry.slice(entry.indexOf('\t') + 1), entry.slice(2, 8)]));
+    // A repository attribute can select a driver from suppressed system/user config.
+    // Use attribute names only, and fail closed even if the driver is unavailable here.
+    if (tracked.size) {
+      const attributes = await git(['check-attr', '--all', '--stdin', '-z'], [...tracked.keys()].join('\0') + '\0');
+      if (attributes.split('\0').some((name, index) => index % 3 === 1 && name === 'filter')) return filter();
+    }
+    const status = await git(['status', '--porcelain=v1', '-z', '--untracked-files=normal', '--ignore-submodules=all']);
     if (status) return dirty();
     if (await head() !== baseCommit) return failure('base_changed', 'The checkout HEAD changed while preparation was reading it.');
-    return { repo, baseCommit, tracked: new Map(index.map(entry => [entry.slice(entry.indexOf('\t') + 1), entry.slice(2, 8)])) };
+    return { repo, baseCommit, tracked };
   } catch { return failure('checkout_unverified', 'Git could not verify the checkout using bounded read-only inspection.'); }
 }
 
@@ -215,7 +273,8 @@ async function resolveAssignment(raw, registry) {
   if (issues.length) return { issues };
   const { repo, baseCommit } = checkout;
   const manifest = { ...raw, modeVersion: mode.version, project: { ...raw.project, repo, baseCommit } };
-  try { normalizeGoal(manifest, registry); }
+  let expectedHash;
+  try { expectedHash = digest(normalizeGoal(manifest, registry)); }
   catch { return { issues: [issue('invalid_manifest', 'manifest', 'Check the remaining fields against the coding goal manifest contract.')] }; }
   for (const name of ['readPaths', 'writePaths']) {
     for (const [index, scope] of raw.project[name].entries()) {
@@ -223,7 +282,7 @@ async function resolveAssignment(raw, registry) {
       if (problem) issues.push(issue('unsafe_scope', `project.${name}.${index}`, problem));
     }
   }
-  return { issues, manifest };
+  return { issues, manifest, expectedHash };
 }
 
 export async function prepareAssignment(c, raw = {}, key) {
@@ -235,11 +294,14 @@ export async function prepareAssignment(c, raw = {}, key) {
   } catch (error) {
     if (error !== unresolved) throw error;
   }
-  const { issues, manifest } = await resolveAssignment(raw, c.registry);
+  const { issues, manifest, expectedHash } = await resolveAssignment(raw, c.registry);
   try {
     return c.store.command(key, command, () => {
       if (issues.length) throw unresolved;
       const goal = c.prepareGoal(manifest, `assignment-goal-${digest(key)}`);
+      if (goal.status !== 'draft' || goal.hash !== expectedHash) {
+        throw Error('Submission conflict: the existing goal is no longer the exact draft.');
+      }
       return { status: 'prepared', goalId: goal.id, hash: goal.hash, summary: assignmentSummary(goal.manifest) };
     });
   } catch (error) {

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { access, mkdir, readFile, symlink, utimes, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, realpath, symlink, utimes, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -172,6 +172,7 @@ test('assignment rejects unsafe path scopes, symlinks, nonmatching bases, and ma
   const secretData = 'SECRET_FILE_CONTENT_SENTINEL';
   await writeFile(outside, outsideData);
   await writeFile(path.join(repo.root, '.env'), secretData);
+  await writeFile(path.join(repo.root, 'src', 'credentials'), secretData);
   await mkdir(path.join(repo.root, 'links'));
   await symlink(outside, path.join(repo.root, 'links', 'external-link'));
   await mkdir(path.join(repo.root, 'unapproved'));
@@ -179,6 +180,9 @@ test('assignment rejects unsafe path scopes, symlinks, nonmatching bases, and ma
   await repo.git('add', '.');
   await repo.git('commit', '-m', 'Add unsafe scope fixtures');
   const manifest = assignment(repo);
+  const broadProject = structuredClone(manifest.project);
+  manifest.project.readPaths[0] = 'src/export.mjs';
+  manifest.project.writePaths = ['src/export.mjs'];
   const variants = [
     { project: { ...manifest.project, readPaths: ['src/', '../outside.txt'] } },
     { project: { ...manifest.project, readPaths: ['src/', outside] } },
@@ -204,43 +208,35 @@ test('assignment rejects unsafe path scopes, symlinks, nonmatching bases, and ma
     );
     assert.doesNotMatch(JSON.stringify(response.body), new RegExp(`${outsideData}|${secretData}`));
   }
+  const broad = await service.call('assignment_prepare', {
+    idempotencyKey: 'bare-credentials-scope', manifest: { ...manifest, project: broadProject },
+  });
+  assert.equal(broad.status, 'needs_input');
+  assert.ok(broad.issues.some(issue => issue.field.startsWith('project.readPaths')), JSON.stringify(broad));
+  assert.ok(!JSON.stringify(broad).includes(secretData));
   assert.equal(await readFile(outside, 'utf8'), outsideData);
   assert.deepEqual(await repositoryBytes(repo.root), before);
   await assertNoExecution(service);
 });
 
-test('dirty repository probing never runs its Git clean filter or filesystem monitor', async t => {
+test('dirty repository probing never runs its Git filesystem monitor', async t => {
   const service = await coordinator(t);
-  const cleanFilter = await repository(service, { name: 'filter-repo' });
-  const fsmonitor = await repository(service, { name: 'fsmonitor-repo' });
-  await writeFile(path.join(cleanFilter.root, '.gitattributes'), 'src/export.mjs filter=assignment\n');
-  await cleanFilter.git('add', '.gitattributes');
-  await cleanFilter.git('commit', '-m', 'Add fixture attributes');
-  const fixtures = [
-    [cleanFilter, 'filter', 'filter.assignment.clean', 'cat'],
-    [fsmonitor, 'fsmonitor', 'core.fsmonitor', 'exit 1'],
-  ];
-  for (const [repo, name, key, command] of fixtures) {
-    const script = path.join(service.root, name);
-    const marker = path.join(service.root, `git-${name}-ran`);
-    await writeFile(script, `#!/bin/sh\nprintf attempted > '${marker}'\n${command}\n`, { mode: 0o700 });
-    await repo.git('config', key, script);
-    const source = path.join(repo.root, 'src', 'export.mjs');
-    const sameSizeEdit = (await readFile(source, 'utf8')).replace('export const', 'export let  ');
-    await writeFile(source, sameSizeEdit);
-    const changedTime = new Date(Date.now() - 60_000);
-    await utimes(source, changedTime, changedTime);
-    const before = await repositoryBytes(repo.root);
-    const result = await service.call('assignment_prepare', {
-      idempotencyKey: `git-probe-${name}`, manifest: assignment(repo, { submissionId: `git-probe-${name}` }),
-    });
-    assert.equal(result.status, 'needs_input');
-    await assert.rejects(access(marker), { code: 'ENOENT' });
-    assert.deepEqual(await repositoryBytes(repo.root), before);
-    // Verify that an ordinary Git status really would exercise the fixture's hook.
-    await repo.git('status', '--porcelain');
-    assert.equal(await readFile(marker, 'utf8'), 'attempted');
-  }
+  const repo = await repository(service);
+  const script = path.join(service.root, 'fsmonitor');
+  const marker = path.join(service.root, 'git-fsmonitor-ran');
+  await writeFile(script, `#!/bin/sh\nprintf attempted > '${marker}'\nexit 1\n`, { mode: 0o700 });
+  await repo.git('config', 'core.fsmonitor', script);
+  await writeFile(path.join(repo.root, 'src', 'export.mjs'), 'modified after configuring the Git helper\n');
+  const before = await repositoryBytes(repo.root);
+  const result = await service.call('assignment_prepare', {
+    idempotencyKey: 'git-probe-fsmonitor', manifest: assignment(repo),
+  });
+  assert.equal(result.status, 'needs_input');
+  await assert.rejects(access(marker), { code: 'ENOENT' });
+  assert.deepEqual(await repositoryBytes(repo.root), before);
+  // Ordinary Git status would exercise this hook.
+  await repo.git('status', '--porcelain');
+  assert.equal(await readFile(marker, 'utf8'), 'attempted');
   await assertNoExecution(service);
 });
 
@@ -410,3 +406,112 @@ test('an ambiguous Git clean-filter name fails closed without executing the filt
   assert.equal(await readFile(marker, 'utf8'), 'attempted');
   await assertNoExecution(service);
 });
+
+test('a fresh assignment key cannot return a revised active goal as prepared', async t => {
+  const service = await coordinator(t);
+  const repo = await repository(service);
+  const manifest = assignment(repo, { mode: 'codex_only' });
+  const input = { idempotencyKey: 'original-assignment', manifest };
+  const prepared = await service.call('assignment_prepare', input);
+  assert.equal(prepared.status, 'prepared');
+  const active = await service.call('goal_activate', {
+    idempotencyKey: 'approved-goal', goalId: prepared.goalId, hash: prepared.hash,
+  });
+  assert.equal(active.status, 'active');
+  const revision = await service.call('goal_revision_prepare', {
+    idempotencyKey: 'prepare-revision', goalId: prepared.goalId, expectedHash: prepared.hash,
+    manifest: {
+      ...manifest, objective: 'Add CSV export with column headings',
+      project: { ...manifest.project, baseCommit: repo.baseCommit, writePaths: ['src/export.mjs'] },
+    },
+  });
+  const revised = await service.call('goal_revision_activate', {
+    idempotencyKey: 'approve-revision', revisionId: revision.id, hash: revision.hash,
+  });
+  assert.equal(revised.status, 'active');
+  assert.equal(revised.version, 2);
+  assert.notEqual(revised.hash, prepared.hash);
+  assert.deepEqual(await service.call('assignment_prepare', input), prepared);
+  const fresh = await service.request('assignment_prepare', { ...input, idempotencyKey: 'fresh-assignment' });
+  assert.equal(fresh.status, 400, JSON.stringify(fresh.body));
+  assert.match(fresh.body.error, /submission|draft|revision/i);
+  const snapshot = await service.call('goal_get');
+  assert.deepEqual(snapshot.goals.map(goal => ({ id: goal.id, hash: goal.hash })), [{ id: prepared.goalId, hash: revised.hash }]);
+  assert.deepEqual(snapshot.events.filter(event => event.type === 'goal.prepared').map(event => event.goal_id), [prepared.goalId]);
+  assert.deepEqual(snapshot.goals[0].tasks, []);
+  assert.deepEqual(snapshot.goals[0].reviewerRuns, []);
+  assert.deepEqual(snapshot.operations, []);
+  assert.deepEqual(service.providerRequests, []);
+  assert.equal(service.savedRequestCount(), 0);
+  await assert.rejects(access(service.codexMarker), { code: 'ENOENT' });
+});
+
+for (const configScope of ['local', 'global']) {
+  test(`a ${configScope} clean filter cannot hide a dirty checkout when raw bytes match HEAD`, async t => {
+    const service = await coordinator(t);
+    const repo = await repository(service);
+    const tracked = 'src/export.mjs';
+    const source = path.join(repo.root, tracked);
+    await writeFile(path.join(repo.root, '.gitattributes'), `${tracked} filter=upper\n`);
+    await repo.git('add', '.gitattributes');
+    await repo.git('commit', '-m', 'Add transforming filter attributes');
+    const script = path.join(service.root, 'transform-filter');
+    const marker = path.join(service.root, 'transform-filter-ran');
+    await writeFile(script, `#!/bin/sh\nprintf attempted > '${marker}'\ntr a-z A-Z\n`, { mode: 0o700 });
+    await repo.git('config', `--${configScope}`, 'filter.upper.clean', script);
+    assert.equal(await repo.git('hash-object', '--no-filters', tracked), await repo.git('rev-parse', `HEAD:${tracked}`));
+    const changedTime = new Date(Date.now() - 60_000);
+    await utimes(source, changedTime, changedTime);
+    const before = await repositoryBytes(repo.root);
+    const result = await service.call('assignment_prepare', {
+      idempotencyKey: 'transform-filter', manifest: assignment(repo),
+    });
+    assert.equal(result.status, 'needs_input');
+    assert.ok(result.issues.some(issue => issue.field === 'project.repo'), JSON.stringify(result));
+    await assert.rejects(access(marker), { code: 'ENOENT' });
+    assert.deepEqual(await repositoryBytes(repo.root), before);
+    assert.match(await repo.git('status', '--porcelain'), /^M src\/export\.mjs$/m);
+    assert.equal(await readFile(marker, 'utf8'), 'attempted');
+    await assertNoExecution(service);
+  });
+}
+
+for (const checkoutKind of ['ordinary', 'linked']) {
+  test(`${checkoutKind} checkout rejects external Git config includes before discovery`, async t => {
+    const service = await coordinator(t);
+    const repo = await repository(service);
+    const externalConfig = path.join(service.root, 'outside.gitconfig');
+    const invalidConfig = '[DUMMY_OUTSIDE_CONFIG_SENTINEL\n';
+    await writeFile(externalConfig, invalidConfig);
+    let checkout = repo.root;
+    let configScope = '--local';
+    if (checkoutKind === 'linked') {
+      const linked = path.join(service.root, 'linked');
+      await repo.git('worktree', 'add', '--detach', linked);
+      checkout = await realpath(linked);
+      await repo.git('config', '--local', 'extensions.worktreeConfig', 'true');
+      configScope = '--worktree';
+    }
+    const beforeInclude = await service.call('assignment_prepare', {
+      idempotencyKey: 'ordinary-config', manifest: assignment({ root: checkout }),
+    });
+    assert.equal(beforeInclude.status, 'prepared');
+    assert.equal(beforeInclude.summary.project.repo, checkout);
+
+    await repo.git('-C', checkout, 'config', configScope, 'include.path', externalConfig);
+    const before = await repositoryBytes(repo.root);
+    const linkedBefore = checkoutKind === 'linked' ? await repositoryBytes(checkout) : null;
+    const result = await service.call('assignment_prepare', {
+      idempotencyKey: 'external-config', manifest: assignment({ root: checkout }, { submissionId: 'external-config' }),
+    });
+    assert.equal(result.status, 'needs_input');
+    assert.ok(result.issues.some(issue => issue.code === 'unsupported_config' && issue.field === 'project.repo'), JSON.stringify(result));
+    assert.ok(!JSON.stringify(result).includes('DUMMY_OUTSIDE_CONFIG_SENTINEL'));
+    assert.equal(await readFile(externalConfig, 'utf8'), invalidConfig);
+    assert.deepEqual(await repositoryBytes(repo.root), before);
+    if (linkedBefore) assert.deepEqual(await repositoryBytes(checkout), linkedBefore);
+    // Ordinary discovery would follow the include and fail parsing the outside file.
+    await assert.rejects(repo.git('-C', checkout, 'rev-parse', '--show-toplevel'), /bad config line/i);
+    await assertNoExecution(service, [beforeInclude.goalId]);
+  });
+}
