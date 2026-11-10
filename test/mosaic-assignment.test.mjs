@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { access, mkdir, readFile, realpath, symlink, utimes, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, realpath, rename, symlink, unlink, utimes, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -515,3 +515,74 @@ for (const checkoutKind of ['ordinary', 'linked']) {
     await assertNoExecution(service, [beforeInclude.goalId]);
   });
 }
+
+for (const metadata of ['exclude', 'attributes', 'info-directory']) {
+  test(`checkout rejects a symlink at Git info metadata ${metadata}`, async t => {
+    const service = await coordinator(t);
+    const repo = await repository(service);
+    const info = path.join(repo.root, '.git', 'info');
+    const safe = await service.call('assignment_prepare', {
+      idempotencyKey: 'regular-metadata', manifest: assignment(repo),
+    });
+    assert.equal(safe.status, 'prepared');
+
+    const contents = metadata === 'attributes' ? 'src/export.mjs filter=proof\n' : 'src/dirty.txt\n';
+    let outside;
+    if (metadata === 'info-directory') {
+      const outsideInfo = path.join(service.root, 'outside-info');
+      await mkdir(outsideInfo);
+      outside = path.join(outsideInfo, 'exclude');
+      await writeFile(outside, contents);
+      await rename(info, path.join(service.root, 'original-info'));
+      await symlink(outsideInfo, info);
+    } else {
+      outside = path.join(service.root, `outside-${metadata}`);
+      await writeFile(outside, contents);
+      const metadataFile = path.join(info, metadata);
+      if (metadata === 'exclude') await unlink(metadataFile);
+      await symlink(outside, metadataFile);
+    }
+    if (metadata !== 'attributes') {
+      await writeFile(path.join(repo.root, 'src', 'dirty.txt'), 'untracked fixture\n');
+    }
+    const before = await repositoryBytes(repo.root);
+    const result = await service.call('assignment_prepare', {
+      idempotencyKey: 'symlink-metadata', manifest: assignment(repo, { submissionId: 'symlink-metadata' }),
+    });
+    assert.equal(result.status, 'needs_input');
+    assert.ok(result.issues.some(issue => issue.code === 'unsupported_config' && issue.field === 'project.repo'), JSON.stringify(result));
+    assert.equal(await readFile(outside, 'utf8'), contents);
+    assert.deepEqual(await repositoryBytes(repo.root), before);
+    if (metadata === 'attributes') {
+      assert.equal(await repo.git('check-attr', 'filter', '--', 'src/export.mjs'), 'src/export.mjs: filter: proof');
+    } else {
+      assert.equal(await repo.git('status', '--porcelain'), '');
+    }
+    await assertNoExecution(service, [safe.goalId]);
+  });
+}
+
+test('Git common metadata traversal preserves the filesystem meaning of symlink and parent components', async t => {
+  const service = await coordinator(t);
+  const repo = await repository(service);
+  const other = await repository(service, { name: 'other-project' });
+  const externalConfig = path.join(service.root, 'outside-common.gitconfig');
+  const invalidConfig = '[DUMMY_COMMON_CONFIG_SENTINEL\n';
+  await writeFile(externalConfig, invalidConfig);
+  await other.git('config', '--local', 'include.path', externalConfig);
+  await symlink(path.join(other.root, '.git', 'refs'), path.join(repo.root, '.git', 'hop'));
+  await writeFile(path.join(repo.root, '.git', 'commondir'), 'hop/..\n');
+  const before = await repositoryBytes(repo.root);
+  const otherBefore = await repositoryBytes(other.root);
+  const result = await service.call('assignment_prepare', {
+    idempotencyKey: 'common-traversal', manifest: assignment(repo),
+  });
+  assert.equal(result.status, 'needs_input');
+  assert.ok(result.issues.some(issue => issue.code === 'unsupported_config' && issue.field === 'project.repo'), JSON.stringify(result));
+  assert.ok(!JSON.stringify(result).includes('DUMMY_COMMON_CONFIG_SENTINEL'));
+  assert.equal(await readFile(externalConfig, 'utf8'), invalidConfig);
+  assert.deepEqual(await repositoryBytes(repo.root), before);
+  assert.deepEqual(await repositoryBytes(other.root), otherBefore);
+  await assert.rejects(repo.git('rev-parse', '--show-toplevel'), /bad config line/i);
+  await assertNoExecution(service);
+});

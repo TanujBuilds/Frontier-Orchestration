@@ -152,6 +152,11 @@ async function configNames(git, pattern, options = []) {
   catch (error) { if (error.code === 1 && !error.stderr) return ''; throw error; }
 }
 
+async function metadataStat(file) {
+  try { return await lstat(file); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+}
+
 async function commonGitDir(gitDir) {
   let pointer;
   try { pointer = await open(path.join(gitDir, 'commondir'), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
@@ -163,26 +168,38 @@ async function commonGitDir(gitDir) {
     const { bytesRead } = await pointer.read(buffer);
     const value = buffer.toString('utf8', 0, bytesRead).replace(/\r?\n$/, '');
     if (bytesRead !== stat.size || !value || value !== value.trim() || /[\x00-\x1f\x7f\ufffd]/.test(value)) throw Error();
-    return path.resolve(gitDir, value);
+    // Resolve the raw path so a symlink followed by .. has Git's meaning.
+    return realpath(path.isAbsolute(value) ? value : `${gitDir}${path.sep}${value}`);
   } finally { await pointer.close(); }
 }
 
-async function safeGitConfig(repo, dotGit) {
+async function safeGitMetadata(repo, dotGit) {
   const entry = await lstat(dotGit);
   if (!entry.isDirectory() && (!entry.isFile() || entry.size > 4096)) return false;
   // Ordinary Git discovery reads config includes before it processes its flags.
   // Resolve metadata and inspect explicit config files from outside the checkout.
   const git = checkoutGit(path.parse(repo).root, { discover: false });
-  const gitDir = (await git(['rev-parse', '--resolve-git-dir', dotGit])).replace(/\n$/, '');
-  if (!path.isAbsolute(gitDir)) return false;
+  const resolved = (await git(['rev-parse', '--resolve-git-dir', dotGit])).replace(/\n$/, '');
+  if (!path.isAbsolute(resolved)) return false;
+  const gitDir = await realpath(resolved);
   const common = await commonGitDir(gitDir);
+  const maxMetadataBytes = 1024 * 1024;
   const configs = [path.join(common, 'config'), path.join(gitDir, 'config.worktree')];
   for (const file of configs) {
-    let stat;
-    try { stat = await lstat(file); }
-    catch (error) { if (error.code === 'ENOENT') continue; throw error; }
-    if (!stat.isFile() || stat.size > 1024 * 1024) return false;
+    const stat = await metadataStat(file);
+    if (!stat) continue;
+    if (!stat.isFile() || stat.size > maxMetadataBytes) return false;
     if (await configNames(git, '^(include|includeif\\..*)\\.path$', ['--file', file, '--no-includes'])) return false;
+  }
+  for (const dir of new Set([common, gitDir])) {
+    const info = path.join(dir, 'info');
+    const stat = await metadataStat(info);
+    if (!stat) continue;
+    if (!stat.isDirectory()) return false;
+    for (const name of ['attributes', 'exclude']) {
+      const file = await metadataStat(path.join(info, name));
+      if (file && (!file.isFile() || file.size > maxMetadataBytes)) return false;
+    }
   }
   return true;
 }
@@ -194,10 +211,10 @@ async function inspectCheckout(project) {
     repo = await realpath(project.repo);
   } catch { return failure('unresolved_repository', 'Select the exact root of an accessible Git worktree.'); }
   try {
-    if (!await safeGitConfig(repo, path.join(repo, '.git'))) throw Error();
+    if (!await safeGitMetadata(repo, path.join(repo, '.git'))) throw Error();
   } catch (error) {
     if (error.code === 'ENOENT') return failure('unresolved_repository', 'Select the exact root of an accessible Git worktree.');
-    return failure('unsupported_config', 'Select a checkout with verifiable Git metadata and config files without includes or symlinks.');
+    return failure('unsupported_config', 'Select a checkout with regular Git config and info metadata, without config includes or symlinks.');
   }
   try {
     git = checkoutGit(repo);
