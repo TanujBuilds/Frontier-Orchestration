@@ -283,12 +283,51 @@ test('a completed legacy verdict can still be processed at the review limit', ()
   assert.equal(row.recovery.requestId,request.id);
 });
 
-test('hash-bound research review remains distinct after a round is reserved', () => {
+test('a hash-bound research candidate with zero approved rounds reports its review blocker', () => {
+  const task = sampleTask('research','awaiting_review',{reviews:0});
+  task.spec = {...task.spec,kind:'research',researchPolicy:{version:3},limits:{reviews:0}};
+  const item = projectTasks([task]).items[0];
+  assert.equal(item.sourceStatus,'awaiting_review');
+  assert.equal(item.status,'blocked');
+  assert.equal(item.reasonCode,'review_budget_exhausted');
+});
+
+test('hash-bound research review remains a wait when reviewer evidence is unavailable', () => {
   const task = sampleTask('research','awaiting_review',{reviews:1,researchReviewTickets:[{id:'reserved'}]});
   task.spec = {...task.spec,kind:'research',researchPolicy:{version:3},limits:{reviews:1}};
   const item = projectTasks([task]).items[0];
   assert.equal(item.status,'waiting_review');
   assert.equal(item.reasonCode,'research_review_required');
+});
+
+test('inspection uses saved reviewer authority at the task and goal review caps', async t => {
+  const {c,task} = await setupConsult(t);
+  const draft = c.prepareGoal({submissionId:'research-cap',objective:'Inspect a saved research proposal',
+    acceptance:['Verified evidence'],mode:'collaborative',environment:'fixture',limits:{reviewAgentRuns:1},
+    researchPolicy:{version:3,finish:'selectors_only',discovery:'search_required',
+      review:{version:1,role:'independent_operator',maxRounds:2,maxRevisions:1,maxCorrectionModelCalls:2,rubricSha256:'a'.repeat(64)}},
+  },'prepare-research');
+  const g = c.activateGoal({goalId:draft.id,hash:draft.hash},'activate-research');
+  const first = task(g,'first-research',{kind:'research',limits:{reviews:1}});
+  const second = task(g,'second-research',{kind:'research',limits:{reviews:2}});
+  c.store.put('backlog_group',makeGroup(g,[first.id,second.id]));
+
+  const run = c.reserveReviewer({taskId:first.id},'reserve-research');
+  // The first snapshot represents a local reserve intent before remote
+  // acknowledgment. The second includes the corresponding saved ticket.
+  c.store.put('task',{...c.store.get('task',first.id),status:'awaiting_review',reviews:1});
+  c.store.put('task',{...c.store.get('task',second.id),status:'awaiting_review'});
+  const items = () => inspect({c,goalId:g.id}).groups[0].items;
+  assert.equal(items()[0].reasonCode,'research_review_required');
+  c.store.put('task',{...c.store.get('task',first.id),
+    researchReviewTickets:[{id:'saved-ticket',nativeReservationId:run.id}]});
+  assert.equal(items()[0].reasonCode,'research_review_required');
+
+  c.finishReviewer({reservationId:run.id,result:{decision:'revise'}},'finish-research');
+  assert.deepEqual(items().map(({sourceStatus,status,reasonCode}) => [sourceStatus,status,reasonCode]),[
+    ['awaiting_review','blocked','review_budget_exhausted'],
+    ['awaiting_review','blocked','reviewer_budget_exhausted'],
+  ]);
 });
 
 test('inspection pages groups in insertion order using a cursor bound to both filters', async t => {

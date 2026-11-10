@@ -9,13 +9,14 @@ const reviewStates = new Set(['awaiting_review','awaiting_legacy_review','legacy
 const deadlineReasons = new Set(['Original deadline reached; saved evidence retained','Deadline reached']);
 const short = value => typeof value === 'string' ? value.slice(0,240) : null;
 const state = (status,reasonCode,explanation) => ({status,reasonCode,explanation});
+const isHashBoundResearch = spec => spec.kind === 'research' && spec.researchPolicy?.version === 3;
 
 function ownsWorkerTask(task, {workerLease}) {
   return task.owner && task.ownerLease && task.interruptedOwner !== task.owner &&
     workerLease?.token === task.owner && workerLease.generation === task.ownerLease;
 }
 
-function taskState(task, {goal, byId, hostState, request, now, deadline}) {
+function taskState(task, {goal, byId, hostState, request, researchReview, now, deadline}) {
   const {status, spec, id} = task;
   const actor = task.executionActor ?? spec.actor;
   const workerOwns = ownsWorkerTask(task,hostState);
@@ -140,11 +141,18 @@ function taskState(task, {goal, byId, hostState, request, now, deadline}) {
     if (status === 'awaiting_review') {
       // Research consumes a round on reservation and can submit a saved
       // ticket after reaching its round limit.
-      const hashBoundResearch = spec.kind === 'research' && spec.researchPolicy?.version === 3;
+      const hashBoundResearch = isHashBoundResearch(spec);
       if (review !== 'operator' || hashBoundResearch && mode.id !== 'collaborative') {
         return state('blocked','mode_review_unavailable','The current approved mode prohibits the review required by this saved result.');
       }
       if (hashBoundResearch) {
+        const cap = Math.min(2,spec.limits?.reviews);
+        if (cap === 0 || researchReview?.reserved === false && task.reviews >= cap) {
+          return state('blocked','review_budget_exhausted','The approved research review allowance is exhausted. Inspect the saved candidate through task_get.');
+        }
+        if (researchReview?.reserved === false && researchReview.total >= goal.manifest.limits?.reviewAgentRuns) {
+          return state('blocked','reviewer_budget_exhausted','The goal’s approved reviewer-run allowance is exhausted. Inspect the saved candidate through task_get.');
+        }
         return state('waiting_review','research_review_required','Inspect task_get for the hash-bound research candidate and its saved review tickets.');
       }
       if (task.reviews >= spec.limits?.reviews) {
@@ -193,7 +201,7 @@ function projectTask(ref, context) {
   const deadlineValue = Number.isFinite(deadline) ? deadline : null;
   const saved = evidence.get(task.id);
   const request = saved?.request?.pending && ownsWorkerTask(task,context.hostState) ? null : saved?.request??null;
-  const projected = taskState(task,{...context,request,deadline:deadlineValue});
+  const projected = taskState(task,{...context,request,researchReview:saved?.researchReview,deadline:deadlineValue});
   const priority = task.priority ?? task.spec.priority ?? null;
   const effectivePriority = prioritiesByRank[priorities.get(task.id)] ?? null;
   const blocker = task.firstBlocker;
@@ -276,6 +284,9 @@ function groupEvidence(store, goal, tasks) {
     ORDER BY rowid DESC LIMIT 1`);
   const savedResponse = store.db.prepare(`SELECT id,json_extract(data,'$.savedAt') AS at
     FROM requests WHERE task_id=? AND kind='model' AND status='completed' ORDER BY rowid DESC LIMIT 1`);
+  const reviewers = store.db.prepare(`SELECT COUNT(*) AS total, MAX(
+    CASE WHEN json_extract(data,'$.taskId')=? AND json_extract(data,'$.status')='reserved' THEN 1 ELSE 0 END
+    ) AS reserved FROM records WHERE kind='reviewer' AND json_extract(data,'$.goalId')=?`);
   return new Map(tasks.map(task => {
     const reviewKey = task.checkpoint?.legacyReviewKey;
     const review = reviewKey ? reviewRequest.get(task.id,reviewKey) : null;
@@ -292,7 +303,9 @@ function groupEvidence(store, goal, tasks) {
       const response = savedResponse.get(task.id);
       if (response) checkpoint = {kind:'response_saved',requestId:response.id,at:response.at};
     }
-    return [task.id,{request,checkpoint}];
+    const reviewer = task.status === 'awaiting_review' && isHashBoundResearch(task.spec) ? reviewers.get(task.id,task.goalId) : null;
+    const researchReview = reviewer ? {total:reviewer.total,reserved:reviewer.reserved === 1} : null;
+    return [task.id,{request,checkpoint,researchReview}];
   }));
 }
 
