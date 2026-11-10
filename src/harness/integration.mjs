@@ -5,10 +5,85 @@ import { NativeCandidates } from './native-candidates.mjs';
 import { Journal } from '../project/journal.mjs';
 import { Workspace,inspectRepository } from '../project/workspace.mjs';
 import { CheckRunner } from '../project/sandbox.mjs';
-import { matches,protectedPath,digest as fileDigest } from '../project/contracts.mjs';
+import { matches,protectedPath,secretPath,digest as fileDigest } from '../project/contracts.mjs';
 import { git } from '../project/process.mjs';
 import { CodingAdapter } from './coding.mjs';
 import { digest,identifier,text } from './contracts.mjs';
+import { assertBehavioralChecks,behavioralModeHash,deriveBehavioralEvidence,readBehavioralFileModes } from './behavioral-validation.mjs';
+
+function behavioralEvidenceFor(project, checkSpecs, checks, snapshot, modes){
+ const executableModesHash=modes?behavioralModeHash(modes):undefined;
+ return deriveBehavioralEvidence(project,{checks,checkIds:checkSpecs.map(check=>check.id),snapshot,executableModesHash});
+}
+
+function assertCheckpointSnapshot(checkpoint,snapshot){
+ if(digest(checkpoint.snapshot)!==digest(snapshot))throw Error('Checkpoint snapshot differs from the protected check run');
+}
+
+function checkedPath(workspace,file){
+ return !secretPath(file)&&!file.startsWith('dist/')&&!file.startsWith('.overnight-output/')&&matches(file,workspace.manifest.permissions.readPaths);
+}
+
+function checkedFileModes(workspace,snapshot){
+ return readBehavioralFileModes(workspace,Object.keys(snapshot).filter(file=>checkedPath(workspace,file)));
+}
+
+async function assertCheckedModes(workspace,snapshot,modes){
+ const current=await checkedFileModes(workspace,snapshot);
+ if(current.size!==modes.size||[...modes].some(([file,mode])=>current.get(file)!==mode))throw Error('Executable bit changed after the protected check snapshot');
+}
+
+async function assertCheckoutConfig(workspace,beforeCommit){
+ const root=workspace.root;
+ const autocrlf=await git(root,'config','--type=bool-or-str','--default','false','--get','core.autocrlf');
+ const eol=(await git(root,'config','--default','native','--get','core.eol')).toLowerCase();
+ if(autocrlf==='true')throw Error('Git checkout core.autocrlf selects CRLF; cannot bind the checked bytes to a commit');
+ if(autocrlf.toLowerCase()!=='input'&&(eol==='crlf'||eol==='native'&&process.platform==='win32'))throw Error('Git checkout core.eol selects CRLF; cannot bind the checked bytes to a commit');
+ if(beforeCommit&&await git(root,'config','--type=bool','--default','true','--get','core.filemode')==='false')throw Error('Git core.filemode=false prevents binding the checked executable bit to a commit');
+}
+
+async function checkedBlobIds(workspace,snapshot,modes,{beforeCommit=false}={}){
+ await assertCheckoutConfig(workspace,beforeCommit);
+ const files=[...modes.keys()],ids=new Map();
+ for(let start=0;start<files.length;start+=32){
+  const batch=files.slice(start,start+32);
+  // --all reports even a driver literally named "unset" or "unspecified".
+  // Inspect attributes without executing a clean or checkout conversion.
+  const attributes=(await git(workspace.root,'check-attr','--all','-z','--',...batch)).split('\0');
+  for(let i=1;i<attributes.length;i+=3){
+   const name=attributes[i],value=attributes[i+1];
+   if(name==='filter')throw Error('Git filter attribute prevents binding checked bytes to a commit');
+   if(name==='ident'||name==='working-tree-encoding'||name==='eol'&&value.toLowerCase()==='crlf')throw Error('Git checkout attribute '+name+'='+value+' prevents binding checked bytes to a commit');
+  }
+  const raw=(await git(workspace.root,'hash-object','--no-filters','--',...batch)).split('\n');
+  if(raw.length!==batch.length)throw Error('Cannot verify commit bytes against the checked snapshot');
+  if(beforeCommit){
+   const clean=(await git(workspace.root,'hash-object','--',...batch)).split('\n');
+   if(clean.length!==raw.length||raw.some((id,index)=>id!==clean[index]))throw Error('Git normalization would commit bytes different from the checked snapshot');
+  }
+  batch.forEach((file,index)=>ids.set(file,raw[index]));
+ }
+ await workspace.assertSnapshot(snapshot);
+ await assertCheckedModes(workspace,snapshot,modes);
+ return ids;
+}
+
+async function assertCheckedCommit(workspace,checkpoint,snapshot,modes){
+ assertCheckpointSnapshot(checkpoint,snapshot);
+ // CheckRunner reads working bytes, whereas Git can commit transformed bytes.
+ const checked=await checkedBlobIds(workspace,snapshot,modes);
+ const tree=new Map();
+ for(const entry of (await git(workspace.root,'ls-tree','-r','-z',checkpoint.commit)).split('\0').filter(Boolean)){
+  const tab=entry.indexOf('\t'),file=entry.slice(tab+1);
+  if(checkedPath(workspace,file)){
+   const [mode,,blob]=entry.slice(0,tab).split(' ');
+   tree.set(file,{mode,blob});
+  }
+ }
+ if(tree.size!==checked.size||[...checked].some(([file,blob])=>tree.get(file)?.blob!==blob))throw Error('Commit bytes differ from the checked snapshot; inspect Git filters and line endings');
+ if([...modes].some(([file,mode])=>tree.get(file).mode!==mode))throw Error('Commit executable bit differs from the protected check snapshot');
+ if(await git(workspace.root,'rev-parse','HEAD')!==checkpoint.commit)throw Error('Commit changed after checking the snapshot');
+}
 
 export class Integration {
  constructor({c,checksFactory,config={}}){this.c=c;this.checksFactory=checksFactory;this.config=config;this.inflight=new Map();this.nativeCandidates=new NativeCandidates(this);}
@@ -62,9 +137,26 @@ export class Integration {
  }
  async applyChanges(workspace,changes,key,writePaths){await workspace.apply(key,{writePaths},await this.prepareChanges(workspace,changes));}
  currentCandidate(t){
-  const current=this.c.liveTask(t),identity=x=>({goalVersion:x.goalVersion,hash:x.hash,result:x.result,native:x.native?{generationId:x.native.generationId??x.id,round:x.native.round,commit:x.native.commit??null,baseCommit:x.native.baseCommit??null}:null});
+  const current=this.c.liveTask(t),identity=x=>({goalVersion:x.goalVersion,hash:x.hash,result:x.result,native:x.native?{generationId:x.native.generationId??x.id,round:x.native.round,commit:x.native.commit??null,baseCommit:x.native.baseCommit??null}:null,legacyBehavioralReview:x.legacyBehavioralReview??null});
   if(!['awaiting_review','ready_to_integrate'].includes(current.status)||current.owner||current.native?.writerActive||digest(identity(current))!==digest(identity(t)))throw Error('Candidate state or approved generation changed before integration');
   return current;
+ }
+ async checkedCandidateSnapshot(candidate,task,goal,snapshot,modes){
+  if(task.native?.layout==='candidate_v1'){
+   const checkpoint=candidate.journal.last('stage.accepted');
+   if(!checkpoint||checkpoint.commit!==task.native.commit||await git(candidate.workspace.root,'rev-parse','HEAD')!==task.native.commit)throw Error('Native candidate commit changed after checks');
+   assertCheckpointSnapshot(checkpoint,snapshot);
+   return snapshot;
+  }
+  // Worker results expose only the approved readable portion of the snapshot.
+  const scoped=Object.fromEntries([...modes.keys()].map(file=>[file,snapshot[file]]));
+  if(!task.result?.snapshot||task.result.baseCommit!==candidate.manifest.baseCommit||digest(scoped)!==digest(task.result.snapshot))throw Error('Candidate snapshot changed after its saved checks');
+  if(goal.manifest.mode.review==='legacy'){
+   const binding=task.legacyBehavioralReview;
+   if(binding?.approvalHash!==goal.hash||binding.taskHash!==task.hash||binding.baseCommit!==candidate.manifest.baseCommit||binding.snapshotHash!==digest(scoped))throw Error('Legacy review does not match the approved candidate snapshot');
+   if(binding.executableModesHash!==behavioralModeHash(modes))throw Error('Legacy review does not match the candidate executable bits');
+  }
+  return scoped;
  }
  async accept(input,key){return this.effect(key,{op:'integration.accept',...input},async()=>{
   let t=this.c.getTask(input.taskId),g=this.c.store.get('goal',t.goalId);
@@ -76,14 +168,32 @@ export class Integration {
   if(g.integrationOwner&&g.integrationOwner!==t.id)throw Error('Native Codex task owns integration workspace');
   const candidate=await this.candidate(t),releaseCandidate=await candidate.journal.lock();
   try{
-   t=this.currentCandidate(t);await candidate.workspace.recover();const checks=this.checks(candidate.workspace);await checks.verify();const candidateChecks=await checks.run(candidate.manifest.permissions.checks,`accept-${t.id}`);
+   t=this.currentCandidate(t);await candidate.workspace.recover();
+   const project=g.manifest.project,candidateSnapshot=project.behavioralChecks?await candidate.workspace.snapshot():null;
+   const candidateModes=candidateSnapshot?await checkedFileModes(candidate.workspace,candidateSnapshot):null;
+   const checkedSnapshot=candidateSnapshot?await this.checkedCandidateSnapshot(candidate,t,g,candidateSnapshot,candidateModes):null;
+   const checks=this.checks(candidate.workspace),candidateCheckSpecs=candidate.manifest.permissions.checks;
+   await checks.verify();const candidateChecks=await checks.run(candidateCheckSpecs,`accept-${t.id}`);
+   if(candidateSnapshot){
+    await candidate.workspace.assertSnapshot(candidateSnapshot);
+    await assertCheckedModes(candidate.workspace,candidateSnapshot,candidateModes);
+   }
    if(!candidateChecks.every(x=>x.passed))throw Error('Candidate checks no longer pass');
+   const candidateBehavioralEvidence=behavioralEvidenceFor(project,candidateCheckSpecs,candidateChecks,checkedSnapshot,candidateModes);
+   assertBehavioralChecks(candidateBehavioralEvidence);
    t=this.currentCandidate(t);const candidateStage=t.integrationFailures?.length?`candidate-repair-${t.integrationFailures.length}`:'candidate';
+   if(candidateSnapshot&&t.native?.layout!=='candidate_v1')await checkedBlobIds(candidate.workspace,candidateSnapshot,candidateModes,{beforeCommit:true});
    const checkpoint=t.native?.layout==='candidate_v1'?{commit:t.native.commit,snapshot:await candidate.workspace.snapshot()}:await candidate.journal.memo(`${candidateStage}/checkpoint`,()=>candidate.workspace.checkpoint({id:candidateStage,writePaths:t.spec.permissions.writePaths}));
+   if(candidateSnapshot)await assertCheckedCommit(candidate.workspace,checkpoint,candidateSnapshot,candidateModes);
    if(!candidate.journal.events.some(e=>e.type==='stage.accepted'&&e.data.commit===checkpoint.commit))await candidate.journal.append('stage.accepted',{stageId:candidateStage,...checkpoint});
    const target=await this.lockedGoal(g.id,{refuseLegacy:true,integrationTaskId:t.id}),release=target.release;
    try{
     t=this.currentCandidate(t);await target.workspace.recover();const changes=await this.changes(candidate.workspace,candidate.manifest.baseCommit,t.spec.permissions.writePaths);
+    if(candidateSnapshot){
+     await candidate.workspace.assertSnapshot(candidateSnapshot);
+     await assertCheckedModes(candidate.workspace,candidateSnapshot,candidateModes);
+     if(await git(candidate.workspace.root,'rev-parse','HEAD')!==checkpoint.commit)throw Error('Candidate commit changed before import');
+    }
     await this.prepareChanges(target.workspace,changes);
     // Fence the async preparation against approval/rebind before reserving the
     // target. The persisted reservation then prevents either change during import.
@@ -101,13 +211,24 @@ export class Integration {
      await target.journal.append('integration.import.intent',{key:importKey,taskId:t.id,candidateCommit:checkpoint.commit,baseCommit:await git(target.workspace.root,'rev-parse','HEAD'),snapshotBefore:await target.workspace.snapshot(),changes:captured});
     }
     await this.applyChanges(target.workspace,changes,importKey,t.spec.permissions.writePaths);
-    const runner=this.checks(target.workspace);await runner.verify();const results=await runner.run(effectiveIntegrationChecks(this.c,t,g.manifest),`integrate-${t.id}`);
-    await target.journal.append('integration.checks',{key:importKey,checks:results,snapshot:await target.workspace.snapshot()});
+    const checkSpecs=effectiveIntegrationChecks(this.c,t,g.manifest),snapshotBeforeChecks=project.behavioralChecks?await target.workspace.snapshot():null;
+    const combinedModes=snapshotBeforeChecks?await checkedFileModes(target.workspace,snapshotBeforeChecks):null;
+    const runner=this.checks(target.workspace);await runner.verify();const results=await runner.run(checkSpecs,`integrate-${t.id}`);
+    const snapshot=await target.workspace.snapshot();
+    if(snapshotBeforeChecks){
+     if(digest(snapshot)!==digest(snapshotBeforeChecks))throw Error('Combined snapshot changed during protected checks');
+     await assertCheckedModes(target.workspace,snapshot,combinedModes);
+    }
+    const behavioralEvidence=behavioralEvidenceFor(project,checkSpecs,results,snapshot,combinedModes);
+    await target.journal.append('integration.checks',{key:importKey,checks:results,snapshot,...(behavioralEvidence?{behavioralEvidence}:{})});
     if(!results.every(x=>x.passed))throw Error('Integrated checks failed');
+    assertBehavioralChecks(behavioralEvidence);
     t=this.currentCandidate(t);
+    if(behavioralEvidence)await checkedBlobIds(target.workspace,snapshot,combinedModes,{beforeCommit:true});
     const stage=`task-${t.id}-${checkpoint.commit}`,imported=await target.journal.memo(`${stage}/checkpoint`,()=>target.workspace.checkpoint({id:stage,writePaths:t.spec.permissions.writePaths}));
+    if(behavioralEvidence)await assertCheckedCommit(target.workspace,imported,snapshot,combinedModes);
     if(!target.journal.events.some(e=>e.type==='stage.accepted'&&e.data.stageId===stage))await target.journal.append('stage.accepted',{stageId:stage,...imported});
-    this.c.store.tx(()=>{const current=this.currentCandidate(t);current.status='accepted';if(current.native?.layout==='candidate_v1')current.native.status='integrated';current.integration={commit:imported.commit,candidateCommit:checkpoint.commit,worktree:target.workspace.root,checks:results,review:g.manifest.mode.review==='checks'?'none':g.manifest.mode.review==='legacy'?'codex_legacy':'codex_operator'};this.c.store.put('task',current);const goal=this.c.store.get('goal',g.id);goal.integrationPending=null;this.c.store.put('goal',goal);this.c.emit('task.integrated',g.id,t.id,current.integration);});
+    this.c.store.tx(()=>{const current=this.currentCandidate(t);current.status='accepted';if(current.native?.layout==='candidate_v1')current.native.status='integrated';current.integration={commit:imported.commit,candidateCommit:checkpoint.commit,worktree:target.workspace.root,checks:results,review:g.manifest.mode.review==='checks'?'none':g.manifest.mode.review==='legacy'?'codex_legacy':'codex_operator',...(behavioralEvidence?{candidateBehavioralEvidence,behavioralEvidence}:{})};this.c.store.put('task',current);const goal=this.c.store.get('goal',g.id);goal.integrationPending=null;this.c.store.put('goal',goal);this.c.emit('task.integrated',g.id,t.id,current.integration);});
     return this.c.getTask(t.id);
    }finally{await release();}
   }finally{await releaseCandidate();}
@@ -151,11 +272,21 @@ export class Integration {
    const snapshot=await target.workspace.snapshot(),before=t.native.startSnapshot;
    for(const f of new Set([...Object.keys(snapshot),...Object.keys(before)]))if(snapshot[f]!==before[f]&&(protectedPath(f)||!matches(f,t.spec.permissions.writePaths)))throw Error('Native change outside approved scope or protected checks');
    await target.journal.append('native.adopted',{taskId:t.id,snapshot});
-   const runner=this.checks(target.workspace);await runner.verify();const results=await runner.run(g.manifest.project.checks,`native-${t.id}`);if(!results.every(x=>x.passed))throw Error('Native checks failed');
+   const project=g.manifest.project,modes=project.behavioralChecks?await checkedFileModes(target.workspace,snapshot):null;
+   const runner=this.checks(target.workspace);await runner.verify();const results=await runner.run(project.checks,`native-${t.id}`);
+   if(!results.every(x=>x.passed))throw Error('Native checks failed');
+   const behavioralEvidence=behavioralEvidenceFor(project,project.checks,results,snapshot,modes);
+   if(behavioralEvidence){
+    await target.workspace.assertSnapshot(snapshot);
+    await assertCheckedModes(target.workspace,snapshot,modes);
+   }
+   assertBehavioralChecks(behavioralEvidence);
    this.c.liveTask(t);
+   if(behavioralEvidence)await checkedBlobIds(target.workspace,snapshot,modes,{beforeCommit:true});
    const stage=`native-${t.id}`,checkpoint=await target.journal.memo(`${stage}/checkpoint`,()=>target.workspace.checkpoint({id:stage,writePaths:t.spec.permissions.writePaths}));
+   if(behavioralEvidence)await assertCheckedCommit(target.workspace,checkpoint,snapshot,modes);
    if(!target.journal.events.some(e=>e.type==='stage.accepted'&&e.data.stageId===stage))await target.journal.append('stage.accepted',{stageId:stage,...checkpoint});
-   this.c.store.tx(()=>{const current=this.c.liveTask(t);const goal=this.c.store.get('goal',g.id);if(current.status!=='codex_active'||goal.integrationOwner!==t.id)throw Error('Native task ownership changed');current.status='accepted';current.result={summary:input.summary,checks:results};current.integration={commit:checkpoint.commit,worktree:target.workspace.root,checks:results,review:'codex_native'};this.c.store.put('task',current);goal.integrationOwner=null;this.c.store.put('goal',goal);this.c.emit('task.native_finished',g.id,t.id,current.integration);});return this.c.getTask(t.id);
+   this.c.store.tx(()=>{const current=this.c.liveTask(t);const goal=this.c.store.get('goal',g.id);if(current.status!=='codex_active'||goal.integrationOwner!==t.id)throw Error('Native task ownership changed');current.status='accepted';current.result={summary:input.summary,checks:results};current.integration={commit:checkpoint.commit,worktree:target.workspace.root,checks:results,review:'codex_native',...(behavioralEvidence?{behavioralEvidence}:{})};this.c.store.put('task',current);goal.integrationOwner=null;this.c.store.put('goal',goal);this.c.emit('task.native_finished',g.id,t.id,current.integration);});return this.c.getTask(t.id);
   }finally{await release();}
  });}
  async releaseNative(input,key){return this.effect(key,{op:'native.release',...input},async()=>{
