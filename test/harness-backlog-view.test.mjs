@@ -248,6 +248,41 @@ test('a rebound consult preserves evidence when the revised mode prohibits opera
   assert.equal(item.recovery.lastVerifiedCheckpoint.kind,'result_saved');
 });
 
+const legacyGoal = {...sampleGoal,manifest:{mode:{id:'overnight_review',version:1,actors:['deepseek'],review:'legacy'}}};
+
+test('legacy review with no request allowance reports the saved budget blocker', () => {
+  const task = sampleTask('legacy','awaiting_legacy_review',{spent:{codexReview:0}});
+  task.spec.limits = {reviews:0};
+  const row = projectTasks([task],{goal:legacyGoal}).items[0];
+  assert.equal(row.sourceStatus,'awaiting_legacy_review');
+  assert.equal(row.status,'blocked');
+  assert.equal(row.reasonCode,'review_budget_exhausted');
+});
+
+test('a rebound legacy review is blocked when the current mode prohibits it', () => {
+  const goal = {...legacyGoal,version:3,hash:'revised',manifest:{mode:{id:'deepseek_only',actors:['deepseek'],review:'checks'}}};
+  const task = sampleTask('legacy','awaiting_legacy_review',{goalVersion:goal.version,spent:{codexReview:0}});
+  task.spec.limits = {reviews:1};
+  const group = makeGroup(legacyGoal,[task.id]);
+  const result = projectTasks([task],{goal,group});
+  assert.equal(result.stale,true);
+  assert.equal(result.items[0].sourceStatus,'awaiting_legacy_review');
+  assert.equal(result.items[0].status,'blocked');
+  assert.equal(result.items[0].reasonCode,'mode_review_unavailable');
+});
+
+test('a completed legacy verdict can still be processed at the review limit', () => {
+  const task = sampleTask('legacy','legacy_reviewing',{spent:{codexReview:1},checkpoint:{legacyReviewKey:'legacy-review-1'}});
+  task.spec.limits = {reviews:1};
+  const request = {id:'completed-review',kind:'codexReview',outcome:'completed'};
+  const evidence = new Map([[task.id,{request}]]);
+  const row = projectTasks([task],{goal:legacyGoal,evidence}).items[0];
+  assert.equal(row.sourceStatus,'legacy_reviewing');
+  assert.equal(row.status,'waiting_review');
+  assert.equal(row.reasonCode,'saved_review_pending');
+  assert.equal(row.recovery.requestId,request.id);
+});
+
 test('hash-bound research review remains distinct after a round is reserved', () => {
   const task = sampleTask('research','awaiting_review',{reviews:1,researchReviewTickets:[{id:'reserved'}]});
   task.spec = {...task.spec,kind:'research',researchPolicy:{version:3},limits:{reviews:1}};

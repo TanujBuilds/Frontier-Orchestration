@@ -152,9 +152,16 @@ function taskState(task, {goal, byId, hostState, request, now, deadline}) {
       }
       return state('waiting_review','operator_review_required','The saved candidate needs an operator review before acceptance.');
     }
-    return state('waiting_review',request?.outcome === 'completed' ? 'saved_review_pending' : 'legacy_review_pending',
-      request?.outcome === 'completed' ? 'A review response is saved and awaits coordinator processing.' :
-        'The candidate awaits independent review under the approved mode.');
+    if (review !== 'legacy') {
+      return state('blocked','mode_review_unavailable','The current approved mode prohibits the review required by this saved result.');
+    }
+    if (request?.kind === 'codexReview' && request.outcome === 'completed') {
+      return state('waiting_review','saved_review_pending','A review response is saved and awaits coordinator processing.');
+    }
+    if (task.spent?.codexReview >= spec.limits?.reviews) {
+      return state('blocked','review_budget_exhausted','The original background review allowance is spent. Inspect the saved result through task_get.');
+    }
+    return state('waiting_review','legacy_review_pending','The candidate awaits independent review under the approved mode.');
   }
   if (goal.manifest.mode.actors && !goal.manifest.mode.actors.includes(actor)) {
     return state('blocked','mode_actor_unavailable','The approved mode does not permit this execution actor.');
