@@ -14,10 +14,12 @@ const sections = {
 
 export function renderMissionMarkdown(view) {
   const lines = ['# ' + label(view.title ?? 'Research mission'), ''];
-  if (view.environment === 'fixture') lines.push('**Fixture with simulated providers and review.**', '');
+  if (view.environment === 'fixture') lines.push('**Fixture research environment.**', '');
   if (view.historical) lines.push('**Archived candidate.** The task may have a newer candidate.', '');
   lines.push(
-    line('Status', view.status + ' (' + view.reasonCode + ')'), line('Task', view.taskId),
+    line('Status', view.status + ' (' + view.reasonCode + ')'),
+    ...(view.collectionReason ? [line('Collection reason', view.collectionReason)] : []),
+    line('Task', view.taskId),
     line('Question', view.question), line('Scope', view.scope), line('Requested output', view.outputShape),
     line('As of', view.asOf), line('Generated', view.generatedAt), line('Source revision', view.sourceRevision),
     '', '## Independent review', '',
