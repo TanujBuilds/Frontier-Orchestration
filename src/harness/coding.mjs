@@ -20,8 +20,10 @@ const freshReadRequired='Stale edit context requires fresh read_files before sub
 const codeKey=cp=>`code-${cp.attempt}-${cp.exchange}`;
 const checkKey=cp=>`harness-attempt-${cp.attempt}/checks`;
 
-function approvedSnapshot(snapshot,permissions){
- return Object.fromEntries(Object.entries(snapshot).filter(([file])=>!secretPath(file)&&matches(file,permissions.readPaths)));
+function assertCurrentEditIntents(events,scopeSequence){
+ const applied=new Set(events.filter(event=>event.type==='edits.applied').map(event=>event.data.key));
+ const pending=events.some(event=>event.type==='edits.intent'&&event.sequence<scopeSequence&&!applied.has(event.data.key));
+ if(pending)throw Error('An interrupted edit intent predates the current approved scope. Inspect the preserved worktree and journal before continuing.');
 }
 
 function gateFeedback(task,cp){
@@ -79,12 +81,14 @@ export class CodingAdapter {
    const permissionsHash=digest(manifest.permissions);
    const manifests=journal.events.filter(event=>event.type==='harness.manifest');
    const previousPermissions=manifests.length>1;
+   const scopeSequence=manifests.at(-1).sequence;
+   if(previousPermissions)assertCurrentEditIntents(journal.events,scopeSequence);
    const boundToEarlierScope=cp.repairPermissionsHash&&cp.repairPermissionsHash!==permissionsHash;
    if(boundToEarlierScope||!cp.repairPermissionsHash&&previousPermissions){
     // Prior diagnostics stay in the journal. Pending actions cannot use the old approval.
     const key=codeKey(cp);
     const context=journal.events.findLast(event=>event.type==='harness.context'&&event.data.key===key);
-    const oldContext=context&&context.sequence<manifests.at(-1).sequence;
+    const oldContext=context&&context.sequence<scopeSequence;
     const pendingResult=phase==='apply'||phase==='checks';
     const discardPendingResult=pendingResult&&(boundToEarlierScope||oldContext);
     const discardPendingModel=phase==='model'&&(oldContext||boundToEarlierScope&&c.store.request(task.id,key));
@@ -190,10 +194,11 @@ export class CodingAdapter {
      const candidate=journal.events.findLast(event=>event.data.snapshot);
      const previous=cp.failedGate?.permissionsHash===permissionsHash?cp.failedGate:null;
      const prior=journal.events.find(event=>event.sequence===previous?.snapshotSequence)??journal.events.find(event=>event.type==='workspace.created');
-     const snapshot=approvedSnapshot(candidate.data.snapshot,manifest.permissions);
-     const previousSnapshot=approvedSnapshot(prior.data.snapshot,manifest.permissions);
-     const {gate,repeated,changedPaths}=recordFailedGate({attempt:cp.attempt,snapshot,results,previous,previousSnapshot});
-     const failure=summarizeChecks(results,{attempt:cp.attempt,evidenceKey,changedPaths,comparedToAttempt:previous?.attempt??null});
+     const {gate,repeated,changedPaths}=recordFailedGate({
+      attempt:cp.attempt,snapshot:candidate.data.snapshot,results,previous,previousSnapshot:prior.data.snapshot,
+     });
+     const approvedChanges=changedPaths.filter(file=>!secretPath(file)&&matches(file,manifest.permissions.readPaths));
+     const failure=summarizeChecks(results,{attempt:cp.attempt,evidenceKey,changedPaths:approvedChanges,comparedToAttempt:previous?.attempt??null});
      const checkIds=failure.checks.map(check=>check.id).join(', ');
      const reason=repeated?`No progress: the same candidate and protected-check failures repeated (${checkIds}). Inspect the saved candidate and check evidence before continuing.`:`Protected checks failed: ${checkIds}`;
      const repair=repeated?{...failure,category:'no_progress',reason}:failure;

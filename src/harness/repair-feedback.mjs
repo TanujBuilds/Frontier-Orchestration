@@ -4,7 +4,8 @@ const MAX_CHECKS = 8;
 const STREAM_BYTES = 640;
 const LINE_BYTES = 320;
 const TRUNCATED = '[output truncated; see saved check evidence]';
-const DIAGNOSTIC = /\b(?:\w*Error|assert(?:ion)?|expected|actual|received|failed|failure|not ok|exception)\b/i;
+const PRIMARY_DIAGNOSTIC = /\b(?:\w*Error|assert(?:ion)?|not ok|exception)\b/i;
+const DIAGNOSTIC_DETAIL = /\b(?:expected|actual|received|failed|failure)\b/i;
 
 function safeText(value = '') {
   return stripVTControlCharacters(value)
@@ -12,7 +13,9 @@ function safeText(value = '') {
     .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '')
     .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g, '[redacted private key]')
     .replace(/\bBearer\s+[^\s"',;]+/gi, 'Bearer [redacted]')
-    .replace(/\b((?:[\w]*_)?(?:api[_-]?key|token|password|secret))(["']?\s*[:=]\s*)(?:"[^"\n]*"|'[^'\n]*'|[^\s,;]+)(?=\s|[,;}]|$)/gi, '$1$2[redacted]')
+    .replace(/\b(authorization["']?[ \t]*[:=][ \t]*["']?Basic[ \t]+)[a-z0-9+/=_-]+/gi, '$1[redacted]')
+    .replace(/\b(AWS_(?:SECRET_ACCESS_KEY|ACCESS_KEY_ID)|(?:[\w]*_)?(?:api[_-]?key|token|password|secret))(["']?\s*[:=]\s*)(?:"[^"\n]*"|'[^'\n]*'|[^\s,;]+)(?=\s|[,;}]|$)/gi, '$1$2[redacted]')
+    .replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/:@<>"']+:[^\s/@<>"']*@/gi, '$1[redacted]@')
     .replace(/\b(?:sk-[\w-]{16,}|gh[pousr]_[\w]{16,}|github_pat_[\w]{16,})\b/g, '[redacted token]');
 }
 
@@ -39,7 +42,8 @@ function excerpt(value) {
   };
   // Keep assertion and error lines wherever they appear. If a check supplies
   // plain output, preserve its opening and final diagnostic rather than a tail alone.
-  lines.forEach((line, i) => { if (DIAGNOSTIC.test(line)) add(i); });
+  lines.forEach((line, i) => { if (PRIMARY_DIAGNOSTIC.test(line)) add(i); });
+  lines.forEach((line, i) => { if (DIAGNOSTIC_DETAIL.test(line)) add(i); });
   add(lines.findIndex(line => line.trim()));
   add(lines.findLastIndex(line => line.trim()));
 

@@ -35,7 +35,7 @@ async function runCheck(definition, workspace) {
   return { ...result, id: definition.id, argv: definition.argv, passed: result.code === 0 && !result.stopped, screenshots: [] };
 }
 
-async function setup(t, { mode = 'collaborative', limits = {}, overnightPolicy = {}, respond, check, noisy = false, readOnlyFile } = {}) {
+async function setup(t, { mode = 'collaborative', limits = {}, overnightPolicy = {}, respond, check, noisy = false, readOnlyFile, taskReadPaths } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'mosaic-self-repair-'));
   const repo = path.join(root, 'repo');
   const stateRoot = path.join(root, 'state');
@@ -89,7 +89,7 @@ async function setup(t, { mode = 'collaborative', limits = {}, overnightPolicy =
     goalId: goal.id, submissionId: 'repair-task', kind: 'coding',
     ...(v2 ? { role: 'implementation' } : {}),
     objective: 'Compute 42 using approved source', acceptance: ['Check verify-answer passes'],
-    permissions: { readPaths: project.readPaths, writePaths: project.writePaths, checks: ['verify-answer'] },
+    permissions: { readPaths: taskReadPaths ?? project.readPaths, writePaths: project.writePaths, checks: ['verify-answer'] },
     limits,
   }, 'submit');
 
@@ -232,7 +232,10 @@ test('S3 identical candidate and failed check stop before a third gate after res
       const attempt = label === 'attempt-1' ? 1 : 2;
       return {
         ...result,
-        stdout: `2026-11-10T12:30:0${attempt}.000Z report /private/var/folders/zz/fixture/T/repair-${attempt}/result.json\n`,
+        stdout: [
+          `2026-11-10T12:30:0${attempt}.000Z report /private/var/folders/zz/fixture/T/repair-${attempt}/result.json`,
+          `ℹ duration_ms ${attempt === 1 ? '57.8401' : '61.1023'}`,
+        ].join('\n'),
       };
     },
   });
@@ -257,7 +260,9 @@ test('S3 identical candidate and failed check stop before a third gate after res
   assert.equal(retained.repair.evidenceKey, 'harness-attempt-2/checks');
   for (const attempt of [1, 2]) {
     const checks = journal.completed(`harness-attempt-${attempt}/checks`).value;
-    assert.match(checks.find(check => check.id === 'verify-answer').stderr, assertion);
+    const check = checks.find(result => result.id === 'verify-answer');
+    assert.match(check.stderr, assertion);
+    assert.ok(check.stdout.endsWith(attempt === 1 ? 'ℹ duration_ms 57.8401' : 'ℹ duration_ms 61.1023'));
   }
   assert.equal(await readFile(path.join(journal.last('workspace.created').root, source), 'utf8'), answerText(41));
   assert.equal(await readFile(path.join(f.repo, source), 'utf8'), initialSource);
@@ -639,10 +644,10 @@ test('S9 legacy checkpoint and check feedback from before repair metadata can re
   assert.ok(passed.result.checks.every(check => check.passed));
 });
 
-function rebindReadScope(f, stopped, readPaths) {
+function rebindScope(f, stopped, permissions) {
   const goals = new Goals(f.c);
   const manifest = f.goal.manifest;
-  const revisedProject = { ...manifest.project, readPaths };
+  const revisedProject = { ...manifest.project, ...permissions };
   const revision = goals.prepareRevision({
     goalId: f.goal.id, expectedHash: f.goal.hash,
     manifest: {
@@ -653,7 +658,7 @@ function rebindReadScope(f, stopped, readPaths) {
   goals.activateRevision({ revisionId: revision.id, hash: revision.hash }, 'approve-narrower-fixture');
   const rebound = goals.rebind({
     taskId: f.task.id,
-    spec: { ...stopped.spec, permissions: { ...stopped.spec.permissions, readPaths: revisedProject.readPaths } },
+    spec: { ...stopped.spec, permissions: { ...stopped.spec.permissions, ...permissions } },
   }, 'rebind-narrower-fixture');
   assert.equal(rebound.goalVersion, 2);
   assert.equal(rebound.attempts, stopped.attempts);
@@ -684,7 +689,7 @@ test('approved legacy scope rebind retains owner feedback and withholds prior re
   const stopped = await f.until(task => task.status === 'stopped');
   assert.ok(stopped.feedback.some(entry => entry.repair?.checks?.some(check => check.stderr.includes(oldDiagnostic))));
 
-  rebindReadScope(f, stopped, ['src/', 'checks/']);
+  rebindScope(f, stopped, { readPaths: ['src/', 'checks/'] });
   f.restart();
 
   const candidate = await f.until(task => task.status === 'awaiting_review');
@@ -756,7 +761,7 @@ test('a saved but unapplied edit from an earlier scope cannot replay after an ap
   const stopped = await f.until(task => task.status === 'stopped');
   assert.equal(stopped.checkpoint.phase, 'apply');
   assert.equal((await f.journal()).events.filter(event => event.type === 'edits.applied').length, 0);
-  rebindReadScope(f, stopped, ['src/', 'checks/']);
+  rebindScope(f, stopped, { readPaths: ['src/', 'checks/'] });
   f.restart();
 
   const candidate = await f.until(task => task.status === 'awaiting_review');
@@ -772,4 +777,71 @@ test('a saved but unapplied edit from an earlier scope cannot replay after an ap
   const journal = await f.journal();
   assert.deepEqual(journal.events.filter(event => event.type === 'edits.applied').map(event => event.data.key), ['harness-attempt-2']);
   assert.equal(await readFile(path.join(candidate.result.worktree, source), 'utf8'), answerText(42));
+});
+
+test('S4 a changed candidate includes approved write-only edits without exposing their paths in repair context', timeout, async t => {
+  const writeOnly = 'src/write-only.mjs';
+  const newContent = 'export const candidateRevision = 2;\n';
+  const f = await setup(t, {
+    limits: { attempts: 3, modelCalls: 3 },
+    taskReadPaths: [source, otherSource, 'checks/'],
+    respond: (input, n) => {
+      const edits = n === 1 ? [] : n === 2
+        ? [{ path: writeOnly, action: 'write', baseHash: null, content: newContent }]
+        : [edit(input, source, answerText(42))];
+      return action('submit_changes', { paths: [], edits });
+    },
+  });
+
+  const next = await f.until(task => task.attempts === 3 && task.checkpoint.phase === 'apply');
+  assert.equal(next.spent.model, 3);
+  assert.equal(f.calls.length, 3);
+  assert.equal(f.runs[0].results[0].stderr, f.runs[1].results[0].stderr);
+  assert.equal(f.calls[2].repair.failure.category, 'functional_check');
+  assert.equal(f.calls[2].repair.failure.comparedToAttempt, 1);
+  assert.ok(!JSON.stringify(f.calls[2].repair).includes(writeOnly));
+  assert.ok(!f.calls[2].inventory.some(entry => entry.path === writeOnly));
+  assert.equal(await readFile(path.join(f.runs[1].workspace, writeOnly), 'utf8'), newContent);
+});
+
+test('an interrupted edit intent cannot recover a path whose write permission was revoked by rebind', timeout, async t => {
+  const f = await setup(t, {
+    limits: { attempts: 2, modelCalls: 2 },
+    respond: input => action('submit_changes', { paths: [], edits: [edit(input, source, answerText(42))] }),
+  });
+  await f.until(task => task.checkpoint.phase === 'apply');
+
+  const interruption = new Error('Fixture interruption after durable edit intent');
+  const adapter = f.worker.adapters.coding;
+  const open = adapter.open.bind(adapter);
+  adapter.open = async task => {
+    const opened = await open(task);
+    opened.workspace.applyIntent = async () => { throw interruption; };
+    return opened;
+  };
+  await assert.rejects(adapter.step(f.saved, f.worker.owner), error => error === interruption);
+  const journal = await f.journal();
+  const intent = journal.last('edits.intent');
+  assert.equal(intent.changes[0].path, source);
+  const worktree = journal.last('workspace.created').root;
+  assert.equal(await readFile(path.join(worktree, source), 'utf8'), initialSource);
+  assert.equal(journal.last('edits.applied'), undefined);
+
+  const requests = f.requests();
+  f.c.control({ taskId: f.task.id, action: 'stop' }, 'stop-interrupted-intent');
+  const stopped = await f.until(task => task.status === 'stopped');
+  rebindScope(f, stopped, { writePaths: [otherSource] });
+  f.restart();
+  await f.worker.tick();
+
+  assert.equal(await readFile(path.join(worktree, source), 'utf8'), initialSource, 'Recovery must stop before writing the revoked path');
+  assert.equal(f.saved.status, 'blocked');
+  assert.match(f.saved.reason, /edit intent|edit transaction/i);
+  assert.match(f.saved.reason, /scope|permission|approval/i);
+  assert.equal(f.saved.attempts, 1);
+  assert.equal(f.saved.deadline, stopped.deadline);
+  assert.deepEqual(f.requests(), requests);
+  assert.equal(f.calls.length, 1);
+  assert.deepEqual((await f.journal()).last('edits.intent'), intent);
+  assert.equal((await f.journal()).last('edits.applied'), undefined);
 });

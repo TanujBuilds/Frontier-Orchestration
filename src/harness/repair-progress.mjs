@@ -6,11 +6,12 @@ function normalizeOutput(output = '') {
     .replace(/\r\n?/g, '\n')
     .replace(/\b\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:?\d\d)?\b/g, '<timestamp>')
     .replace(/\[\d\d:\d\d:\d\d(?:\.\d+)?\]/g, '[<timestamp>]')
-    // Replace the allocated directory while retaining the filename and line
-    // from stack traces. The same source can run in a new check scratch dir.
-    .replace(/\/(?:private\/)?(?:var\/folders\/[^/\s]+\/[^/\s]+\/T|var\/tmp|tmp)\/[^/\s:)"']+/g, '<tmp>')
+    // Normalize allocated scratch directories while retaining stack filenames.
+    .replace(/(^|file:\/\/|[\s("'\[=])\/(?:private\/)?(?:var\/folders\/[^/\s]+\/[^/\s]+\/T|var\/tmp|tmp)\/[^/\s:)"']+(?=\/)/gm, '$1<tmp>')
+    .replace(/((?:^|\/)\.overnight-output\/tmp\/)[^/\s:)"']+(?=\/)/gm, '$1<tmp>')
     .replace(/\/\.overnight-output\/approved-inputs-[a-f0-9]{20}(?=\/)/g, '/<approved-inputs>')
     .replace(/(^\s*(?:duration(?:_ms)?|elapsed(?:_ms)?|time(?:_ms)?):\s*)\d+(?:\.\d+)?(?:\s*(?:ms|s))?\s*$/gim, '$1<duration>')
+    .replace(/(^[ \t]*(?:ℹ|#)[ \t]+duration_ms[ \t]+)\d+(?:\.\d+)?[ \t]*$/gm, '$1<duration>')
     .replace(/\(\d+\.\d+\s*(?:ms|s)\)(?=\s*$)/gm, '(<duration>)')
     .trim();
 }

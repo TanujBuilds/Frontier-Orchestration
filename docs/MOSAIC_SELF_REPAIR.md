@@ -18,11 +18,15 @@ approved file and environment boundaries. Repair excerpts also redact common
 credential formats before they enter the worker input. Automatic repair
 feedback is bound to its approved check and file scope. An approved scope
 change keeps the original spending and deadline. An action already proposed
-under the earlier scope requires a fresh attempt within those limits.
+under the earlier scope requires a fresh attempt within those limits. An
+interrupted edit transaction from an earlier scope blocks for inspection
+before recovery can write files.
 
 Two consecutive failed gates with the same candidate content and normalized
 failures stop local execution with a saved no-progress reason. This comparison
-uses Git-visible content hashes and failing check IDs, exit codes and output.
+uses the full Git-visible content snapshot and failing check IDs, exit codes
+and output. The changed-file list given to the worker stays within its
+approved read scope.
 It normalizes common timestamp, elapsed-time and temporary-directory patterns.
 A changed candidate can still use its remaining original allowance when the
 same test fails. The failed candidate and its original check results stay
