@@ -9,6 +9,7 @@ import {NativeResearch} from './native-research.mjs';
 import {Agents} from './agents.mjs';
 import {Artifacts} from './artifacts.mjs';
 import {Observer} from './observer.mjs';
+import {assignmentManifestSchema,prepareAssignment} from './assignment-intake.mjs';
 
 const str={type:'string'},obj={type:'object'},bool={type:'boolean'},number={type:'integer'};
 function validate(schema,value,label='input'){
@@ -33,6 +34,7 @@ export class Dispatcher {
   add('workflow_register','Register a validated dependency template using supported capabilities.',{definition:obj},['definition'],true,(i,k)=>c.store.command(k,{op:'workflow.register',...i},()=>{const definition=c.registry.registerWorkflow(i.definition);c.store.put('workflow',{id:`${definition.id}-${definition.version}`,definition});return definition;}));
   add('workflow_submit','Instantiate an exact registered workflow within the approved goal. Dependency mapping and submission are atomic.',{goalId:str,workflowId:str,version:{...number,minimum:1},submissionId:str},['goalId','workflowId','version','submissionId'],true,(i,k)=>c.submitWorkflow(i,k));
   add('goal_prepare','Prepare an exact reviewable goal manifest. Does not activate.',{manifest:goalDispatchInputSchema},['manifest'],true,(i,k)=>c.prepareGoal(i.manifest,k));
+  add('assignment_prepare','Check explicit coding prerequisites and prepare a reviewable draft without activating or running work.',{manifest:assignmentManifestSchema},[],true,(i,k)=>prepareAssignment(c,i.manifest,k));
   add('overnight_preflight','Verify the exact approved infrastructure checks in the actual scoped sandbox before activation.',{goalId:str,hash:str},['goalId','hash'],true,(i,k)=>this.launch('overnight_preflight',i,k,()=>new OvernightPreflight({c,checksFactory:worker.checksFactory,config:worker.config}).run(i,k)));
   add('goal_activate','Approve the exact prepared hash and activate within its limits.',{goalId:str,hash:str},['goalId','hash'],true,(i,k)=>c.activateGoal(i,k));
   add('goal_get','Inspect one goal or all goal summaries.',{goalId:str},[],false,i=>i.goalId?c.getGoal(i.goalId):c.snapshot());
