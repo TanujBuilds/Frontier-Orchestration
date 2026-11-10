@@ -10,6 +10,7 @@ import {verifyLocalAcceptance} from './research-review.mjs';
 import { Learning } from './learning.mjs';
 import {workerProfile as normalizeWorkerProfile} from './worker-profile.mjs';
 import {recordFailedGate} from './repair-progress.mjs';
+import {matches} from '../project/contracts.mjs';
 
 const TERMINAL=new Set(['accepted','failed','partial','cancelled']);
 const SLOT=new Set(['running','uncertain','taking_over']);
@@ -236,6 +237,11 @@ export class Coordinator {
   const existing=this.store.db.prepare('SELECT * FROM submissions WHERE kind=? AND scope=? AND key=?').get('workflow_run',g.id,input.submissionId);if(existing){if(existing.hash!==hash)throw Error('Workflow submission conflict');return this.store.get('workflow_run',existing.id);}
   const byKey=new Map(definition.tasks.map(t=>[t.key,t])),ids=new Map();
   const submit=stage=>{if(ids.has(stage.key))return ids.get(stage.key);const dependsOn=(stage.dependsOn??[]).map(k=>submit(byKey.get(k))),{key:stageKey,...spec}=stage;
+   // Match newly forwarded scopes themselves. An approved file named
+   // "placeholder" does not authorize its whole parent directory.
+   if(spec.kind==='coding'&&spec.permissions&&g.manifest.project&&
+      ['readPaths','writePaths'].some(name=>spec.permissions[name].some(scope=>!matches(scope,g.manifest.project[name]))))
+    throw Error('Workflow task expands scope');
    const task=this.submitTask({goalId:g.id,...spec,dependsOn,submissionId:`${input.submissionId}-${stageKey}`},`wf-${digest({goal:g.id,run:input.submissionId,stageKey})}`);ids.set(stage.key,task.id);return task.id;};
   for(const stage of definition.tasks)submit(stage);
   const run=this.store.submission('workflow_run',g.id,input.submissionId,hash,id=>({id,goalId:g.id,workflowId:input.workflowId,version:input.version,definitionHash,goalVersion:g.version,tasks:[...ids.values()],at:this.now()}));this.emit('workflow.submitted',g.id,null,{id:run.id,definitionHash,tasks:run.tasks});return run;
