@@ -63,6 +63,17 @@ function ensureSchema(db) {
   if (tables.length !== 3 || tables.some(row => !/^CREATE TABLE\s/i.test(row.sql ?? ''))) {
     throw Error('Unsupported outcome state schema: missing harness records, events, or requests table');
   }
+  // Historical v1 stores can lack these indexes. LIMIT alone would still
+  // permit a full task sort or one full event scan per selected task.
+  const index = db.prepare("SELECT 1 FROM sqlite_schema WHERE type='index' AND tbl_name=? AND name=?");
+  if (!index.get('records', 'records_kind') &&
+      db.prepare('SELECT max(rowid) AS highWater FROM records').get().highWater > TASK_SCAN) {
+    throw Error('Large historical outcome state lacks the records_kind index; use the report on a current coordinator');
+  }
+  if (!index.get('events', 'events_task_activity') &&
+      db.prepare('SELECT max(seq) AS highWater FROM events').get().highWater > TASK_SCAN) {
+    throw Error('Large historical outcome state lacks the events_task_activity index; use the report on a current coordinator');
+  }
 }
 
 function readSnapshot(db, { scope, start, end, cursorScope, after }) {

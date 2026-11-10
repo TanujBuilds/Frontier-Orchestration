@@ -237,6 +237,32 @@ test('a capped task history retains its newest authority event', async t => {
   assert.equal(report.events.at(-1).seq, latest);
 });
 
+test('small historical v1 snapshots work but large unindexed scans fail without writes', async t => {
+  const { readOutcomeSnapshot } = await module();
+  const root = fixture(t);
+  let store = new Store(root);
+  seed(store);
+  store.db.exec('DROP INDEX events_task_activity; DROP INDEX records_kind');
+  store.close();
+  assert.equal(readOutcomeSnapshot({stateRoot: root, goalId: 'goal-a'}).tasks.length, 4);
+
+  store = new Store(root);
+  store.db.exec('DROP INDEX events_task_activity');
+  store.db.prepare("INSERT INTO events(seq,at,goal_id,task_id,type,data) VALUES(10001,?,'goal-a','task-a','fixture.activity','{}')")
+    .run(created);
+  store.close();
+  const before = files(root);
+  assert.throws(() => readOutcomeSnapshot({stateRoot: root, goalId: 'goal-a'}), /events_task_activity/);
+  assert.deepEqual(files(root), before);
+
+  store = new Store(root);
+  store.db.exec("DROP INDEX records_kind; INSERT INTO records(rowid,kind,id,data) VALUES(10001,'fixture','old-record','{}')");
+  store.close();
+  const recordsBefore = files(root);
+  assert.throws(() => readOutcomeSnapshot({stateRoot: root, goalId: 'goal-a'}), /records_kind/);
+  assert.deepEqual(files(root), recordsBefore);
+});
+
 test('schema mismatch and existing transaction produce explicit errors without altering state', async t => {
   const { readOutcomeSnapshot, readOutcomeSnapshotFromDatabase } = await module();
   const root = fixture(t);

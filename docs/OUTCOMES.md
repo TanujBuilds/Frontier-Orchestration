@@ -29,7 +29,9 @@ snapshot for a project-wide ratio. The reader examines up to 10,000 task
 rows, 10,000 event rows, and 10,000 request rows per snapshot. It caps decoded
 rows at 2 MiB each and decoded payload at 24 MiB. Goal-level event discovery
 uses the most recent 100,000 sequence slots. Large scopes or oversized evidence
-can require a narrower filter.
+can require a narrower filter. Historical schema v1 databases that lack current
+scan indexes are accepted only below a conservative 10,000-row high-water
+limit. Use the current coordinator's report for larger stores.
 
 ## Reading the numbers
 
