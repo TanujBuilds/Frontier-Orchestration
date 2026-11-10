@@ -39,7 +39,7 @@ assignment's check scope must include every mapped check.
 The background reviewer receives `evidence.behavioralEvidence` alongside
 literal check receipts, output and declared artifacts. Each criterion shows
 its description, mapped check IDs and their outcomes against the recorded
-candidate snapshot. All mapped checks must pass for a criterion to pass.
+candidate snapshot and Git executable bits. All mapped checks must pass for a criterion to pass.
 A missing result is `not_run`. An intermediate stage can report `not_run`
 with reason `not_due` for checks outside that stage's gate. Due failures or
 missing receipts prevent a new review reservation. The prepared review

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
-import {mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
+import {chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -145,12 +145,15 @@ test('worker fixes a real failing download gate before review, with final eviden
   const final = f.reviewPackets.at(-1).evidence;
   const matrix = final.behavioralEvidence;
   assert.equal(matrix.snapshotHash, digest(final.snapshot));
+  assert.match(matrix.executableModesHash, /^[a-f0-9]{64}$/);
   assert.deepEqual(matrix.criteria.map(({criterionId, description, checkIds, status}) => (
     {criterionId, description, checkIds, status}
   )), [{...criterion, status: 'passed'}]);
   assert.match(final.checks.find(check => check.id === 'download').stdout, /download contained the visible row/);
   const {integration} = f.final();
   assert.equal(integration.behavioralEvidence.criteria[0].status, 'passed');
+  assert.equal(integration.candidateBehavioralEvidence.executableModesHash, matrix.executableModesHash);
+  assert.match(integration.behavioralEvidence.executableModesHash, /^[a-f0-9]{64}$/);
   assert.equal(f.savedGoal().status, 'completed');
   assert.deepEqual(f.savedGoal().receipt.tasks.find(task => task.id === f.final().id).integration, integration);
   assert.equal(readFileSync(path.join(f.final().integration.worktree, 'src/export.mjs'), 'utf8'), goodApp);
@@ -166,6 +169,21 @@ test('a post-review edit cannot reuse the passing download evidence', async t =>
   assert.equal(f.final().status, 'blocked');
   assert.match(f.final().reason, /candidate|snapshot|changed|edit/i);
   assert.equal(f.final().integration, undefined);
+  assert.equal(f.reviewPackets.length, 2);
+});
+
+test('a post-review executable-bit edit cannot reuse the passing candidate verdict', async t => {
+  const f = await setup(t);
+  await f.tickUntil(() => f.final()?.status === 'ready_to_integrate');
+  const candidate = path.join(f.final().result.worktree, 'src/export.mjs');
+  chmodSync(candidate, 0o755);
+  assert.equal(readFileSync(candidate, 'utf8'), goodApp);
+
+  await f.worker.tick();
+  assert.equal(f.final().status, 'blocked');
+  assert.match(f.final().reason, /executable|snapshot/i);
+  assert.equal(f.final().integration, undefined);
+  assert.equal(f.final().spent.codexReview, 1);
   assert.equal(f.reviewPackets.length, 2);
 });
 

@@ -1,5 +1,4 @@
 import path from 'node:path';
-import { lstat } from 'node:fs/promises';
 import {effectiveIntegrationChecks,isOvernightV2} from './overnight.mjs';
 import { repairIntegration } from './integration-repair.mjs';
 import { NativeCandidates } from './native-candidates.mjs';
@@ -10,10 +9,11 @@ import { matches,protectedPath,secretPath,digest as fileDigest } from '../projec
 import { git } from '../project/process.mjs';
 import { CodingAdapter } from './coding.mjs';
 import { digest,identifier,text } from './contracts.mjs';
-import { assertBehavioralChecks,deriveBehavioralEvidence } from './behavioral-validation.mjs';
+import { assertBehavioralChecks,behavioralModeHash,deriveBehavioralEvidence,readBehavioralFileModes } from './behavioral-validation.mjs';
 
-function behavioralEvidenceFor(project, checkSpecs, checks, snapshot){
- return deriveBehavioralEvidence(project,{checks,checkIds:checkSpecs.map(check=>check.id),snapshot});
+function behavioralEvidenceFor(project, checkSpecs, checks, snapshot, modes){
+ const executableModesHash=modes?behavioralModeHash(modes):undefined;
+ return deriveBehavioralEvidence(project,{checks,checkIds:checkSpecs.map(check=>check.id),snapshot,executableModesHash});
 }
 
 function assertCheckpointSnapshot(checkpoint,snapshot){
@@ -24,17 +24,8 @@ function checkedPath(workspace,file){
  return !secretPath(file)&&!file.startsWith('dist/')&&!file.startsWith('.overnight-output/')&&matches(file,workspace.manifest.permissions.readPaths);
 }
 
-async function checkedFileModes(workspace,snapshot){
- const files=Object.keys(snapshot).filter(file=>checkedPath(workspace,file)),modes=new Map();
- for(let start=0;start<files.length;start+=32){
-  const batch=files.slice(start,start+32);
-  const stats=await Promise.all(batch.map(async file=>lstat(await workspace.file(file))));
-  for(const [index,file] of batch.entries()){
-   if(!stats[index].isFile())throw Error('Checked Git path is no longer a regular file');
-   modes.set(file,stats[index].mode&0o100?'100755':'100644');
-  }
- }
- return modes;
+function checkedFileModes(workspace,snapshot){
+ return readBehavioralFileModes(workspace,Object.keys(snapshot).filter(file=>checkedPath(workspace,file)));
 }
 
 async function assertCheckedModes(workspace,snapshot,modes){
@@ -150,7 +141,7 @@ export class Integration {
   if(!['awaiting_review','ready_to_integrate'].includes(current.status)||current.owner||current.native?.writerActive||digest(identity(current))!==digest(identity(t)))throw Error('Candidate state or approved generation changed before integration');
   return current;
  }
- async checkedCandidateSnapshot(candidate,task,goal,snapshot){
+ async checkedCandidateSnapshot(candidate,task,goal,snapshot,modes){
   if(task.native?.layout==='candidate_v1'){
    const checkpoint=candidate.journal.last('stage.accepted');
    if(!checkpoint||checkpoint.commit!==task.native.commit||await git(candidate.workspace.root,'rev-parse','HEAD')!==task.native.commit)throw Error('Native candidate commit changed after checks');
@@ -158,11 +149,12 @@ export class Integration {
    return snapshot;
   }
   // Worker results expose only the approved readable portion of the snapshot.
-  const scoped=Object.fromEntries(Object.entries(snapshot).filter(([file])=>!secretPath(file)&&matches(file,candidate.manifest.permissions.readPaths)));
+  const scoped=Object.fromEntries([...modes.keys()].map(file=>[file,snapshot[file]]));
   if(!task.result?.snapshot||task.result.baseCommit!==candidate.manifest.baseCommit||digest(scoped)!==digest(task.result.snapshot))throw Error('Candidate snapshot changed after its saved checks');
   if(goal.manifest.mode.review==='legacy'){
    const binding=task.legacyBehavioralReview;
    if(binding?.approvalHash!==goal.hash||binding.taskHash!==task.hash||binding.baseCommit!==candidate.manifest.baseCommit||binding.snapshotHash!==digest(scoped))throw Error('Legacy review does not match the approved candidate snapshot');
+   if(binding.executableModesHash!==behavioralModeHash(modes))throw Error('Legacy review does not match the candidate executable bits');
   }
   return scoped;
  }
@@ -178,8 +170,8 @@ export class Integration {
   try{
    t=this.currentCandidate(t);await candidate.workspace.recover();
    const project=g.manifest.project,candidateSnapshot=project.behavioralChecks?await candidate.workspace.snapshot():null;
-   const checkedSnapshot=candidateSnapshot?await this.checkedCandidateSnapshot(candidate,t,g,candidateSnapshot):null;
    const candidateModes=candidateSnapshot?await checkedFileModes(candidate.workspace,candidateSnapshot):null;
+   const checkedSnapshot=candidateSnapshot?await this.checkedCandidateSnapshot(candidate,t,g,candidateSnapshot,candidateModes):null;
    const checks=this.checks(candidate.workspace),candidateCheckSpecs=candidate.manifest.permissions.checks;
    await checks.verify();const candidateChecks=await checks.run(candidateCheckSpecs,`accept-${t.id}`);
    if(candidateSnapshot){
@@ -187,7 +179,7 @@ export class Integration {
     await assertCheckedModes(candidate.workspace,candidateSnapshot,candidateModes);
    }
    if(!candidateChecks.every(x=>x.passed))throw Error('Candidate checks no longer pass');
-   const candidateBehavioralEvidence=behavioralEvidenceFor(project,candidateCheckSpecs,candidateChecks,checkedSnapshot);
+   const candidateBehavioralEvidence=behavioralEvidenceFor(project,candidateCheckSpecs,candidateChecks,checkedSnapshot,candidateModes);
    assertBehavioralChecks(candidateBehavioralEvidence);
    t=this.currentCandidate(t);const candidateStage=t.integrationFailures?.length?`candidate-repair-${t.integrationFailures.length}`:'candidate';
    if(candidateSnapshot&&t.native?.layout!=='candidate_v1')await checkedBlobIds(candidate.workspace,candidateSnapshot,candidateModes,{beforeCommit:true});
@@ -227,7 +219,7 @@ export class Integration {
      if(digest(snapshot)!==digest(snapshotBeforeChecks))throw Error('Combined snapshot changed during protected checks');
      await assertCheckedModes(target.workspace,snapshot,combinedModes);
     }
-    const behavioralEvidence=behavioralEvidenceFor(project,checkSpecs,results,snapshot);
+    const behavioralEvidence=behavioralEvidenceFor(project,checkSpecs,results,snapshot,combinedModes);
     await target.journal.append('integration.checks',{key:importKey,checks:results,snapshot,...(behavioralEvidence?{behavioralEvidence}:{})});
     if(!results.every(x=>x.passed))throw Error('Integrated checks failed');
     assertBehavioralChecks(behavioralEvidence);
@@ -283,7 +275,7 @@ export class Integration {
    const project=g.manifest.project,modes=project.behavioralChecks?await checkedFileModes(target.workspace,snapshot):null;
    const runner=this.checks(target.workspace);await runner.verify();const results=await runner.run(project.checks,`native-${t.id}`);
    if(!results.every(x=>x.passed))throw Error('Native checks failed');
-   const behavioralEvidence=behavioralEvidenceFor(project,project.checks,results,snapshot);
+   const behavioralEvidence=behavioralEvidenceFor(project,project.checks,results,snapshot,modes);
    if(behavioralEvidence){
     await target.workspace.assertSnapshot(snapshot);
     await assertCheckedModes(target.workspace,snapshot,modes);

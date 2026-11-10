@@ -1,9 +1,11 @@
+import {lstat} from 'node:fs/promises';
 import {digest, keys, text} from './contracts.mjs';
 
 const MAX_CRITERIA = 32;
 const MAX_CHECKS_PER_CRITERION = 16;
 const MAX_DESCRIPTION = 512;
 const MAX_ID = 120;
+const FILE_MODE_BATCH = 32;
 const criterionIdPattern = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
 const checkIdPattern = '^[a-z0-9-]+$';
 const fields = {
@@ -49,6 +51,25 @@ export function normalizeBehavioralChecks(raw, checks) {
   });
 }
 
+// Git records only the owner executable bit for regular file modes.
+export async function readBehavioralFileModes(workspace, files) {
+  const paths = [...files];
+  const modes = new Map();
+  for (let start = 0; start < paths.length; start += FILE_MODE_BATCH) {
+    const entries = await Promise.all(paths.slice(start, start + FILE_MODE_BATCH).map(async file => {
+      const stat = await lstat(await workspace.file(file));
+      if (!stat.isFile()) throw Error('Expected a regular file in the behavioral snapshot: ' + file);
+      return [file, stat.mode & 0o100 ? '100755' : '100644'];
+    }));
+    for (const [file, mode] of entries) modes.set(file, mode);
+  }
+  return modes;
+}
+
+export function behavioralModeHash(modes) {
+  return digest(Object.fromEntries(modes));
+}
+
 function passedReceipt(receipt, check) {
   if (receipt.passed !== true || receipt.code !== 0 || receipt.stopped) return false;
   const artifactCount = check.screenshots?.length ?? 0;
@@ -57,7 +78,7 @@ function passedReceipt(receipt, check) {
 
 // Call with receipts from one coordinator check run and the snapshot verified
 // across that run. Model output and separately collected artifacts are not receipts.
-export function deriveBehavioralEvidence(project, {checks = [], checkIds, snapshot}) {
+export function deriveBehavioralEvidence(project, {checks = [], checkIds, snapshot, executableModesHash}) {
   if (!project?.behavioralChecks) return undefined;
   const snapshotHash = snapshot == null ? null : digest(snapshot);
   const declared = new Map(project.checks.map(check => [check.id, check]));
@@ -71,6 +92,7 @@ export function deriveBehavioralEvidence(project, {checks = [], checkIds, snapsh
 
   return {
     snapshotHash,
+    ...(executableModesHash === undefined ? {} : {executableModesHash}),
     criteria: project.behavioralChecks.map(criterion => {
       const checks = criterion.checkIds.map(id => applicable.has(id)
         ? {id, status: snapshotHash ? outcomes.get(id) ?? 'not_run' : 'not_run'}

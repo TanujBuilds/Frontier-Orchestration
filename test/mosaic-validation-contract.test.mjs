@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises';
+import {chmod, mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {digest, goalDispatchInputSchema, normalizeGoal, normalizeTask} from '../src/harness/contracts.mjs';
@@ -141,7 +141,7 @@ test('a declared artifact missing from the coordinator receipt cannot establish 
   assert.equal(derive([{...receipt('export'), screenshots: ['export.png']}]).criteria[0].status, 'passed');
 });
 
-test('a completed legacy review can resume only for its bound behavioral snapshot', async t => {
+async function legacyReviewFixture(t, {onCheck, onReview} = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'mosaic-validation-reservation-'));
   const c = new Coordinator({root: path.join(root, 'state')});
   t.after(async () => {
@@ -172,25 +172,39 @@ test('a completed legacy review can resume only for its bound behavioral snapsho
     provider: {complete: async () => ({
       content: JSON.stringify({type: 'submit_changes', paths: [], edits: [], summary: 'Candidate ready'}),
     })},
-    reviewer: {reviewCode: async () => {
+    reviewer: {reviewCode: async packet => {
       calls++;
+      await onReview?.(c.getTask(task.id), packet);
       return {decision: 'accept', feedback: 'Fixture verdict', unverified: []};
     }},
-    checksFactory: () => ({
+    checksFactory: workspace => ({
       verify: async () => ({verified: true}),
-      run: async declared => declared.map(check => receipt(check.id)),
+      run: async (declared, key) => {
+        if (key.startsWith('legacy-')) await onCheck?.(workspace);
+        return declared.map(check => receipt(check.id));
+      },
     }),
   });
   for (let n = 0; n < 8 && c.getTask(task.id).status !== 'awaiting_legacy_review'; n++) {
     await worker.tick();
   }
   assert.equal(c.getTask(task.id).status, 'awaiting_legacy_review');
+  return {c, task, worker, calls: () => calls};
+}
+
+test('a completed legacy review can resume only for its bound behavioral snapshot and file modes', async t => {
+  let packet;
+  const {c, task, worker, calls} = await legacyReviewFixture(t, {
+    onReview: (_, input) => { packet = input; },
+  });
   const accepted = await worker.legacyReview.tick();
   assert.equal(accepted.status, 'ready_to_integrate');
   const request = c.store.request(task.id, 'legacy-review-1');
   assert.equal(request.status, 'completed');
   assert.deepEqual(request.reviewBinding, accepted.legacyBehavioralReview);
   assert.equal(request.reviewBinding.snapshotHash, digest(accepted.result.snapshot));
+  assert.equal(request.reviewBinding.executableModesHash, digest({'src/export.mjs': '100644'}));
+  assert.equal(packet.evidence.behavioralEvidence.executableModesHash, request.reviewBinding.executableModesHash);
 
   // Restore the crash boundary after the response was saved but before its verdict was applied.
   const restorePendingVerdict = () => {
@@ -203,18 +217,37 @@ test('a completed legacy review can resume only for its bound behavioral snapsho
   };
   c.store.tx(restorePendingVerdict);
   assert.equal((await worker.legacyReview.tick()).status, 'ready_to_integrate');
-  assert.equal(calls, 1, 'matching completed response is reused without spending another review');
+  assert.equal(calls(), 1, 'matching completed response is reused without spending another review');
 
-  c.store.tx(() => {
-    restorePendingVerdict();
-    const saved = JSON.parse(request.data);
-    saved.reviewBinding.snapshotHash = '0'.repeat(64);
-    c.store.db.prepare('UPDATE requests SET data=? WHERE id=?').run(JSON.stringify(saved), request.id);
-  });
+  c.store.tx(restorePendingVerdict);
+  await chmod(path.join(accepted.result.worktree, 'src/export.mjs'), 0o755);
   const rejected = await worker.legacyReview.tick();
   assert.equal(rejected.status, 'blocked');
   assert.match(rejected.reason, /Saved review does not match/);
   assert.equal(rejected.legacyBehavioralReview, undefined);
   assert.equal(rejected.spent.codexReview, 1);
-  assert.equal(calls, 1);
+  assert.equal(calls(), 1);
+});
+
+test('a mode change during mapped protected checks blocks before reviewer reservation', async t => {
+  const {worker, calls} = await legacyReviewFixture(t, {
+    onCheck: workspace => chmod(path.join(workspace.root, 'src/export.mjs'), 0o755),
+  });
+  const rejected = await worker.legacyReview.tick();
+  assert.equal(rejected.status, 'blocked');
+  assert.match(rejected.reason, /executable mode/i);
+  assert.equal(rejected.spent.codexReview, 0);
+  assert.equal(calls(), 0);
+});
+
+test('a mode change during review blocks application of the verdict', async t => {
+  const {worker, calls} = await legacyReviewFixture(t, {
+    onReview: task => chmod(path.join(task.result.worktree, 'src/export.mjs'), 0o755),
+  });
+  const rejected = await worker.legacyReview.tick();
+  assert.equal(rejected.status, 'blocked');
+  assert.match(rejected.reason, /executable mode/i);
+  assert.equal(rejected.legacyBehavioralReview, undefined);
+  assert.equal(rejected.spent.codexReview, 1);
+  assert.equal(calls(), 1);
 });
