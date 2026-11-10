@@ -8,7 +8,7 @@ When setup offers to request model IDs, choose yes to look up the endpoint's `/m
 
 A beta worker profile binds the base URL, requested model ID, profile revision, display name, response mode and any explicit capabilities. The profile revision is a local configuration identity. Model aliases may resolve to a provider-controlled backend. Mosaic records the requested ID separately from the reported model when the provider supplies one. Use a stable, explicitly versioned provider ID if the endpoint offers one.
 
-Beta setup stores the bearer key separately in private settings. It goes to the selected endpoint in the Authorization header. The profile, approval hash and task evidence use the credential-free identity. A worker role and provider selection do not grant tool or shell authority. Mosaic still validates structured output, controls file access and edits, runs protected checks, and records the review and integration decisions.
+Beta setup stores the bearer key separately in private settings. It goes to the selected endpoint in the Authorization header. The profile, approval hash and task evidence use the credential-free identity. The adapter redacts literal and JSON-escaped bearer echoes from visible and saved output, including echoes split across SSE frames. A worker role and provider selection do not grant tool or shell authority. Mosaic still validates structured output, controls file access and edits, runs protected checks, and records the review and integration decisions.
 
 Optional profile fields are additive. A profile created before this change keeps its original shape and behavior. The established core DeepSeek path keeps its DeepSeek-specific request options. Generic API workers use the common completion payload. Saved protocol actor labels such as `deepseek` still identify the autonomous worker role.
 
@@ -30,7 +30,7 @@ If a running service detects changed settings or an old goal's approved profile 
 
 ## Completion outcomes
 
-Mosaic validates the declared capabilities and selected model before sending a completion. An incompatible declaration, discovery failure or pin mismatch produces no completion POST. Authentication rejection is recorded separately from an ambiguous interruption. If an SSE connection closes before a complete terminal marker and finish reason, Mosaic treats the request as ambiguous. A cleanly terminated stream can still report a length limit, which the existing planning and coding paths handle as truncated output. No failure routes to another provider, and existing reconnect and spending rules still apply.
+Mosaic validates the declared capabilities and selected model before sending a completion. An incompatible declaration, discovery failure or pin mismatch produces no completion POST. Authentication rejection is recorded separately from an ambiguous interruption. If an SSE connection closes before a complete terminal marker and finish reason, Mosaic treats the request as ambiguous. A cleanly terminated stream can still report a length limit, which the existing planning and coding paths handle as truncated output. No failure routes to another provider, and existing reconnect and spending rules still apply. Overnight v2 uses `/models` as its non-inference readiness probe during a reconnect wait, including for manual profiles. A manual endpoint without that route can serve ordinary completions, but a reconnect wait cannot verify recovery there and can expire within the original deadline.
 
 ## Extending the worker harness
 

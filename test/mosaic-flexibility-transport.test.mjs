@@ -251,6 +251,37 @@ test('bearer material is removed from JSON embedded in a prompt message', async 
   assert.equal(note, 'visible [redacted]');
 });
 
+test('stream capture redacts raw and JSON-escaped bearer echoes across frames', async t => {
+  const apiKey = 'fixture-"quoted"\\key';
+  const nested = JSON.stringify({ note: apiKey });
+  const split = nested.indexOf('\\"') + 1;
+  const wire = delta('raw ' + apiKey.slice(0, 8)) +
+    delta(apiKey.slice(8) + '\n' + nested.slice(0, split)) +
+    delta(nested.slice(split), {}, 'stop');
+  for (const [name, ending] of [['complete', done], ['incomplete', '']]) {
+    await t.test(name, async t => {
+      const service = await loopback(t, (_call, response) => sse(response, wire + ending));
+      const provider = new LocalProvider({
+        baseUrl: service.baseUrl, model: 'chosen', apiKey, openAICompatible: true, streaming: true,
+      });
+      const capture = [];
+      const completion = provider.complete([], { onContent: chunk => capture.push(chunk) });
+      if (ending) {
+        const result = await completion;
+        const [plain, serialized] = result.content.split('\n');
+        assert.equal(plain, 'raw [redacted]');
+        assert.equal(JSON.parse(serialized).note, '[redacted]');
+      } else {
+        await assert.rejects(completion, unknown);
+      }
+      const [plain, serialized] = capture.join('').split('\n');
+      assert.equal(plain, 'raw [redacted]');
+      assert.ok(JSON.parse(serialized).note === '[redacted]', 'captured JSON must not decode to the bearer');
+      assert.deepEqual(service.calls.map(call => call.route), ['POST /v1/chat/completions']);
+    });
+  }
+});
+
 test('malformed completion metadata is unknown even if subsequent SSE frames are valid', async t => {
   for (const [name, respond, streaming] of [
     ['JSON model has a control character', response => completed(response, 'chosen\nfake'), false],

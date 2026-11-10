@@ -12,7 +12,7 @@ export function validCompletionMetadata({model,usage,finishReason}){
   (finishReason==null||validModelId(finishReason));
 }
 // Keep a possible secret prefix across chunks, without delaying unrelated output.
-export function redactStream(secret,write){
+function redactLiteralStream(secret,write){
  let pending='';
  const deliver=value=>{if(value){try{Promise.resolve(write(value)).catch(()=>{});}catch{}}};
  return {push(chunk){
@@ -23,6 +23,15 @@ export function redactStream(secret,write){
   while(tail&&!pending.endsWith(secret.slice(0,tail)))tail--;
   out+=pending.slice(0,pending.length-tail);pending=pending.slice(pending.length-tail);deliver(out);
  },finish(){deliver(pending);pending='';}};
+}
+
+export function redactStream(secret,write){
+ const literal=redactLiteralStream(secret,write);
+ const escaped=JSON.stringify(secret).slice(1,-1);
+ if(escaped===secret)return literal;
+ // Match the durable result's order for echoes embedded in JSON strings.
+ const encoded=redactLiteralStream(escaped,literal.push);
+ return {push:encoded.push,finish(){encoded.finish();literal.finish();}};
 }
 
 // No retry or probe is performed here: one reservation permits exactly one POST.
