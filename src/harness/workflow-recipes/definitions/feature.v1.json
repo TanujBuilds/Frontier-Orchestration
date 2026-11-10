@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "id": "feature",
+  "version": 1,
+  "title": "Scoped feature",
+  "mode": ["collaborative", "deepseek_only", "codex_only"],
+  "parameters": {
+    "brief": {"type": "text", "required": true},
+    "acceptance": {"type": "text", "required": true},
+    "readPaths": {"type": "paths", "required": true},
+    "writePaths": {"type": "paths", "required": true},
+    "checks": {"type": "checks", "required": true}
+  },
+  "tasks": [
+    {
+      "key": "implement",
+      "kind": "coding",
+      "objective": {"parameter": "brief"},
+      "acceptance": [
+        {"parameter": "acceptance"},
+        "Report how the changed behavior meets the acceptance criterion and give the results of the selected protected checks."
+      ],
+      "dependsOn": [],
+      "permissions": {
+        "readPaths": {"parameter": "readPaths"},
+        "writePaths": {"parameter": "writePaths"},
+        "checks": {"parameter": "checks"}
+      }
+    }
+  ],
+  "provenance": {
+    "source": "Mosaic",
+    "description": "Carries a bounded feature brief, acceptance criterion, and check selection into one implementation assignment."
+  }
+}

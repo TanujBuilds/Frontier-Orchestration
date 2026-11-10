@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "id": "bugfix",
+  "version": 1,
+  "title": "Scoped bug fix",
+  "mode": ["collaborative", "deepseek_only", "codex_only"],
+  "parameters": {
+    "issue": {"type": "text", "required": true},
+    "context": {"type": "text", "required": false},
+    "readPaths": {"type": "paths", "required": true},
+    "writePaths": {"type": "paths", "required": true},
+    "checks": {"type": "checks", "required": true}
+  },
+  "tasks": [
+    {
+      "key": "fix",
+      "kind": "coding",
+      "objective": {"parameter": "issue"},
+      "context": {"parameter": "context"},
+      "acceptance": [
+        "Reproduce the reported behavior or record the evidence that narrows the cause.",
+        "Correct the behavior within the approved paths and report the results of the selected protected checks."
+      ],
+      "dependsOn": [],
+      "permissions": {
+        "readPaths": {"parameter": "readPaths"},
+        "writePaths": {"parameter": "writePaths"},
+        "checks": {"parameter": "checks"}
+      }
+    }
+  ],
+  "provenance": {
+    "source": "Mosaic",
+    "description": "Keeps reproduction, correction, and protected verification in one scoped coding assignment."
+  }
+}

@@ -91,7 +91,20 @@ export class Registry {
  registerWorkflow(raw){
   keys(raw,['id','version','mode','tasks'],'workflow');identifier(raw.id);integer(raw.version,'version',1,10000);const mode=this.mode(raw.mode);
   if(!Array.isArray(raw.tasks)||!raw.tasks.length||raw.tasks.length>10)throw Error('Invalid workflow tasks');const tasks=new Map();
-  for(const t of raw.tasks){keys(t,['key','kind','dependsOn','objective','acceptance'],'workflow task');identifier(t.key);if(tasks.has(t.key))throw Error('Duplicate workflow task');if(!mode.capabilities.includes(t.kind))throw Error('Mode prohibits workflow capability');text(t.objective,'objective');strings(t.acceptance,'acceptance');strings(t.dependsOn??[],'dependencies',{empty:true});tasks.set(t.key,t);}
+  for(const t of raw.tasks){
+   keys(t,['key','kind','dependsOn','objective','acceptance','context','permissions'],'workflow task');
+   identifier(t.key);if(tasks.has(t.key))throw Error('Duplicate workflow task');if(!mode.capabilities.includes(t.kind))throw Error('Mode prohibits workflow capability');
+   text(t.objective,'objective');strings(t.acceptance,'acceptance');strings(t.dependsOn??[],'dependencies',{empty:true});
+   if(Object.hasOwn(t,'context')&&t.context!=='')text(t.context,'context',40000);
+   if(Object.hasOwn(t,'permissions')){
+    keys(t.permissions,['readPaths','writePaths','checks'],'workflow task permissions');
+    for(const name of ['readPaths','writePaths']){
+     for(const scope of strings(t.permissions[name],name,{empty:true}))relativePath(scope.endsWith('/')?scope.slice(0,-1):scope);
+    }
+    strings(t.permissions.checks,'checks',{empty:true});
+   }
+   tasks.set(t.key,t);
+  }
   const visited=new Set(),visiting=new Set(),visit=key=>{if(visiting.has(key))throw Error('Workflow dependency cycle');if(visited.has(key))return;const task=tasks.get(key);if(!task)throw Error('Unknown workflow dependency');visiting.add(key);for(const dep of task.dependsOn??[])visit(dep);visiting.delete(key);visited.add(key);};for(const key of tasks.keys())visit(key);
   const key=`${raw.id}@${raw.version}`;if(this.workflows.has(key))throw Error('Workflow already exists');this.workflows.set(key,clone(raw));return clone(raw);
  }
