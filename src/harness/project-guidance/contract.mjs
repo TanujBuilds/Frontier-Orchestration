@@ -26,8 +26,10 @@ export function guidancePath(value) {
 }
 
 export function guidancePathInScope(relatedPath, scopes) {
-  const example = relatedPath.endsWith('/') ? relatedPath + 'scope-probe' : relatedPath;
-  return matches(example, scopes);
+  if (relatedPath.endsWith('/')) {
+    return scopes.some(scope => scope.endsWith('/') && relatedPath.startsWith(scope));
+  }
+  return matches(relatedPath, scopes);
 }
 
 export function checkDefinitionsMatch(recipe, project) {

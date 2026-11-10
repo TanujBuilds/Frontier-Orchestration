@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Goals } from '../src/harness/goals.mjs';
 import { Coordinator } from '../src/harness/coordinator.mjs';
+import { deriveBehavioralEvidence } from '../src/harness/behavioral-validation.mjs';
 import { digest } from '../src/harness/contracts.mjs';
 import { PROJECT_CHECK_GUIDANCE, checkDefinitionHash, renderProjectCheckGuidance, validateProjectCheckGuidance } from '../src/harness/project-guidance/contract.mjs';
 import { resolveGuidanceEvidence } from '../src/harness/project-guidance/evidence.mjs';
@@ -19,7 +20,7 @@ const check = {
 };
 
 function setup(t, {
-  type = 'task.integrated', alterReceipt, alterTask,
+  type = 'task.integrated', alterReceipt, alterTask, mapped = false,
   objective = 'Repair parser token handling in src/parser.mjs',
 } = {}) {
   const root = mkdtempSync(path.join(os.tmpdir(), 'project-guidance-family-'));
@@ -30,6 +31,9 @@ function setup(t, {
       submissionId, objective: 'Maintain the parser', acceptance: ['Protected checks pass'],
       environment: 'fixture', project: {
         repo, baseCommit: 'a'.repeat(40), readPaths: ['src/', 'docs/'], writePaths: ['src/'], checks,
+        ...(mapped ? { behavioralChecks: [{
+          criterionId: 'parser', description: 'Parser produces the expected token', checkIds: [check.id],
+        }] } : {}),
       },
     };
     const draft = c.prepareGoal(raw, 'prepare-' + submissionId);
@@ -49,6 +53,15 @@ function setup(t, {
     checks: [{ id: check.id, argv: check.argv, passed: true, code: 0, stopped: false, screenshots: [] }],
     review: type === 'task.integrated' ? 'codex_operator' : 'codex_native',
   };
+  if (mapped) {
+    const project = goal.manifest.project;
+    const fixture = {
+      checks: receipt.checks, snapshot: { 'src/parser.mjs': 'fixture' },
+      executableModesHash: digest({ 'src/parser.mjs': '100644' }),
+    };
+    receipt.behavioralEvidence = deriveBehavioralEvidence(project, fixture);
+    if (type === 'task.integrated') receipt.candidateBehavioralEvidence = deriveBehavioralEvidence(project, fixture);
+  }
   alterReceipt?.(receipt);
   source.status = 'accepted';
   source.integration = receipt;
@@ -282,4 +295,73 @@ test('a sourced lesson whose fully matched packet exceeds 8 KiB cannot pass prot
   assert.equal(result.passed, false);
   assert.ok(result.candidate.missedMatches > 0);
   assert.ok(result.cases.some(sample => sample.expectedMatch && sample.candidate.overBudget));
+});
+
+test('a directory guidance selector requires a containing directory approval', t => {
+  const f = setup(t);
+  const sourceEvidence = f.resolve();
+  const scoped = structuredClone(f.goal);
+  scoped.manifest.project.readPaths = ['src/scope-probe'];
+  const exactSource = sourceEvidence.map(source => ({ ...source, readPaths: ['src/scope-probe'] }));
+  const validate = (relatedPaths, goal, evidence) =>
+    validateProjectCheckGuidance({ parameters: { ...parameters, relatedPaths }, goal, sourceEvidence: evidence });
+
+  assert.throws(() => validate(['src/'], scoped, sourceEvidence), /outside project or source scope/);
+  assert.throws(() => validate(['src/'], f.goal, exactSource), /outside project or source scope/);
+  assert.deepEqual(validate(['src/scope-probe'], scoped, exactSource).relatedPaths, ['src/scope-probe']);
+  assert.deepEqual(validate(['src/'], f.goal, sourceEvidence).relatedPaths, ['src/']);
+  assert.deepEqual(validate(['src/parser/'], f.goal, sourceEvidence).relatedPaths, ['src/parser/']);
+  assert.throws(() => validate(['src-other/'], f.goal, sourceEvidence), /outside project or source scope/);
+});
+
+test('protected evaluation rejects merged checks from disjoint path contexts', t => {
+  const f = setup(t);
+  const parser = f.resolve()[0], auth = { id: 'auth-unit', argv: ['node', 'checks/auth.mjs'] };
+  const authOutcome = {
+    ...parser, outcomeId: parser.outcomeId + '-auth',
+    objective: 'Harden sessions in src/auth.mjs', context: '',
+    checkDefinitionHashes: { [auth.id]: checkDefinitionHash(auth) },
+  };
+  const sourceEvidence = [parser, authOutcome];
+  const goal = structuredClone(f.goal);
+  goal.manifest.project.checks.push(auth);
+  const candidate = lesson(goal, {
+    recipe: {
+      family: PROJECT_CHECK_GUIDANCE,
+      checkIds: [check.id, auth.id],
+      checkDefinitionHashes: { ...parser.checkDefinitionHashes, ...authOutcome.checkDefinitionHashes },
+      relatedPaths: ['src/parser.mjs', 'src/auth.mjs'],
+      whenTerms: ['parser token', 'sessions'],
+    },
+  });
+  const protectedCases = buildProjectGuidanceCases({ goal, sourceEvidence });
+  const result = evaluateProjectCheckGuidance({ candidate, baseline: null, protectedCases, sourceEvidence });
+  assert.equal(result.passed, false);
+  const parserCase = result.cases.find(sample => sample.id === parser.outcomeId + '/source-assignment');
+  assert.deepEqual(parserCase.candidate.unsupportedCheckIds, [auth.id]);
+});
+
+test('mapped evidence requires passing candidate and combined receipt bindings', async t => {
+  await t.test('regular integration has both receipts', t => {
+    const f = setup(t, { mapped: true });
+    assert.equal(f.resolve()[0].outcomeId, f.outcomeId);
+  });
+  await t.test('native in-place acceptance has only the combined receipt', t => {
+    const f = setup(t, { mapped: true, type: 'task.native_finished' });
+    assert.equal(f.resolve()[0].outcomeId, f.outcomeId);
+  });
+  for (const [name, alterReceipt] of [
+    ['missing', r => delete r.candidateBehavioralEvidence],
+    ['failed', r => { r.candidateBehavioralEvidence.criteria[0].checks[0].status = 'failed'; }],
+    ['changed descriptor', r => { r.candidateBehavioralEvidence.criteria[0].description = 'Another criterion'; }],
+    ['missing mode binding', r => delete r.candidateBehavioralEvidence.executableModesHash],
+    ['due check mislabeled as deferred', r => {
+      const criterion = r.candidateBehavioralEvidence.criteria[0];
+      criterion.status = 'not_run';
+      criterion.checks[0] = { id: check.id, status: 'not_run', reason: 'not_due' };
+    }],
+  ]) await t.test(name, t => {
+    const f = setup(t, { mapped: true, alterReceipt });
+    assert.throws(() => f.resolve(), /candidate behavioral check evidence/);
+  });
 });

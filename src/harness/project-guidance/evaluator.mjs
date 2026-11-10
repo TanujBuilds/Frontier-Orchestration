@@ -15,18 +15,25 @@ export function buildProjectGuidanceCases({ goal, sourceEvidence }) {
   }));
   const crossProject = structuredClone(goal);
   crossProject.manifest.project.repo += '/protected-different-project-fixture';
-  const checkDefinitionHashes = Object.fromEntries(goal.manifest.project.checks.flatMap(check => {
-    const hash = checkDefinitionHash(check);
-    return sourceEvidence.some(source => source.checkDefinitionHashes[check.id] === hash) ? [[check.id, hash]] : [];
-  }));
-  const witnesses = [];
-  const samples = [];
-  for (const source of sourceEvidence) {
+  const witnesses = sourceEvidence.map(source => {
     const query = source.objective + '\n' + source.context;
     const queryTokens = guidanceQueryTokens(query);
     const observedPaths = findScopedGuidancePaths(queryTokens, source.readPaths);
+    return { source, query, queryTokens, observedPaths };
+  });
+  const approvedChecks = goal.manifest.project.checks.map(check => [check.id, checkDefinitionHash(check)]);
+  const samples = [];
+  for (const { source, query, queryTokens, observedPaths } of witnesses) {
+    // Two accepted outcomes can supply different checks for the same path.
+    // An outcome in a disjoint area cannot supply checks for this sample.
+    const related = witnesses.filter(other => other.source === source ||
+      observedPaths.some(path => other.observedPaths.some(observed =>
+        guidancePathMatches(path, observed) || guidancePathMatches(observed, path))));
+    const checkDefinitionHashes = Object.fromEntries(approvedChecks.filter(([id, hash]) =>
+      related.some(witness => witness.source.checkDefinitionHashes[id] === hash)));
+    const pathTokens = new Set(observedPaths);
     const prose = queryTokens
-      .map(token => observedPaths.includes(token) || /[./\\]/.test(token) ? '.' : token)
+      .map(token => pathTokens.has(token) || /[./\\]/.test(token) ? '.' : token)
       .join(' ');
     const heldout = observedPaths.map(path => `"${path}"`).join(' ') + '\n' + prose;
     const id = source.outcomeId;
@@ -35,7 +42,6 @@ export function buildProjectGuidanceCases({ goal, sourceEvidence }) {
       taskContext: { query: text, capability: 'coding', environment: source.environment, ...overrides },
     });
 
-    witnesses.push({ queryTokens, observedPaths });
     samples.push(
       make('source-assignment', 'regression', goal, query, true),
       make('scoped-recall', 'heldout', goal, heldout, true, { permissions: { readPaths: source.readPaths } }),

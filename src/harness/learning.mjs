@@ -160,6 +160,16 @@ export class Learning {
   return this.store.command(key,{op:'learning.correct',lessonId,maintenanceId,parameters,rationale},()=>{const current=this.store.get('lesson',lesson.id);current.correctedFrom=old.id;this.store.put('lesson',current);this.c.emit('learning.corrected',task.goalId,maintenanceId,{before:old.recipeHash,candidate:current.recipeHash,id:current.id,previousId:old.id});return current;});
  }
  quarantine(lessonId,reason,key){return this.store.command(key,{op:'learning.quarantine',lessonId,reason},()=>{const l=this.store.get('lesson',lessonId);text(reason,'reason');l.status='quarantined';l.reason=reason;this.store.put('lesson',l);this.c.emit('learning.quarantined',l.goalId,l.maintenanceId,{id:l.id,reason});return l;});}
- rollback(lessonId,key){return this.store.command(key,{op:'learning.rollback',lessonId},()=>{const l=this.store.get('lesson',lessonId);l.status='superseded';this.store.put('lesson',l);const restored=[];for(const id of l.previousIds??[]){const old=this.store.get('lesson',id);if(old.status!=='superseded')continue;old.status='active';this.store.put('lesson',old);restored.push(id);}this.c.emit('learning.rolled_back',l.goalId,l.maintenanceId,{id:l.id,restored});return l;});}
+ rollback(lessonId,key){return this.store.command(key,{op:'learning.rollback',lessonId},()=>{
+  const lesson=this.store.get('lesson',lessonId);
+  if(lesson.family===PROJECT_CHECK_GUIDANCE&&lesson.status!=='active')throw Error('Only active project check guidance can roll back');
+  lesson.status='superseded';this.store.put('lesson',lesson);
+  const restored=[];
+  for(const id of lesson.previousIds??[]){
+   const old=this.store.get('lesson',id);if(old.status!=='superseded')continue;
+   old.status='active';this.store.put('lesson',old);restored.push(id);
+  }
+  this.c.emit('learning.rolled_back',lesson.goalId,lesson.maintenanceId,{id:lesson.id,restored});return lesson;
+ });}
  archive(lessonId,reason,key){return this.store.command(key,{op:'learning.archive',lessonId,reason},()=>{const l=this.store.get('lesson',lessonId);text(reason,'archive reason',2000);l.status='archived';l.archiveReason=reason;l.archivedAt=this.c.now();this.store.put('lesson',l);this.c.emit('learning.archived',l.goalId,l.maintenanceId,{id:l.id,reason});return l;});}
 }

@@ -51,6 +51,11 @@ assert.equal(parse('   '), '');
       {id: 'parser-unit', argv: [process.execPath, 'checks/unit.mjs']},
       {id: 'parser-regression', argv: [process.execPath, 'checks/regression.mjs']},
     ],
+    behavioralChecks: [{
+      criterionId: 'empty-parser',
+      description: 'Whitespace-only parser input returns empty text',
+      checkIds: ['parser-regression'],
+    }],
   };
 
   let sequence = 0;
@@ -110,6 +115,19 @@ assert.equal(parse('   '), '');
     assert.match(accepted.integration.commit, /^[a-f0-9]{40}$/);
     assert.deepEqual(accepted.integration.checks.map(({id, code, passed}) => ({id, code, passed})),
       project.checks.map(({id}) => ({id, code: 0, passed: true})));
+    const combinedEvidence = accepted.integration.behavioralEvidence;
+    const candidateEvidence = accepted.integration.candidateBehavioralEvidence;
+    const evidence = layout === 'candidate_v1' ? [candidateEvidence, combinedEvidence] : [combinedEvidence];
+    for (const receipt of evidence) {
+      assert.match(receipt.snapshotHash, /^[a-f0-9]{64}$/);
+      assert.match(receipt.executableModesHash, /^[a-f0-9]{64}$/);
+      assert.deepEqual(receipt.criteria, [{
+        ...project.behavioralChecks[0],
+        checks: [{id: 'parser-regression', status: 'passed'}],
+        status: 'passed',
+      }]);
+    }
+    if (layout !== 'candidate_v1') assert.equal(candidateEvidence, undefined);
     const records = await read('learning_get', {goalId});
     const kind = layout === 'candidate_v1' ? 'task.integrated' : 'task.native_finished';
     const outcome = records.outcome.find(o => o.taskId === source.id && o.kind === kind);
@@ -146,7 +164,7 @@ test('project guidance public lifecycle demo', async t => {
   const f = await fixture(t);
   const goal = await f.makeGoal('source');
   const {accepted, outcome} = await f.acceptedSource(goal.id);
-  t.diagnostic(`Fixture review and real Git integration ${accepted.integration.commit.slice(0, 12)}. Local sandbox checks passed: ${accepted.integration.checks.map(c => c.id).join(', ')}.`);
+  t.diagnostic(`Fixture review and real Git integration ${accepted.integration.commit.slice(0, 12)}. Local sandbox checks passed: ${accepted.integration.checks.map(c => c.id).join(', ')}. The mapped parser regression passed on the candidate and combined checkout.`);
   assert.deepEqual(await f.retrieve(goal.id), []);
 
   const task = await f.maintenance(goal.id);
@@ -372,4 +390,49 @@ test('public recall enforces a shared four-item and 8 KiB limit', async t => {
   assert.equal(withoutOversizedGuidance.length, 4);
   assert.ok(withoutOversizedGuidance.every(packet => packet.id !== active.id));
   assert.ok(Buffer.byteLength(JSON.stringify(withoutOversizedGuidance)) <= 8192);
+});
+
+test('public guidance rollback preserves disabled history and one active version', async t => {
+  const f = await fixture(t);
+  const source = await f.makeGoal('rollback-source');
+  const {outcome} = await f.acceptedSource(source.id);
+
+  let sequence = 0;
+  async function promote() {
+    const goal = await f.makeGoal(`rollback-version-${++sequence}`);
+    const task = await f.maintenance(goal.id);
+    const candidate = await f.mutate('learning_propose', {taskId: task.id, proposal: proposalFor(f.project, outcome)});
+    assert.equal((await f.mutate('learning_evaluate', {lessonId: candidate.id})).passed, true);
+    const active = await f.mutate('learning_promote', {lessonId: candidate.id});
+    await f.mutate('native_text_finish', {taskId: task.id, content: 'Fixture evaluation complete'});
+    return active;
+  }
+
+  for (const [tool, status] of [['learning_quarantine', 'quarantined'], ['learning_archive', 'archived']]) {
+    await t.test(`rollback cannot restore ${status} guidance`, async () => {
+      const previous = await promote();
+      const current = await promote();
+      await f.mutate(tool, {lessonId: previous.id, reason: 'Fixture disables previous guidance'});
+
+      await assert.rejects(f.mutate('learning_rollback', {lessonId: previous.id}), /only active.*roll back/i);
+      await f.mutate('learning_rollback', {lessonId: current.id});
+      assert.deepEqual(await f.retrieve(source.id), []);
+      const inspected = await f.read('learning_get', {goalId: source.id});
+      assert.equal(inspected.lesson.find(record => record.id === previous.id).status, status);
+    });
+  }
+
+  await t.test('rollback rejects a superseded target and replays an exact active rollback', async () => {
+    await promote();
+    const previous = await promote();
+    const current = await promote();
+    await assert.rejects(f.mutate('learning_rollback', {lessonId: previous.id}), /only active.*roll back/i);
+    assert.deepEqual((await f.retrieve(source.id)).map(packet => packet.id), [current.id]);
+
+    const input = {lessonId: current.id};
+    const result = await f.mutate('learning_rollback', input, 'active-guidance-rollback');
+    assert.deepEqual((await f.retrieve(source.id)).map(packet => packet.id), [previous.id]);
+    assert.deepEqual(await f.mutate('learning_rollback', input, 'active-guidance-rollback'), result);
+    await assert.rejects(f.mutate('learning_rollback', input), /only active.*roll back/i);
+  });
 });

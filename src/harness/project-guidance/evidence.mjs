@@ -28,7 +28,22 @@ function approvedSource(c, task, event) {
   return goal;
 }
 
-function verifiedCheckDefinitions(receipt, task, goal) {
+function assertBoundBehavioralEvidence({ project, checks, checkIds, evidence, stage }) {
+  if (!sha256.test(evidence?.snapshotHash) || !sha256.test(evidence?.executableModesHash)) {
+    throw Error(`Integration receipt lacks bound ${stage} behavioral check evidence`);
+  }
+  // The accepted event carries the snapshot and mode hashes. Use only the
+  // approved due IDs and the verified combined results to reconstruct the
+  // required criterion descriptors and statuses for this stage.
+  const expected = deriveBehavioralEvidence(project, {
+    checks, checkIds, snapshot: {}, executableModesHash: evidence.executableModesHash,
+  });
+  expected.snapshotHash = evidence.snapshotHash;
+  if (digest(expected) !== digest(evidence)) throw Error(`Integrated ${stage} behavioral check evidence changed`);
+  assertBehavioralChecks(evidence);
+}
+
+function verifiedCheckDefinitions(receipt, task, goal, native) {
   const project = goal.manifest.project;
   if (!Array.isArray(receipt.checks) || !receipt.checks.length) {
     throw Error('Integration receipt lacks passing check evidence');
@@ -50,19 +65,20 @@ function verifiedCheckDefinitions(receipt, task, goal) {
     project.checks.map(check => check.id);
   if (requiredIds.some(id => !passed.has(id))) throw Error('Integration receipt omits required checks');
   if (project.behavioralChecks) {
-    const evidence = receipt.behavioralEvidence;
-    if (!sha256.test(evidence?.snapshotHash) || !sha256.test(evidence?.executableModesHash)) {
-      throw Error('Integration receipt lacks bound behavioral check evidence');
-    }
-    const expected = deriveBehavioralEvidence(project, {
-      checks: receipt.checks,
-      checkIds: [...passed.keys()],
-      snapshot: {},
-      executableModesHash: evidence.executableModesHash,
+    const checks = receipt.checks;
+    const checkIds = [...passed.keys()];
+    assertBoundBehavioralEvidence({
+      project, checks, checkIds, evidence: receipt.behavioralEvidence, stage: 'combined',
     });
-    expected.snapshotHash = evidence.snapshotHash;
-    if (digest(expected) !== digest(evidence)) throw Error('Integrated behavioral check evidence changed');
-    assertBehavioralChecks(evidence);
+    if (!native) {
+      // Overnight v2 uses the same effective approved checks for candidate and
+      // combined stages. Other candidate layouts use the task's approved subset.
+      const candidateIds = isOvernightV2(goal.manifest) ? checkIds : task.spec.permissions.checks;
+      assertBoundBehavioralEvidence({
+        project, checks, checkIds: candidateIds,
+        evidence: receipt.candidateBehavioralEvidence, stage: 'candidate',
+      });
+    }
   }
   return Object.fromEntries(passed);
 }
@@ -122,7 +138,7 @@ export function resolveGuidanceEvidence({ c, maintenanceTaskId, outcomeIds }) {
       commit: receipt.commit,
       environment,
       capabilityVersion: sourceVersion,
-      checkDefinitionHashes: verifiedCheckDefinitions(receipt, task, sourceGoal),
+      checkDefinitionHashes: verifiedCheckDefinitions(receipt, task, sourceGoal, native),
       readPaths: task.spec.permissions.readPaths,
       objective: task.spec.objective,
       context: task.spec.context,
