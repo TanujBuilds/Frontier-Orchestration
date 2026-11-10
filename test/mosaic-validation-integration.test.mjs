@@ -14,22 +14,27 @@ const compatibilityMode = "export default 'compatibility';\n";
 const originalFormat = "export default 'plain';\n";
 const compactFormat = "export default 'compact';\n";
 
-async function fixture(t, { integrationFault } = {}) {
+async function fixture(t, { integrationFault, attributes } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'mosaic-validation-integration-'));
   const repo = path.join(root, 'repo');
   await mkdir(path.join(repo, 'src'), { recursive: true });
   await mkdir(path.join(repo, 'checks'));
   await writeFile(path.join(repo, 'src/mode.mjs'), originalMode);
   await writeFile(path.join(repo, 'src/format.mjs'), originalFormat);
+  if (attributes) await writeFile(path.join(repo, '.gitattributes'), attributes);
   await writeFile(path.join(repo, 'checks/export.mjs'), `
     import assert from 'node:assert/strict';
+    import { readFileSync } from 'node:fs';
     import mode from '../src/mode.mjs';
     import format from '../src/format.mjs';
     assert.notEqual(mode + ':' + format, 'compatibility:compact', 'Combined settings break export');
+    const bytes = readFileSync(new URL('../src/mode.mjs', import.meta.url));
+    console.log(bytes.includes('\\r\\n') ? 'Observed CRLF' : 'Observed LF');
   `);
   for (const args of [
     ['init', '-q'], ['config', 'user.email', 'fixture@example.invalid'],
-    ['config', 'user.name', 'Fixture'], ['add', '.'], ['commit', '-qm', 'base'],
+    ['config', 'user.name', 'Fixture'], ['config', 'core.autocrlf', 'false'],
+    ['config', 'extensions.worktreeConfig', 'true'], ['add', '.'], ['commit', '-qm', 'base'],
   ]) await git(repo, ...args);
 
   const c = new Coordinator({ root: path.join(root, 'state') });
@@ -76,7 +81,7 @@ async function fixture(t, { integrationFault } = {}) {
   return { c, g, integration };
 }
 
-async function prepareCandidate({ c, g, integration }, key, file, content) {
+async function startCandidate({ c, g, integration }, key, file, content, layout) {
   const task = c.submitTask({
     goalId: g.id, submissionId: key, kind: 'coding', actor: 'codex',
     objective: 'Change one export setting', acceptance: ['Export remains valid'],
@@ -84,9 +89,14 @@ async function prepareCandidate({ c, g, integration }, key, file, content) {
       readPaths: ['src/', 'checks/'], writePaths: [file], checks: ['build', 'export'],
     },
   }, `submit-${key}`);
-  const active = await integration.startNative({ taskId: task.id, layout: 'candidate_v1' }, `start-${key}`);
+  const active = await integration.startNative({ taskId: task.id, ...(layout ? { layout } : {}) }, `start-${key}`);
   await writeFile(path.join(active.native.worktree, file), content);
-  const candidate = await integration.finishNative({ taskId: task.id, summary: 'Changed one setting' }, `finish-${key}`);
+  return active;
+}
+
+async function prepareCandidate(f, key, file, content) {
+  const task = await startCandidate(f, key, file, content, 'candidate_v1');
+  const candidate = await f.integration.finishNative({ taskId: task.id, summary: 'Changed one setting' }, `finish-${key}`);
   assert.equal(candidate.status, 'awaiting_review');
   assert.deepEqual(candidate.result.checks.map(({ id, passed }) => ({ id, passed })), [
     { id: 'build', passed: true }, { id: 'export', passed: true },
@@ -176,4 +186,73 @@ test('a combined snapshot changed after a check cannot be checkpointed with its 
   assert.equal(await git(goal.integration.worktree, 'rev-parse', 'HEAD'), f.g.manifest.project.baseCommit);
   assert.equal(f.c.getTask(candidate.id).integration, undefined);
   assert.equal(goal.integrationPending.taskId, candidate.id);
+});
+
+const crlfMode = compatibilityMode.replace('\n', '\r\n');
+
+test('a normalized native candidate commit cannot inherit the CRLF worktree check receipt', async t => {
+  const f = await fixture(t, { attributes: '*.mjs text eol=lf\n' });
+  const candidate = await prepareCandidate(f, 'mode', 'src/mode.mjs', crlfMode);
+  assert.match(candidate.result.checks.find(check => check.id === 'export').stdout, /Observed CRLF/);
+  assert.equal(await git(candidate.native.worktree, 'show', candidate.native.commit + ':src/mode.mjs', '-z'), compatibilityMode);
+  await assert.rejects(accept(f, candidate, 'accept-eol-candidate'), /commit.*checked|checked.*commit/i);
+  assert.equal(f.c.getTask(candidate.id).integration, undefined);
+  assert.equal(f.c.getGoal(f.g.id).integrationPending, undefined);
+});
+
+test('a normalized combined commit cannot inherit the CRLF import check receipt', async t => {
+  let configureEol = true;
+  const f = await fixture(t, {
+    integrationFault: async (workspace, results) => {
+      if (configureEol) await git(workspace.root, 'config', '--worktree', 'core.autocrlf', 'input');
+      return results;
+    },
+  });
+  const candidate = await prepareCandidate(f, 'mode', 'src/mode.mjs', crlfMode);
+  assert.equal(await git(candidate.native.worktree, 'show', candidate.native.commit + ':src/mode.mjs', '-z'), crlfMode);
+  await assert.rejects(accept(f, candidate, 'accept-eol-combined'), /commit.*checked|checked.*commit/i);
+  const journal = await new Journal(path.join(f.c.store.root, 'integration'), f.g.id).load();
+  assert.match(journal.last('integration.checks').checks.find(check => check.id === 'export').stdout, /Observed CRLF/);
+  assert.equal(f.c.getTask(candidate.id).integration, undefined);
+  const goal = f.c.getGoal(f.g.id);
+  assert.equal(goal.integrationPending.taskId, candidate.id);
+  assert.equal(await git(goal.integration.worktree, 'rev-parse', 'HEAD'), goal.manifest.project.baseCommit);
+
+  configureEol = false;
+  await git(goal.integration.worktree, 'config', '--worktree', 'core.autocrlf', 'false');
+  const accepted = await accept(f, candidate, 'accept-eol-combined');
+  assert.equal(accepted.status, 'accepted');
+  assert.equal(accepted.integration.behavioralEvidence.criteria[0].status, 'passed');
+  assert.equal(await git(goal.integration.worktree, 'show', accepted.integration.commit + ':src/mode.mjs', '-z'), crlfMode);
+});
+
+test('direct native finish refuses to attach a worktree receipt to a normalized commit', async t => {
+  const f = await fixture(t, { attributes: '*.mjs text eol=lf\n' });
+  const task = await startCandidate(f, 'mode', 'src/mode.mjs', crlfMode);
+  await assert.rejects(
+    f.integration.finishNative({ taskId: task.id, summary: 'Changed one setting' }, 'finish-eol-native'),
+    /commit.*checked|checked.*commit/i,
+  );
+  assert.equal(f.c.getTask(task.id).integration, undefined);
+  assert.equal(f.c.getGoal(f.g.id).integrationOwner, task.id);
+  assert.equal(await git(task.native.worktree, 'rev-parse', 'HEAD'), f.g.manifest.project.baseCommit);
+
+  await writeFile(path.join(task.native.worktree, 'src/mode.mjs'), compatibilityMode);
+  const accepted = await f.integration.finishNative({ taskId: task.id, summary: 'Changed one setting' }, 'finish-eol-native');
+  assert.equal(accepted.status, 'accepted');
+  assert.equal(accepted.integration.behavioralEvidence.criteria[0].status, 'passed');
+  assert.equal(await git(task.native.worktree, 'show', accepted.integration.commit + ':src/mode.mjs', '-z'), compatibilityMode);
+});
+
+test('the byte-parity precommit probe declines an external Git filter attribute', async t => {
+  const f = await fixture(t, { attributes: 'src/mode.mjs filter=unspecified\n' });
+  const task = await startCandidate(f, 'mode', 'src/mode.mjs', compatibilityMode);
+  await git(task.native.worktree, 'config', '--worktree', 'filter.unspecified.clean', 'exit 88');
+  await git(task.native.worktree, 'config', '--worktree', 'filter.unspecified.required', 'true');
+  await assert.rejects(
+    f.integration.finishNative({ taskId: task.id, summary: 'Changed one setting' }, 'finish-filter-native'),
+    /Git filter attribute/i,
+  );
+  assert.equal(await git(task.native.worktree, 'rev-parse', 'HEAD'), f.g.manifest.project.baseCommit);
+  assert.equal(f.c.getTask(task.id).integration, undefined);
 });

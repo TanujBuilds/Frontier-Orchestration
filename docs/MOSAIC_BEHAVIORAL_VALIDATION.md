@@ -6,8 +6,8 @@ a unit test can confirm CSV quoting. A separate check can click **Export** and
 verify the bytes the browser downloads.
 
 Add `behavioralChecks` to the approved `project` alongside its existing
-literal `checks`. For example, given declared checks named `csv-unit` and
-`csv-download`:
+literal `checks`. This example maps two declared checks, `csv-unit` and
+`csv-download`, to one criterion.
 
 ```json
 {
@@ -48,14 +48,20 @@ evidence is bounded to 1 MiB.
 Integration verifies the checked candidate again and runs the applicable
 checks against the combined result. Its saved record carries behavioral
 evidence for the integration snapshot and links to the integration commit.
-A successful candidate run alone cannot certify the combined result. The
-mapping's coverage is limited to the behavior the approved checks exercise.
+A successful candidate run alone cannot certify the combined result. Mosaic
+checks that approved readable files match the bytes recorded in the Git tree.
+It stops if Git clean conversion would change those bytes or an external
+filter is declared on a path it would check before committing. Receipts
+describe the checked workspace and Git tree. Checkout settings elsewhere
+can affect how those bytes are materialized.
+
+The mapping's coverage is limited to the behavior the approved checks exercise.
 The existing mode-specific review and acceptance rules still apply.
 
 ## Run the CSV download fixture
 
 From the repository root on macOS with the Codex CLI on PATH for
-`codex sandbox`, prepare the pinned dependencies and Chromium locally:
+`codex sandbox`, prepare the pinned dependencies and Chromium locally.
 
 ```sh
 npm ci --ignore-scripts
@@ -73,8 +79,7 @@ browser, which keeps the production check sandbox's network denial in force.
 The ordinary test suite reports a skip if the required browser environment is
 unavailable. The explicit command above requires it.
 
-The workflow borrows the idea of exercising a running application at defined
-milestones from [Factory Planning & Validation](https://docs.factory.com/missions/planning)
-and distinguishes checks from the reviewer decision, a separation illustrated
-by [bob's acceptance policy](https://github.com/yonk-labs/bob/blob/71ee07ffe9c1441513c2a3c095b98d0a804ef5c9/src/engine.rs#L212).
-The implementation is Mosaic-specific.
+The implementation borrows the practice of exercising a running application at
+defined milestones and keeps the reviewer's decision separate from executed
+checks. The code was written for Mosaic. [Factory Planning & Validation](https://docs.factory.com/missions/planning),
+[bob's acceptance policy](https://github.com/yonk-labs/bob/blob/71ee07ffe9c1441513c2a3c095b98d0a804ef5c9/src/engine.rs#L212).
