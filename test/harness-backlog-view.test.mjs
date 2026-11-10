@@ -4,6 +4,7 @@ import {mkdtemp, rm} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {Coordinator} from '../src/harness/coordinator.mjs';
+import {Goals} from '../src/harness/goals.mjs';
 import {Worker} from '../src/harness/worker.mjs';
 import {adapters, advance, calls, fixture, open, startTime} from './fixtures/mosaic-recovery/fixture.mjs';
 
@@ -91,6 +92,19 @@ test('a paused native text owner may still require host confirmation', () => {
   const row = projectTasks([task]).items[0];
   assert.equal(row.status, 'paused');
   assert.equal(row.reasonCode, 'pause_pending');
+});
+
+test('control stays pending while a task owns the saved integration boundary', () => {
+  for (const [status,reasonCode] of [['stopped','stop_pending'],['paused','pause_pending']]) {
+    const task = sampleTask('pending-integration',status,{controlReturnStatus:'ready_to_integrate'});
+    const goal = {...sampleGoal, integrationPending:{taskId:task.id,importKey:'protected-import'}};
+    const row = projectTasks([task],{goal}).items[0];
+    assert.equal(row.sourceStatus,status);
+    assert.equal(row.status,status);
+    assert.equal(row.reasonCode,reasonCode);
+    assert.match(row.explanation,/saved integration boundary/);
+    assert.equal(row.integrationCommit,null);
+  }
 });
 
 test('a certified reconnect cannot advance after the original request budget is spent', () => {
@@ -184,6 +198,64 @@ async function setupConsult(t) {
   return {c, reopen, goal, task};
 }
 
+test('a saved consult result with zero review allowance reports the real review blocker', async t => {
+  const {c,goal,task} = await setupConsult(t), g = goal('review-budget');
+  const row = task(g,'review-budget',{limits:{reviews:0}});
+  c.store.put('backlog_group',makeGroup(g,[row.id]));
+  const owner = 'fixture-consult-review';
+  c.acquireWorker(owner);
+  const worker = new Worker({c,owner,config:{environment:'fixture'},
+    provider:{complete:async () => ({content:'Saved consult answer',model:'fixture'})}});
+  const saved = await worker.executeTick();
+  assert.equal(saved.status,'awaiting_review');
+  assert.throws(() => c.review({taskId:row.id,decision:'accept',feedback:'Candidate reviewed'},'review'),
+    /Review limit reached/);
+
+  const item = inspect({c,worker,goalId:g.id}).groups[0].items[0];
+  assert.equal(item.sourceStatus,'awaiting_review');
+  assert.equal(item.status,'blocked');
+  assert.equal(item.reasonCode,'review_budget_exhausted');
+  assert.equal(item.recovery.lastVerifiedCheckpoint.kind,'result_saved');
+  assert.equal(item.spent.model,1);
+});
+
+test('a rebound consult preserves evidence when the revised mode prohibits operator review', async t => {
+  const {c,goal,task} = await setupConsult(t), g = goal('review-mode');
+  const row = task(g,'review-mode');
+  c.store.put('backlog_group',makeGroup(g,[row.id]));
+  const owner = 'fixture-mode-review';
+  c.acquireWorker(owner);
+  const worker = new Worker({c,owner,config:{environment:'fixture'},
+    provider:{complete:async () => ({content:'Saved consult answer',model:'fixture'})}});
+  assert.equal((await worker.executeTick()).status,'awaiting_review');
+
+  const goals = new Goals(c);
+  const revision = goals.prepareRevision({goalId:g.id,expectedHash:g.hash,manifest:{
+    submissionId:g.manifest.submissionId,objective:g.manifest.objective,acceptance:g.manifest.acceptance,
+    mode:'deepseek_only',environment:'fixture',
+  }},'prepare-mode-revision');
+  const approved = goals.activateRevision({revisionId:revision.id,hash:revision.hash},'approve-mode-revision');
+  assert.equal(goals.rebind({taskId:row.id},'rebind-mode-revision').goalVersion,approved.version);
+  assert.throws(() => c.review({taskId:row.id,decision:'accept',feedback:'Candidate reviewed'},'review'),
+    /Mode prohibits Codex operator review/);
+
+  const group = inspect({c,worker,goalId:g.id}).groups[0];
+  assert.equal(group.stale,true);
+  const item = group.items[0];
+  assert.equal(item.sourceStatus,'awaiting_review');
+  assert.equal(item.status,'blocked');
+  assert.equal(item.reasonCode,'mode_review_unavailable');
+  assert.equal(item.recovery.lastVerifiedCheckpoint.kind,'result_saved');
+});
+
+test('hash-bound research review remains distinct after a round is reserved', () => {
+  const task = sampleTask('research','awaiting_review',{reviews:1,researchReviewTickets:[{id:'reserved'}]});
+  task.spec = {...task.spec,kind:'research',researchPolicy:{version:3},limits:{reviews:1}};
+  const item = projectTasks([task]).items[0];
+  assert.equal(item.status,'waiting_review');
+  assert.equal(item.reasonCode,'research_review_required');
+});
+
 test('inspection pages groups in insertion order using a cursor bound to both filters', async t => {
   const {c,goal,task} = await setupConsult(t), g = goal('first'), other = goal('second');
   const first = task(g,'first');
@@ -207,6 +279,49 @@ test('inspection pages groups in insertion order using a cursor bound to both fi
   assert.throws(() => inspect({c,cursor:'invalid-cursor'}), /cursor/i);
   assert.deepEqual(inspect({c,groupId:'new'}).groups.map(group => group.id), ['new']);
   assert.deepEqual(inspect({c,goalId:other.id,groupId:'new'}).groups, []);
+});
+
+test('inspection keeps priorities coherent across a concurrent SQLite commit', async t => {
+  const {c,reopen,goal,task} = await setupConsult(t), g = goal('snapshot'), row = task(g,'snapshot');
+  c.store.put('backlog_group',makeGroup(g,[row.id]));
+  const writer = reopen();
+  const effectivePriorities = c.effectivePriorities.bind(c);
+  c.effectivePriorities = () => {
+    const priorities = effectivePriorities();
+    writer.setPriority({taskId:row.id,priority:'blocking',reason:'Concurrent owner update'},'concurrent-priority');
+    c.effectivePriorities = effectivePriorities;
+    return priorities;
+  };
+
+  const item = () => inspect({c,goalId:g.id}).groups[0].items[0];
+  const first = item();
+  assert.deepEqual([first.priority,first.effectivePriority],['normal','normal']);
+  const next = item();
+  assert.deepEqual([next.priority,next.effectivePriority],['blocking','blocking']);
+});
+
+test('inspection leaves the caller transaction open and reads its uncommitted task state', async t => {
+  const {c,goal,task} = await setupConsult(t), g = goal('transaction'), row = task(g,'transaction');
+  c.store.put('backlog_group',makeGroup(g,[row.id]));
+  const item = () => inspect({c,goalId:g.id}).groups[0].items[0];
+  assert.throws(() => c.store.tx(() => {
+    c.setPriority({taskId:row.id,priority:'blocking',reason:'Test uncommitted change'},'uncommitted-priority');
+    assert.equal(item().effectivePriority,'blocking');
+    assert.equal(c.store.db.isTransaction,true);
+    throw Error('Force caller rollback');
+  }),/Force caller rollback/);
+  assert.equal(item().priority,'normal');
+});
+
+test('a failed inspection releases its own read transaction', async t => {
+  const {c,goal,task} = await setupConsult(t), g = goal('failed-read'), row = task(g,'failed-read');
+  c.store.put('backlog_group',makeGroup(g,[row.id]));
+  c.effectivePriorities = () => {
+    assert.equal(c.store.db.isTransaction,true);
+    throw Error('Fixture read error');
+  };
+  assert.throws(() => inspect({c,goalId:g.id}),/Fixture read error/);
+  assert.equal(c.store.db.isTransaction,false);
 });
 
 test('a pending reservation is running only with a matching current local worker lease', async t => {

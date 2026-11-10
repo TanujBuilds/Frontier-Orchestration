@@ -50,16 +50,19 @@ function taskState(task, {goal, byId, hostState, request, now, deadline}) {
   if (task.goalVersion !== goal.version) {
     return state('blocked','task_approval_stale','The task needs explicit rebind to the current approved goal version.');
   }
-  const pending = ['running','legacy_reviewing','codex_active'].includes(status) ||
+  const integrationPending = goal.integrationPending?.taskId === id;
+  const pending = integrationPending || ['running','legacy_reviewing','codex_active'].includes(status) ||
     task.controlReturnStatus === 'codex_active' || task.native?.writerActive || goal.integrationOwner === id;
+  const integrationControl = integrationPending ?
+    'A protected import is pending. Inspect task_get and goal_get to verify the saved integration boundary.' : null;
   if (goal.status === 'stopped' || task.stopRequested || status === 'stopped') {
     return state('stopped',pending ? 'stop_pending' : goal.status === 'stopped' ? 'goal_stopped' : 'task_stopped',
-      pending ? 'Stop is requested. Verify that the owner has reached a safe boundary before continuing.' :
+      pending ? integrationControl ?? 'Stop is requested. Verify that the owner has reached a safe boundary before continuing.' :
         'Work is stopped. Resume explicitly through work_control within the original limits.');
   }
   if (goal.status === 'paused' || task.pauseRequested || status === 'paused') {
     return state('paused',pending ? 'pause_pending' : goal.status === 'paused' ? 'goal_paused' : 'task_paused',
-      pending ? 'Pause is requested. The owner may still be reaching a safe boundary.' :
+      pending ? integrationControl ?? 'Pause is requested. The owner may still be reaching a safe boundary.' :
         'Work is paused. Resume explicitly through work_control within the original limits.');
   }
   if (goal.status !== 'active') return state('blocked','goal_inactive','The goal has no active execution window.');
@@ -126,14 +129,29 @@ function taskState(task, {goal, byId, hostState, request, now, deadline}) {
     }
   }
 
-  const review = goal.manifest.mode.review;
+  const {mode} = goal.manifest;
+  const {review} = mode;
   if (reviewStates.has(status)) {
     if (status === 'ready_to_integrate') {
       return state('waiting_review','integration_pending', review === 'operator' ?
         'The candidate awaits protected integration through task_integrate.' :
         'The candidate awaits the existing worker’s protected integration. An integration receipt is pending.');
     }
-    if (status === 'awaiting_review') return state('waiting_review','operator_review_required','The saved candidate needs an operator review before acceptance.');
+    if (status === 'awaiting_review') {
+      // Research consumes a round on reservation and can submit a saved
+      // ticket after reaching its round limit.
+      const hashBoundResearch = spec.kind === 'research' && spec.researchPolicy?.version === 3;
+      if (review !== 'operator' || hashBoundResearch && mode.id !== 'collaborative') {
+        return state('blocked','mode_review_unavailable','The current approved mode prohibits the review required by this saved result.');
+      }
+      if (hashBoundResearch) {
+        return state('waiting_review','research_review_required','Inspect task_get for the hash-bound research candidate and its saved review tickets.');
+      }
+      if (task.reviews >= spec.limits?.reviews) {
+        return state('blocked','review_budget_exhausted','The original operator review allowance is spent. Inspect the saved result through task_get.');
+      }
+      return state('waiting_review','operator_review_required','The saved candidate needs an operator review before acceptance.');
+    }
     return state('waiting_review',request?.outcome === 'completed' ? 'saved_review_pending' : 'legacy_review_pending',
       request?.outcome === 'completed' ? 'A review response is saved and awaits coordinator processing.' :
         'The candidate awaits independent review under the approved mode.');
@@ -277,12 +295,26 @@ export function inspectBacklog({c,worker,goalId,groupId,limit=50,cursor}) {
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw Error('Backlog limit must be an integer from 1 to 100');
   const filter = [goalId??null,groupId??null];
   const before = readCursor(cursor,filter);
+  const {db} = c.store;
+  // SQLite WAL lets other connections write while this inspection keeps one
+  // snapshot across group, priority, task, request and lease reads.
+  const ownsSnapshot = !db.isTransaction;
+  if (ownsSnapshot) db.exec('BEGIN DEFERRED');
+  try {
+    return readBacklogSnapshot({c,worker,filter,before,limit});
+  } finally {
+    if (ownsSnapshot) db.exec('ROLLBACK');
+  }
+}
+
+function readBacklogSnapshot({c,worker,filter,before,limit}) {
   const {store} = c;
+  const [goalId,groupId] = filter;
   const generatedAt = c.now();
   const rows = store.db.prepare(`SELECT rowid,data FROM records WHERE kind='backlog_group'
     AND (? IS NULL OR json_extract(data,'$.goalId')=?) AND (? IS NULL OR id=?)
     AND (? IS NULL OR rowid<?) ORDER BY rowid DESC LIMIT ?`)
-    .all(filter[0],filter[0],filter[1],filter[1],before,before,limit+1);
+    .all(goalId,goalId,groupId,groupId,before,before,limit+1);
   const priorities = rows.length ? c.effectivePriorities() : new Map();
   const hostState = {};
   const workerToken = worker?.owner ?? c.workerLease?.token;

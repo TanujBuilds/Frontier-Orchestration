@@ -50,16 +50,16 @@ Overnight v2 uses its own validated planner graph. Its assignments remain visibl
 
 ## Read the queue
 
-Inspect returns the saved group references and a current projection of each task. Use `--group` to select a group, or pass the returned `nextCursor` to `--cursor` with the same filter. Pages default to 50 groups and allow up to 100. A group's item list stays bounded by the submission limit. MCP clients can use `goalId` and/or `groupId` and the same pagination fields.
+Inspect returns the saved group references and a projection of each task from one consistent read of the coordinator database. Use `--group` to select a group, or pass the returned `nextCursor` to `--cursor` with the same filter. Pages default to 50 groups and allow up to 100. A group's item list stays bounded by the submission limit. MCP clients can use `goalId` and/or `groupId` and the same pagination fields.
 
 - `sourceStatus` is the coordinator's saved status. Each projected status has a `reasonCode` and explanation. A missing task or stale approval remains visible as a hold.
 - `waiting_dependency` means an upstream task still needs acceptance. A failed or stopped prerequisite can block its dependents while independent work remains eligible.
-- `waiting_review` covers saved review or integration work. Protected checks passing alone do not accept a coding result.
+- `waiting_review` covers saved review or integration work. Protected checks passing alone do not accept a coding result. A candidate with an exhausted operator review allowance shows a blocker.
 - `waiting_host` covers native work that needs its supported host. `waiting_answer` identifies a saved owner or supervisor question. Certified non-dispatch reconnect waits appear separately from uncertain ownership.
 - `ready` describes eligibility in the saved view. A worker still needs its normal slot, lease, compatible runtime and request budget.
 - Effective priority can be higher than the task's own priority when a downstream blocking task depends on it. The coordinator computes that priority for scheduling.
 
-Use existing `task_priority` with a reason to change priority. Use `work_control` with `pause`, `stop` or `resume` and the saved task ID. For queued work, use `stop` to retain the group, task and evidence while preventing progression. Owned work follows its existing safe boundaries. Resume retains the original deadline, approvals and spending. Reconcile uncertain ownership through the existing recovery path.
+Use existing `task_priority` with a reason to change priority. Use `work_control` with `pause`, `stop` or `resume` and the saved task ID. For queued work, use `stop` to retain the group, task and evidence while preventing progression. Owned work follows its existing safe boundaries. A pending protected import can require checking the saved integration boundary before work resumes. Resume retains the original deadline, approvals and spending. Reconcile uncertain ownership through the existing recovery path.
 
 ## Disposable demo
 
