@@ -365,3 +365,60 @@ test('mapped evidence requires passing candidate and combined receipt bindings',
     assert.throws(() => f.resolve(), /candidate behavioral check evidence/);
   });
 });
+
+test('protected case construction scales across ten long disjoint source assignments', t => {
+  const f = setup(t);
+  const first = f.resolve()[0];
+  const goal = structuredClone(f.goal);
+  goal.manifest.project.readPaths = ['s/'];
+  const pathCount = 5_500;
+  const file = (source, index) => 's/' + source.toString(36) + index.toString(36);
+  const sourceEvidence = Array.from({ length: 10 }, (_, sourceIndex) => ({
+    ...first,
+    outcomeId: 'scale-' + sourceIndex, objective: 'Inspect parser', readPaths: ['s/'],
+    context: Array.from({ length: pathCount }, (_, fileIndex) => file(sourceIndex, fileIndex)).join(' '),
+  }));
+  assert.ok(sourceEvidence.every(source => source.context.length <= 40_000));
+  const started = performance.now();
+  const protectedCases = buildProjectGuidanceCases({ goal, sourceEvidence });
+  const built = performance.now();
+  const duration = built - started;
+  t.diagnostic(`Built ${protectedCases.samples.length} cases in ${Math.round(duration)} ms`);
+  assert.equal(protectedCases.samples.length, 90);
+  assert.ok(duration < 5_000, `construction took ${Math.round(duration)} ms`);
+
+  const candidate = lesson(goal, {
+    recipe: {
+      family: PROJECT_CHECK_GUIDANCE, ...parameters,
+      relatedPaths: sourceEvidence.map((_, sourceIndex) => file(sourceIndex, pathCount - 1)),
+      whenTerms: ['parser'],
+    },
+  });
+  const result = evaluateProjectCheckGuidance({ candidate, baseline: null, protectedCases, sourceEvidence });
+  t.diagnostic(`Scored cases in ${Math.round(performance.now() - built)} ms`);
+  assert.equal(result.passed, true);
+});
+
+test('protected attribution recognizes directory containment in both directions', t => {
+  const f = setup(t);
+  const first = f.resolve()[0];
+  const childCheck = { id: 'lexer-unit', argv: ['node', 'checks/lexer.mjs'] };
+  const siblingCheck = { id: 'sibling-unit', argv: ['node', 'checks/sibling.mjs'] };
+  const goal = structuredClone(f.goal);
+  goal.manifest.project.checks.push(childCheck, siblingCheck);
+  const source = (id, context, check) => ({
+    ...first, outcomeId: id, objective: 'Inspect parser', context,
+    checkDefinitionHashes: { [check.id]: checkDefinitionHash(check) },
+  });
+  const sourceEvidence = [
+    source('parent', 'src/parser/', check),
+    source('child', 'src/parser/lexer.mjs', childCheck),
+    source('sibling', 'src/parser-next/lexer.mjs', siblingCheck),
+  ];
+  const { samples } = buildProjectGuidanceCases({ goal, sourceEvidence });
+  const supported = id =>
+    Object.keys(samples.find(sample => sample.id === id + '/source-assignment').checkDefinitionHashes);
+  assert.deepEqual(supported('parent'), [check.id, childCheck.id]);
+  assert.deepEqual(supported('child'), [check.id, childCheck.id]);
+  assert.deepEqual(supported('sibling'), [siblingCheck.id]);
+});

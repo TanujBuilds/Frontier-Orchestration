@@ -50,7 +50,7 @@ export function guidanceApplicability({ lesson, goal, taskContext }) {
   const taskReadPaths = taskContext.permissions?.readPaths ?? project.readPaths;
   const matchedPaths = recipe.relatedPaths.filter(selector =>
     guidancePathInScope(selector, project.readPaths) &&
-    observed.some(file => guidancePathInScope(file, taskReadPaths) && guidancePathMatches(selector, file)));
+    observed.some(file => guidancePathMatches(selector, file) && guidancePathInScope(file, taskReadPaths)));
   const matchedTerms = guidanceTermsMatch(recipe.whenTerms, queryTokens, observed);
   return matchedPaths.length && matchedTerms.length ? { matchedPaths, matchedTerms } : null;
 }
