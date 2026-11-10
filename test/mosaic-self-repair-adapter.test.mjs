@@ -804,7 +804,7 @@ test('S4 a changed candidate includes approved write-only edits without exposing
   assert.equal(await readFile(path.join(f.runs[1].workspace, writeOnly), 'utf8'), newContent);
 });
 
-test('an interrupted edit intent cannot recover a path whose write permission was revoked by rebind', timeout, async t => {
+test('worker resume and takeover cannot recover an interrupted intent after its write permission is revoked', timeout, async t => {
   const f = await setup(t, {
     limits: { attempts: 2, modelCalls: 2 },
     respond: input => action('submit_changes', { paths: [], edits: [edit(input, source, answerText(42))] }),
@@ -838,8 +838,22 @@ test('an interrupted edit intent cannot recover a path whose write permission wa
   assert.equal(f.saved.status, 'blocked');
   assert.match(f.saved.reason, /edit intent|edit transaction/i);
   assert.match(f.saved.reason, /scope|permission|approval/i);
-  assert.equal(f.saved.attempts, 1);
-  assert.equal(f.saved.deadline, stopped.deadline);
+  const blocked = f.saved;
+  assert.equal(blocked.attempts, 1);
+  assert.equal(blocked.deadline, stopped.deadline);
+
+  let takeoverFailure;
+  await assert.rejects(
+    f.worker.integration.takeover({ taskId: f.task.id, reason: 'Inspect the preserved candidate' }, 'takeover-revoked-intent'),
+    error => {
+      takeoverFailure = error;
+      return true;
+    },
+  );
+  assert.equal(await readFile(path.join(worktree, source), 'utf8'), initialSource, 'Takeover must also stop before writing the revoked path');
+  assert.match(takeoverFailure.message, /edit intent|edit transaction/i);
+  assert.match(takeoverFailure.message, /scope|permission|approval/i);
+  assert.deepEqual(f.saved, blocked);
   assert.deepEqual(f.requests(), requests);
   assert.equal(f.calls.length, 1);
   assert.deepEqual((await f.journal()).last('edits.intent'), intent);

@@ -20,10 +20,20 @@ const freshReadRequired='Stale edit context requires fresh read_files before sub
 const codeKey=cp=>`code-${cp.attempt}-${cp.exchange}`;
 const checkKey=cp=>`harness-attempt-${cp.attempt}/checks`;
 
-function assertCurrentEditIntents(events,scopeSequence){
- const applied=new Set(events.filter(event=>event.type==='edits.applied').map(event=>event.data.key));
- const pending=events.some(event=>event.type==='edits.intent'&&event.sequence<scopeSequence&&!applied.has(event.data.key));
- if(pending)throw Error('An interrupted edit intent predates the current approved scope. Inspect the preserved worktree and journal before continuing.');
+class CodingWorkspace extends Workspace {
+ async recover(){
+  // Recovery callers hold the journal lock, which reloads approvals and receipts.
+  const {events}=this.journal;
+  const scopeSequence=events.findLast(event=>event.type==='harness.manifest').sequence;
+  const earlierIntents=events.filter(event=>event.type==='edits.intent'&&event.sequence<scopeSequence);
+  if(earlierIntents.length){
+   const applied=new Set(events.filter(event=>event.type==='edits.applied').map(event=>event.data.key));
+   if(earlierIntents.some(event=>!applied.has(event.data.key))){
+    throw Error('An interrupted edit intent predates the current approved scope. Inspect the preserved worktree and journal before continuing.');
+   }
+  }
+  return super.recover();
+ }
 }
 
 function gateFeedback(task,cp){
@@ -49,7 +59,7 @@ export class CodingAdapter {
    if(!task.history?.some(h=>h.goalVersion<task.goalVersion))throw Error('Approved scope version transition required');
    manifest={...manifest,permissions};await journal.append('harness.manifest',manifest);
   }
-  const workspace=new Workspace(manifest,journal);return {journal,workspace,manifest};
+  const workspace=new CodingWorkspace(manifest,journal);return {journal,workspace,manifest};
  }
  saveRepair(task,cp,repair,kind,reason,owner){
   const {c}=this.worker;
@@ -82,7 +92,6 @@ export class CodingAdapter {
    const manifests=journal.events.filter(event=>event.type==='harness.manifest');
    const previousPermissions=manifests.length>1;
    const scopeSequence=manifests.at(-1).sequence;
-   if(previousPermissions)assertCurrentEditIntents(journal.events,scopeSequence);
    const boundToEarlierScope=cp.repairPermissionsHash&&cp.repairPermissionsHash!==permissionsHash;
    if(boundToEarlierScope||!cp.repairPermissionsHash&&previousPermissions){
     // Prior diagnostics stay in the journal. Pending actions cannot use the old approval.
