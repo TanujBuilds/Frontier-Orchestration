@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
+import path from 'node:path';
+import {readFileSync} from 'node:fs';
 import {isOvernightV2} from './overnight.mjs';
 import {assertOvernightPreflight} from './overnight-preflight.mjs';
 import { Store } from './store.mjs';
@@ -10,6 +12,28 @@ import { Learning } from './learning.mjs';
 const TERMINAL=new Set(['accepted','failed','partial','cancelled']);
 const SLOT=new Set(['running','uncertain','taking_over']);
 const rank={background:0,normal:1,blocking:2};
+const RECONNECT_DELAY_MS=15000;
+
+function controlledStatus(t,g,now){
+ if(now>=Math.min(g.deadline,t.deadline??g.deadline))return 'partial';
+ if(t.stopRequested||g.status==='stopped')return 'stopped';
+ if(t.pauseRequested||g.status==='paused')return 'paused';
+ return null;
+}
+
+function savedStageChecks(root,t){
+ // Journal appends fsync'd, newline-terminated entries. A partial tail is not a receipt.
+ let raw;
+ try{raw=readFileSync(path.join(root,'coding','jobs',t.id+'.jsonl'),'utf8');}catch(error){if(error.code==='ENOENT')return false;throw error;}
+ const lines=raw.slice(0,raw.lastIndexOf('\n')+1).split('\n').slice(0,-1);
+ let completed=false;
+ for(const [index,line] of lines.entries()){
+  const event=JSON.parse(line);
+  if(event.jobId!==t.id||event.sequence!==index+1)return false;
+  if(event.type==='operation.completed'&&event.data.key===`harness-attempt-${t.checkpoint.attempt}/checks`)completed=Array.isArray(event.data.value);
+ }
+ return completed;
+}
 export class Coordinator {
  constructor({root,now=Date.now,registry=new Registry()}={}){
   this.store=new Store(root);this.now=now;this.registry=registry;
@@ -18,31 +42,80 @@ export class Coordinator {
   this.learning=new Learning({c:this});
  }
  close(){this.store.close();}
- acquireWorker(token){identifier(token,'worker token');return this.store.tx(()=>{
+ acquireWorker(token){identifier(token,'worker token');const lease=this.store.tx(()=>{
   const existing=this.store.maybe('lease','coordinator');
-  if(existing&&existing.token!==token){
+  if(existing){
    if(existing.host!==os.hostname())throw Error('Worker host ownership is uncertain');
+   if(existing.token===token&&existing.generation===this.workerLease?.generation&&existing.pid===process.pid)return existing;
+   if(!Number.isInteger(existing.pid)||existing.pid<=0)throw Error('Worker process ownership is uncertain');
    try{process.kill(existing.pid,0);throw Error('Another worker owns this coordinator');}catch(e){if(e.code!=='ESRCH')throw e;}
-   for(const t of this.store.all('task').filter(t=>t.owner&&SLOT.has(t.status))){t.status='uncertain';t.reason='Previous coordinator died; reconcile backend before reuse';this.store.put('task',t);this.emit('task.uncertain',t.goalId,t.id,{reason:t.reason});}
-   for(const p of this.store.all('planning').filter(p=>p.status==='running')){p.status='uncertain';p.reason='Previous planner owner died; reconcile its saved request';this.store.put('planning',p);}
+   if(existing.token===token)throw Error('A replacement worker needs a fresh ownership token');
+   this.interruptWorker();
   }
-  const lease={id:'coordinator',token,pid:process.pid,host:os.hostname(),at:this.now()};this.store.put('lease',lease);return lease;
- });}
- releaseWorker(token){return this.store.tx(()=>{const l=this.store.maybe('lease','coordinator');if(l&&l.token!==token)throw Error('Worker ownership conflict');this.store.db.prepare('DELETE FROM records WHERE kind=? AND id=?').run('lease','coordinator');return {released:true};});}
+  const next={id:'coordinator',token,generation:randomUUID(),pid:process.pid,host:os.hostname(),at:this.now()};this.store.put('lease',next);return next;
+ });this.workerLease=lease;return lease;}
+ currentLease(owner){
+  const lease=this.store.maybe('lease','coordinator');
+  if(!lease||lease.token!==owner||lease.pid!==process.pid||lease.host!==os.hostname()||!this.workerLease||lease.generation!==this.workerLease.generation)throw Error('Current worker lease required');
+  return lease;
+ }
+ interruptWorker(){
+  for(const t of this.store.all('task').filter(t=>t.owner&&SLOT.has(t.status)&&t.interruptedOwner!==t.owner)){
+   t.interruptedOwner=t.owner;delete t.ownerLease;
+   if(t.status==='uncertain'){this.store.put('task',t);continue;}
+   t.status='uncertain';t.reason='Previous coordinator relinquished ownership; reconcile saved operations before reuse';
+   const goal=this.store.get('goal',t.goalId);
+   // Startup tries saved recovery before the Overnight monitor sees a held task.
+   // Record the interruption without treating safe replay as a historical blocker.
+   const event=isOvernightV2(goal.manifest)?'task.interrupted':'task.uncertain';
+   this.store.put('task',t);this.emit(event,t.goalId,t.id,{reason:t.reason,requestId:t.checkpoint.requestId??null});
+  }
+  for(const p of this.store.all('planning').filter(p=>p.status==='running')){p.status='uncertain';p.reason='Previous planner owner relinquished ownership; reconcile its saved request';this.store.put('planning',p);}
+ }
+ releaseWorker(token){
+  const result=this.store.tx(()=>{
+   const lease=this.store.maybe('lease','coordinator');
+   if(lease){this.currentLease(token);this.interruptWorker();this.store.db.prepare('DELETE FROM records WHERE kind=? AND id=?').run('lease','coordinator');}
+   return {released:true};
+  });this.workerLease=null;return result;
+ }
  recoverSaved(taskId,owner){return this.store.tx(()=>{
-  const lease=this.store.get('lease','coordinator');if(lease.token!==owner||lease.pid!==process.pid)throw Error('Current worker lease required for recovery');
-  const t=this.store.get('task',taskId);if(t.status!=='uncertain')throw Error('Task does not need ownership recovery');
-  const requests=this.store.db.prepare('SELECT status FROM requests WHERE task_id=?').all(taskId);
-  if(!requests.length||requests.some(r=>r.status!=='completed'))throw Error('Pending or ambiguous request prevents safe recovery');
-  if(!['consult','learning'].includes(t.spec.kind)&&!(t.spec.kind==='coding'&&['model','apply'].includes(t.checkpoint.phase)))throw Error('Backend/check quiescence requires separate verification');
-  const g=this.store.get('goal',t.goalId);t.owner=null;t.status=this.now()>=Math.min(g.deadline,t.deadline)?'partial':t.stopRequested?'stopped':t.pauseRequested?'paused':'queued';t.reason='Recovered from fully saved operations; no bounded check was active';this.store.put('task',t);this.emit('task.recovered',t.goalId,t.id,{status:t.status,spending:this.store.spent(t.id)});return this.getTask(t.id);
+  this.currentLease(owner);
+  const t=this.store.get('task',taskId),g=this.store.get('goal',t.goalId);
+  if(t.status!=='uncertain'||t.owner===owner)throw Error('Task does not need ownership recovery');
+  const cp=t.checkpoint,requests=this.store.requestOutcomes(taskId);
+  const modelKey=t.spec.kind==='consult'?'consult-1':t.spec.kind==='learning'?`learning-${cp.attempt}`:`code-${cp.attempt}-${cp.exchange}`;
+  // An old non-dispatch row is reusable only as spent history after its
+  // exchange advanced. A current failed or pending key is still held.
+  const safeHistory=requests.every(r=>r.status==='completed'||(r.status==='failed'&&r.outcome==='not_dispatched'&&r.kind==='model'&&r.key!==modelKey&&isOvernightV2(g.manifest)));
+  if(!safeHistory)throw Error('Pending or ambiguous request prevents safe recovery');
+  const coding=t.spec.kind==='coding',consult=t.spec.kind==='consult';
+  const savedModel=requests.some(r=>r.key===modelKey&&r.status==='completed');
+  const learning=t.spec.kind==='learning'&&(cp.phase==='model'||(requests.length>0&&['proposal','evaluate','finalize'].includes(cp.phase)));
+  const safePhase=consult||learning||
+   (coding&&(cp.phase==='model'||(savedModel&&(cp.phase==='apply'||cp.phase==='checks'&&savedStageChecks(this.store.root,t)))));
+  if(!safePhase)throw Error('Backend/check quiescence requires separate verification');
+  const status=controlledStatus(t,g,this.now());
+  if(!status&&t.goalVersion!==g.version)throw Error('Saved task requires explicit rebind to the approved goal version');
+  t.owner=null;t.status=status??(t.providerWait?'suspended':'queued');
+  if(t.status==='partial')t.reason='Original deadline reached; saved evidence retained';
+  else if(t.providerWait)t.reason='Known provider unavailability; original request remains spent';
+  else t.reason=cp.phase==='checks'?'Recovered from the saved protected-check receipt':'Recovered from saved operations';
+  this.store.put('task',t);this.emit('task.recovered',t.goalId,t.id,{status:t.status,requestId:cp.requestId??null,spending:this.store.spent(t.id)});return this.getTask(t.id);
  });}
  recoverPlanning(goalId,owner){return this.store.tx(()=>{
-  const lease=this.store.get('lease','coordinator');if(lease.token!==owner||lease.pid!==process.pid)throw Error('Current worker lease required for recovery');
-  const p=this.store.get('planning',goalId),g=this.store.get('goal',goalId);if(p.status!=='uncertain')throw Error('Planner does not need ownership recovery');
-  const requests=this.store.db.prepare('SELECT status FROM requests WHERE task_id=?').all(goalId),saved=this.store.request(goalId,`plan-${p.attempt}`);
-  if(!requests.length||requests.some(r=>r.status!=='completed')||saved?.status!=='completed')throw Error('Pending or ambiguous planning request prevents safe recovery');
-  if(this.now()>=g.deadline){p.status='partial';p.owner=null;}else{p.status='running';p.owner=owner;}
+  this.currentLease(owner);
+  const p=this.store.get('planning',goalId),g=this.store.get('goal',goalId);if(p.status!=='uncertain'&&!p.recoveryPending)throw Error('Planner does not need ownership recovery');
+  const requests=this.store.requestOutcomes(goalId),saved=this.store.request(goalId,`plan-${p.attempt}`);
+  if(requests.some(r=>r.status!=='completed'&&!(isOvernightV2(g.manifest)&&r.status==='failed'&&r.outcome==='not_dispatched'))||saved?.status!=='completed')throw Error('Pending or ambiguous planning request prevents safe recovery');
+  if(this.now()>=g.deadline||['completed','partial'].includes(g.status)){
+   p.status='partial';p.owner=null;delete p.recoveryPending;
+  }else if(g.status==='active'){
+   p.status='running';p.owner=owner;delete p.recoveryPending;
+  }else{
+   if(p.recoveryPending&&p.status===g.status)return p;
+   p.status=g.status;p.owner=null;p.recoveryPending=true;p.reason='Saved planning response retained while the goal is '+g.status;
+  }
   this.store.put('planning',p);this.emit('planning.recovered',goalId,null,{attempt:p.attempt,status:p.status,spent:this.store.spent(goalId)});return p;
  });}
  emit(type,goalId,taskId,data={}){return this.store.tx(()=>{const seq=this.store.event(type,{goalId,taskId,data,at:this.now()});if(taskId&&this.learning?.captures(type))this.learning.capture(taskId,seq);
@@ -115,37 +188,119 @@ export class Coordinator {
   while(changed){changed=false;for(const t of tasks)if(!TERMINAL.has(t.status))for(const id of t.spec.dependsOn)if(p.get(id)<p.get(t.id)){p.set(id,p.get(t.id));changed=true;}}
   return p;
  }
- eligible(t){const g=this.store.get('goal',t.goalId);return !(isOvernightV2(g.manifest)&&t.providerWait&&t.providerWait.retryAt>this.now())&&g.status==='active'&&g.deadline>this.now()&&(!t.deadline||t.deadline>this.now())&&!(g.integrationSealed&&t.spec.kind==='coding')&&!t.pauseRequested&&!t.stopRequested&&t.goalVersion===g.version&&t.spec.dependsOn.every(id=>this.store.get('task',id).status==='accepted');}
+ eligible(t){const g=this.store.get('goal',t.goalId),now=this.now();return !(isOvernightV2(g.manifest)&&t.providerWait&&(t.providerWait.retryAt>now||t.providerWait.until<=now))&&g.status==='active'&&g.deadline>now&&(!t.deadline||t.deadline>now)&&!(g.integrationSealed&&t.spec.kind==='coding')&&!t.pauseRequested&&!t.stopRequested&&t.goalVersion===g.version&&t.spec.dependsOn.every(id=>this.store.get('task',id).status==='accepted');}
+ settleTask(t,status,reason,event='task.'+status,data={}){
+  const overnight=isOvernightV2(this.store.get('goal',t.goalId).manifest);
+  if(status==='blocked'&&overnight)t.firstBlocker??={reason,at:this.now()};
+  if(status==='partial'&&t.status==='blocked'&&t.reason&&overnight)t.firstBlocker??={reason:t.reason,at:this.now()};
+  t.status=status;t.reason=reason;t.owner=null;this.store.put('task',t);
+  this.emit(event,t.goalId,t.id,{reason,...data});return this.getTask(t.id);
+ }
  expireQuiescent(){return this.store.tx(()=>{
   for(const t of this.store.all('task')){
-   const g=this.store.get('goal',t.goalId);
+   const g=this.store.get('goal',t.goalId),now=this.now();
    if(TERMINAL.has(t.status)||t.owner||t.status==='legacy_reviewing'||t.executionActor==='codex'||g.integrationOwner===t.id)continue;
-   if(this.now()<Math.min(g.deadline,t.deadline??g.deadline))continue;
-   if(isOvernightV2(g.manifest)&&t.reason)t.firstBlocker??={reason:t.reason,at:this.now()};t.status='partial';t.reason='Original deadline reached; saved evidence retained';this.store.put('task',t);this.emit('task.expired',g.id,t.id,{reason:t.reason});
+   if(now>=Math.min(g.deadline,t.deadline??g.deadline)){
+    this.settleTask(t,'partial','Original deadline reached; saved evidence retained','task.expired');
+   }else if(t.providerWait&&['queued','suspended'].includes(t.status)&&now>=t.providerWait.until){
+    this.settleTask(t,'blocked','Original provider reconnect window exhausted','task.blocked',{requestId:t.providerWait.requestId??null});
+   }
   }
  });}
  requestUrgentYield(){const tasks=this.store.all('task'),p=this.effectivePriorities();for(const active of tasks.filter(t=>t.status==='running'&&t.spec.actor==='deepseek'))if(tasks.some(t=>['queued','suspended'].includes(t.status)&&this.eligible(t)&&p.get(t.id)>p.get(active.id))){active.yieldRequested=true;this.store.put('task',active);this.emit('task.yield_requested',active.goalId,active.id);}}
  claimNext(owner){identifier(owner,'owner');return this.store.tx(()=>{
+  const lease=this.store.maybe('lease','coordinator');
+  if(lease)this.currentLease(lease.token);
   if(this.store.all('planning').some(p=>['running','uncertain'].includes(p.status)))return null;
   const tasks=this.store.all('task');if(tasks.some(t=>SLOT.has(t.status)&&t.spec.actor==='deepseek'))return null;
   const priorities=this.effectivePriorities();const candidates=tasks.filter(t=>['queued','suspended'].includes(t.status)&&t.spec.actor==='deepseek'&&t.executionActor!=='codex'&&this.eligible(t)).sort((a,b)=>priorities.get(b.id)-priorities.get(a.id)||a.sequence-b.sequence);
   if(!candidates.length)return null;const t=candidates[0],g=this.store.get('goal',t.goalId);
   t.startedAt??=this.now();t.deadline??=Math.min(g.deadline,t.startedAt+t.spec.limits.seconds*1000);t.owner=owner;t.status='running';t.yieldRequested=false;
+  delete t.interruptedOwner;
+  if(lease)t.ownerLease=lease.generation;else delete t.ownerLease;
   this.store.put('task',t);this.learning.pin(t.id);this.emit('task.claimed',t.goalId,t.id,{owner});return this.getTask(t.id);
  });}
- owned(id,owner){const t=this.store.get('task',id);if(t.owner!==owner||!['running','uncertain','taking_over'].includes(t.status))throw Error('Worker ownership conflict');return t;}
+ owned(id,owner){
+  const t=this.store.get('task',id);
+  if(t.owner!==owner||t.interruptedOwner===owner||!SLOT.has(t.status))throw Error('Worker ownership conflict');
+  // Older records and direct fixture workers may not carry a lease generation.
+  if(t.ownerLease){
+   const lease=this.currentLease(this.workerLease?.token);
+   if(lease.generation!==t.ownerLease)throw Error('Worker lease ownership conflict');
+  }
+  return t;
+ }
  reserve(taskId,{key,kind},owner){identifier(key,'request key');return this.store.tx(()=>{
-  const saved=this.store.request(taskId,key);if(saved){if(saved.kind!==kind)throw Error('Request key conflict');if(saved.status==='completed')return {...saved,cached:true};throw Error('Request is ambiguous and remains spent');}
+  const saved=this.store.request(taskId,key);
+  if(saved&&saved.kind!==kind)throw Error('Request key conflict');
+  if(saved&&saved.status!=='completed')throw Error('Request is ambiguous and remains spent');
   const t=this.owned(taskId,owner),g=this.store.get('goal',t.goalId);this.liveGoal(g);if(t.status!=='running'||this.now()>=t.deadline||t.stopRequested||t.pauseRequested)throw Error('Task deadline/control prevents request');
   if(t.spec.actor!=='deepseek'||!g.manifest.mode.actors.includes('deepseek'))throw Error('Mode prohibits model actor');
+  if(saved)return {...saved,cached:true};
+  const wait=kind==='model'?t.providerWait:null;
+  if(wait){
+   if(wait.readyOwner!==owner||this.now()>=wait.until)throw Error('Original provider reconnect window exhausted or readiness no longer verified');
+   delete t.providerWait;this.store.put('task',t);
+  }
   const budget={model:'modelCalls',search:'searches',download:'downloads'}[kind];if(!budget||!t.spec.limits[budget])throw Error('Unsupported request kind');
   if((this.store.spent(taskId)[kind]??0)>=t.spec.limits[budget])throw Error('Request budget limit reached');
-  const id=randomUUID(),data={owner,reservedAt:this.now()};this.store.db.prepare('INSERT INTO requests VALUES(?,?,?,?,?,?)').run(id,taskId,key,kind,'reserved',JSON.stringify(data));
+  const id=randomUUID(),data={owner,reservedAt:this.now(),...(wait?{reconnectUntil:wait.until}:{})};this.store.db.prepare('INSERT INTO requests VALUES(?,?,?,?,?,?)').run(id,taskId,key,kind,'reserved',JSON.stringify(data));
   this.emit('request.reserved',t.goalId,taskId,{id,key,kind});return {id,task_id:taskId,key,kind,status:'reserved',...data,cached:false};
  });}
- saveRequest(id,result){return this.store.tx(()=>{const row=this.store.db.prepare('SELECT * FROM requests WHERE id=?').get(id);if(!row)throw Error('Unknown request');const data=JSON.parse(row.data);
+ ownedRequest(id,owner){
+  const row=this.store.db.prepare('SELECT * FROM requests WHERE id=?').get(id);
+  if(!row)throw Error('Unknown request');
+  const data=JSON.parse(row.data);
+  // Legacy review uses its separate reserved-review lifecycle.
+  if(data.owner===undefined&&row.kind==='codexReview')return {row,data,t:this.store.get('task',row.task_id)};
+  const t=this.owned(row.task_id,owner??data.owner);
+  if(t.status!=='running'||t.owner!==data.owner)throw Error('Worker request ownership conflict');
+  return {row,data,t};
+ }
+ saveRequest(id,result,owner){return this.store.tx(()=>{
+  const {row,data,t}=this.ownedRequest(id,owner);
   if(row.status==='completed'){if(digest(data.result)!==digest(result))throw Error('Saved response conflict');return data.result;}
-  data.result=result;data.savedAt=this.now();this.store.db.prepare('UPDATE requests SET status=?,data=? WHERE id=?').run('completed',JSON.stringify(data),id);const t=this.store.get('task',row.task_id);this.emit('request.saved',t.goalId,t.id,{id});return result;
+  if(row.status!=='reserved')throw Error('Request is no longer reserved');
+  data.result=result;data.savedAt=this.now();this.store.db.prepare('UPDATE requests SET status=?,data=? WHERE id=?').run('completed',JSON.stringify(data),id);this.emit('request.saved',t.goalId,t.id,{id});return result;
+ });}
+ failModelRequest(id,owner,{reason,outcome,reconnect}){return this.store.tx(()=>{
+  const {row,data,t}=this.ownedRequest(id,owner),g=this.store.get('goal',t.goalId),at=this.now();
+  if(row.kind!=='model'||row.status!=='reserved')throw Error('Model request is no longer reserved');
+  this.store.db.prepare('UPDATE requests SET status=?,data=? WHERE id=?').run('failed',JSON.stringify({...data,error:reason,requestOutcome:outcome}),id);
+  if(outcome==='unknown'){
+   t.status='uncertain';t.reason=reason;t.firstBlocker??={reason,at};
+   this.store.put('task',t);this.emit('task.uncertain',t.goalId,t.id,{reason,requestId:id});return this.getTask(t.id);
+  }
+  const controlled=controlledStatus(t,g,at);
+  if(reconnect&&isOvernightV2(g.manifest)&&t.spec.kind==='coding'&&t.checkpoint.phase==='model'){
+   t.providerReconnectStartedAt??=at;
+   const until=Math.min(t.deadline,g.deadline,t.providerReconnectStartedAt+g.manifest.overnightPolicy.reconnectMs);
+   t.providerWait={startedAt:t.providerReconnectStartedAt,until,retryAt:Math.min(until,at+RECONNECT_DELAY_MS),requestId:id};
+   t.checkpoint={...t.checkpoint,exchange:t.checkpoint.exchange+1};
+   t.reason='Known provider unavailability; original request remains spent';
+   t.firstBlocker??={reason:t.reason,at};
+   if(controlled)return this.settleTask(t,controlled,controlled==='partial'?'Original deadline reached; saved evidence retained':t.reason,controlled==='partial'?'task.expired':'task.'+controlled,{requestId:id});
+   if(at>=until)return this.settleTask(t,'blocked','Original provider reconnect window exhausted','task.blocked',{requestId:id});
+   t.status='suspended';t.owner=null;this.store.put('task',t);
+   this.emit('task.provider_wait',t.goalId,t.id,{until,requestId:id});return this.getTask(t.id);
+  }
+  return this.settleTask(t,controlled??'blocked',controlled==='partial'?'Original deadline reached; saved evidence retained':reason,controlled==='partial'?'task.expired':undefined,{requestId:id});
+ });}
+ finishProviderProbe(taskId,owner,available){return this.store.tx(()=>{
+  const t=this.owned(taskId,owner),g=this.store.get('goal',t.goalId),wait=t.providerWait,at=this.now();
+  if(t.status!=='running'||!wait)throw Error('Worker provider probe ownership conflict');
+  const controlled=controlledStatus(t,g,at),data={requestId:wait.requestId??null};
+  if(controlled)return this.settleTask(t,controlled,controlled==='partial'?'Original deadline reached; saved evidence retained':t.reason,controlled==='partial'?'task.expired':'task.'+controlled,data);
+  if(at>=wait.until)return this.settleTask(t,'blocked','Original provider reconnect window exhausted','task.blocked',data);
+  if(available)wait.readyOwner=owner;
+  else{delete wait.readyOwner;wait.retryAt=Math.min(wait.until,at+RECONNECT_DELAY_MS);t.status='suspended';t.owner=null;}
+  this.store.put('task',t);return this.getTask(t.id);
+ });}
+ failTaskStep(taskId,owner,reason){return this.store.tx(()=>{
+  const t=this.owned(taskId,owner),g=this.store.get('goal',t.goalId),at=this.now(),controlled=controlledStatus(t,g,at);
+  if(controlled)return this.settleTask(t,controlled,controlled==='partial'?'Original deadline reached; saved evidence retained':reason,controlled==='partial'?'task.expired':undefined);
+  if(t.providerWait&&at>=t.providerWait.until)reason='Original provider reconnect window exhausted';
+  return this.settleTask(t,'blocked',reason);
  });}
  beginAttempt(taskId,owner){return this.store.tx(()=>{const t=this.owned(taskId,owner);if(t.attempts>=t.spec.limits.attempts)throw Error('Attempt limit reached');t.attempts++;this.store.put('task',t);this.emit('attempt.started',t.goalId,t.id,{attempt:t.attempts});return t.attempts;});}
  boundary(taskId,checkpoint,owner,{quiescent=true}={}){return this.store.tx(()=>{const t=this.owned(taskId,owner),g=this.store.get('goal',t.goalId);t.checkpoint=checkpoint;
@@ -191,9 +346,16 @@ export class Coordinator {
    if(input.action==='resume'){
     if(t.deadline&&this.now()>=t.deadline)continue;t.stopRequested=t.pauseRequested=false;
     if(['paused','stopped'].includes(t.status)){t.status=t.controlReturnStatus??(t.executionActor==='codex'?'codex_active':t.spec.actor==='codex'?'codex_ready':'queued');delete t.controlReturnStatus;}
-   }else if(t.status==='running'){t.pauseRequested=input.action==='pause';t.stopRequested=input.action==='stop';}
-   else if(!t.owner&&!['paused','stopped','legacy_reviewing'].includes(t.status)){t.controlReturnStatus=t.status;t.status=input.action==='stop'?'stopped':'paused';t.pauseRequested=input.action==='pause';t.stopRequested=input.action==='stop';}
+   }else if(['running','legacy_reviewing'].includes(t.status)){t.pauseRequested=input.action==='pause';t.stopRequested=input.action==='stop';}
+   else if(!t.owner&&!['paused','stopped'].includes(t.status)){t.controlReturnStatus=t.status;t.status=input.action==='stop'?'stopped':'paused';t.pauseRequested=input.action==='pause';t.stopRequested=input.action==='stop';}
    this.store.put('task',t);
+  }
+  if(input.goalId&&input.action==='resume'){
+   const planning=this.store.maybe('planning',g.id);
+   if(planning?.recoveryPending){
+    if(this.workerLease)this.recoverPlanning(g.id,this.workerLease.token);
+    else{planning.status='uncertain';this.store.put('planning',planning);}
+   }
   }
   this.emit('work.control',g.id,input.taskId??null,{action:input.action});return input.goalId?this.getGoal(g.id):this.getTask(input.taskId);
  });}
