@@ -115,6 +115,37 @@ test('overnight intermediate checks honor final-only gates and the exact legacy 
   assert.equal(classifyTaskOutcome(raw).usefulAccepted, null);
 });
 
+test('overnight combined checks retain cumulative predecessor checks from the matching candidate', () => {
+  const raw = coding({mode: 'overnight_review', overnight: true, mapped: true});
+  const {goal, task, events} = raw;
+  const {project} = goal.manifest;
+  for (const id of ['first', 'second']) {
+    project.checks.push({id, argv: ['node', `checks/${id}.mjs`]});
+    project.behavioralChecks.push({criterionId: id, description: `Check ${id}`, checkIds: [id]});
+  }
+  task.spec.permissions.checks = ['second'];
+  goal.hash = digest(goal.manifest);
+  task.hash = digest(task.spec);
+  task.legacyBehavioralReview.approvalHash = goal.hash;
+  task.legacyBehavioralReview.taskHash = task.hash;
+  task.result.checks = ['behavior', 'first', 'second'].map(id => ({
+    id, code: 0, passed: true, screenshots: [],
+  }));
+  events[1].data.result = structuredClone(task.result);
+
+  const saveCombined = checks => {
+    task.integration.checks = checks;
+    const opts = {checks, checkIds: checks.map(check => check.id), executableModesHash: 'a'.repeat(64)};
+    task.integration.candidateBehavioralEvidence = deriveBehavioralEvidence(project, {...opts, snapshot: task.result.snapshot});
+    task.integration.behavioralEvidence = deriveBehavioralEvidence(project, {...opts, snapshot: {'src/file.mjs': 'e'.repeat(64)}});
+    events.at(-1).data = structuredClone(task.integration);
+  };
+  saveCombined(task.result.checks);
+  assert.equal(classifyTaskOutcome(raw).usefulAccepted, true);
+  saveCombined(task.result.checks.filter(check => check.id !== 'first'));
+  assert.equal(classifyTaskOutcome(raw).usefulAccepted, null);
+});
+
 test('the latest native candidate completion must identify the integrated commit', () => {
   const raw = coding({mode: 'codex_only', mapped: true});
   raw.task.native = {layout: 'candidate_v1', status: 'integrated', writerActive: false, commit: candidateCommit,

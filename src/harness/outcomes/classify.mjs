@@ -90,12 +90,13 @@ function codingAcceptance(task, goal, events) {
   if (!passingChecks(integration.checks, project, required, allowed)) {
     return {reason: 'combined_checks_missing_or_failed'};
   }
+  const combinedIds = integration.checks.map(check => check.id);
   if (project.behavioralChecks && !mappedChecks(integration.behavioralEvidence, project, integration.checks,
-    integration.checks.map(check => check.id))) return {reason: 'combined_behavioral_binding_invalid'};
+    combinedIds)) return {reason: 'combined_behavioral_binding_invalid'};
 
   const evidenceRefs = [ref(integrationEvent), {
     kind: 'integration', id: integration.commit, candidateCommit: integration.candidateCommit ?? null,
-    review: integration.review, checkIds: integration.checks.map(check => check.id),
+    review: integration.review, checkIds: combinedIds,
   }];
   if (directNative) return {reason: 'direct_native_checks_committed', evidenceRefs};
 
@@ -116,10 +117,14 @@ function codingAcceptance(task, goal, events) {
         : !same(candidateEvent.data?.result, task.result))) return {reason: 'candidate_checks_or_binding_missing'};
   evidenceRefs.push(ref(candidateEvent));
 
+  // effectiveIntegrationChecks includes earlier accepted stages' check IDs.
+  // The matched candidate result preserves that cumulative set even when the
+  // report page does not include those earlier stages.
+  const candidateIds = overnight ? candidateChecks.map(check => check.id) : stageIds;
+  if (overnight && (!passingChecks(candidateChecks, project, required, allowed) ||
+      candidateIds.some(id => !combinedIds.includes(id)))) return {reason: 'cumulative_overnight_checks_missing_or_invalid'};
+
   if (project.behavioralChecks) {
-    // Overnight stages run the cumulative approved checks recorded in the
-    // integration receipt. Other candidates run the assignment's scoped checks.
-    const candidateIds = overnight ? integration.checks.map(check => check.id) : stageIds;
     const snapshot = nativeCandidate ? undefined : task.result?.snapshot;
     if ((!nativeCandidate && !snapshot) ||
         !mappedChecks(integration.candidateBehavioralEvidence, project, integration.checks, candidateIds, snapshot)) {
