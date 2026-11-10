@@ -11,6 +11,7 @@ import {Artifacts} from './artifacts.mjs';
 import {Observer} from './observer.mjs';
 import {assignmentManifestSchema,prepareAssignment} from './assignment-intake.mjs';
 import {registerOutcomeTools} from './outcomes/tools.mjs';
+import {registerBacklogTools} from './backlog/tools.mjs';
 
 const str={type:'string'},obj={type:'object'},bool={type:'boolean'},number={type:'integer'};
 function validate(schema,value,label='input'){
@@ -95,6 +96,7 @@ export class Dispatcher {
   add('task_priority','Set scheduling priority with a recorded reason.',{taskId:str,priority:{...str,enum:['blocking','normal','background']},reason:str},['taskId','priority','reason'],true,(i,k)=>c.setPriority(i,k));
   add('queue_get','Inspect execution queue and separate review inbox.',{goalId:str},[],false,i=>{const p=c.effectivePriorities(),tasks=c.store.all('task').filter(t=>!i.goalId||t.goalId===i.goalId);return {execution:tasks.filter(t=>['queued','suspended','running','uncertain','codex_ready','codex_active'].includes(t.status)).sort((a,b)=>p.get(b.id)-p.get(a.id)||a.sequence-b.sequence).map(t=>({...c.getTask(t.id),effectivePriority:p.get(t.id)})),review:tasks.filter(t=>['awaiting_review','awaiting_legacy_review','legacy_reviewing','ready_to_integrate'].includes(t.status))};});
   add('work_control','Pause, stop or resume a goal or task. Limits never refresh.',{goalId:str,taskId:str,action:{...str,enum:['pause','stop','resume']}},['action'],true,(i,k)=>{if(!!i.goalId===!!i.taskId)throw Error('Provide exactly one goalId or taskId');return c.control(i,k);});
+  registerBacklogTools({add,c,worker,beta:config.beta??c.beta});
   add('reviewer_reserve','Reserve one bounded read-only reviewer assignment.',{taskId:str},['taskId'],true,(i,k)=>c.reserveReviewer(i,k));
   add('reviewer_finish','Save evidence from a reserved native reviewer; main Codex retains acceptance.',{reservationId:str,result:obj,error:str},['reservationId'],true,(i,k)=>c.finishReviewer(i,k));
   add('memory_retrieve','Retrieve at most four applicable lessons and 8 KiB.',{goalId:str,query:str,capability:str},['goalId','query'],false,i=>c.learning.retrieve(i));
