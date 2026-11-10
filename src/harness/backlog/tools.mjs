@@ -3,7 +3,7 @@ import { MAX_BACKLOG_ITEMS } from './contract.mjs';
 import { Backlog } from './service.mjs';
 
 const id = { type: 'string', maxLength: 120 };
-const groupFields = ['goalId', 'expectedGoalHash', 'submissionId', 'items'];
+const groupFields = ['goalId', 'expectedGoalHash', 'expectedGoalVersion', 'submissionId', 'items'];
 
 export function registerBacklogTools({ add, c, worker, beta = c.beta }) {
   const backlog = new Backlog({ c, worker });
@@ -20,6 +20,7 @@ export function registerBacklogTools({ add, c, worker, beta = c.beta }) {
   const group = {
     goalId: id,
     expectedGoalHash: { type: 'string', maxLength: 64, pattern: '^[a-f0-9]{64}$' },
+    expectedGoalVersion: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
     submissionId: id,
     items: {
       type: 'array', minItems: 1, maxItems: MAX_BACKLOG_ITEMS,

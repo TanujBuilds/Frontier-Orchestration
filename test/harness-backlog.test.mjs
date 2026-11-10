@@ -47,7 +47,7 @@ const coding = (key, permissions) => ({
   dependsOnKeys: [],
 });
 const input = (goal, items, submissionId = 'batch') => ({
-  goalId: goal.id, expectedGoalHash: goal.hash, submissionId, items,
+  goalId: goal.id, expectedGoalHash: goal.hash, expectedGoalVersion: goal.version, submissionId, items,
 });
 const count = (c, table) => c.store.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n;
 const counts = c => ({
@@ -104,7 +104,7 @@ test('submit queues an entire DAG under one goal and both replay keys reuse orig
     ['task.submitted', 'task.submitted', 'task.submitted', 'backlog.submitted']);
   const before = counts(f.c);
   const reorderedProperties = {items: request.items, submissionId: request.submissionId,
-    expectedGoalHash: request.expectedGoalHash, goalId: request.goalId};
+    expectedGoalHash: request.expectedGoalHash, expectedGoalVersion: request.expectedGoalVersion, goalId: request.goalId};
   assert.deepEqual(f.backlog.submit(reorderedProperties, 'submit'), group);
   assert.deepEqual(counts(f.c), before);
   f.advanceTo(f.goal.deadline);
@@ -180,6 +180,22 @@ test('inactive, expired and revised goal authority cannot be used to enqueue new
   assert.equal(f.backlog.preview(updated).goalVersion, 2);
   f.advanceTo(active.deadline);
   rejectsGroup(f, updated, 'goal_expired', /deadline/i);
+});
+
+test('same-hash approval revisions reject an uncommitted backlog preview but preserve committed replay', t => {
+  const f = fixture(t);
+  const request = {...input(f.goal, [consult('a')]), expectedGoalVersion: f.goal.version};
+  assert.equal(f.backlog.preview(request).valid, true);
+  const committed = f.backlog.submit({...request, submissionId: 'committed'}, 'committed');
+  const goals = new Goals(f.c);
+  const revision = goals.prepareRevision({goalId: f.goal.id, expectedHash: f.goal.hash,
+    manifest: f.raw}, 'same-hash-revision');
+  const approved = goals.activateRevision({revisionId: revision.id, hash: revision.hash}, 'activate-same-hash');
+  assert.equal(approved.hash, f.goal.hash);
+  assert.equal(approved.version, f.goal.version + 1);
+  rejectsGroup(f, request, 'goal_version_mismatch', /version/i);
+  assert.deepEqual(f.backlog.submit({...request, submissionId: 'committed'}, 'replay-committed'), committed);
+  assert.equal(f.backlog.preview({...request, expectedGoalVersion: approved.version}).valid, true);
 });
 
 test('incompatible modes and the parked beta research route cannot enqueue assignments', t => {

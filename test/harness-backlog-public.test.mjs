@@ -47,7 +47,7 @@ async function fixture(t, { beta = false } = {}) {
     task: { kind: 'consult', objective: 'Inspect ' + key, acceptance: ['Saved response'] },
   });
   const input = {
-    goalId: goal.id, expectedGoalHash: goal.hash, submissionId: 'example',
+    goalId: goal.id, expectedGoalHash: goal.hash, expectedGoalVersion: goal.version, submissionId: 'example',
     items: [consult('first'), consult('second', ['first'])],
   };
   const file = path.join(root, 'group.json');
@@ -70,6 +70,25 @@ test('authenticated CLI previews, submits, replays and inspects one approved bac
   assert.deepEqual(Object.fromEntries(view.groups[0].items.map(item => [item.key, item.status])), {
     first: 'waiting_host', second: 'waiting_dependency',
   });
+});
+
+test('public backlog tools require an exact positive approval version before submission', async t => {
+  const {c,dispatcher,input} = await fixture(t);
+  const {expectedGoalVersion,...unbound} = input;
+  for (const tool of ['backlog_preview','backlog_submit']) {
+    const payload = tool === 'backlog_submit' ? {...unbound,idempotencyKey:'invalid-version'} : unbound;
+    await assert.rejects(dispatcher.invoke(tool,payload),/expectedGoalVersion/);
+    for (const version of [0,1.5,Number.MAX_SAFE_INTEGER+1]) {
+      await assert.rejects(dispatcher.invoke(tool,{...payload,expectedGoalVersion:version}),/expectedGoalVersion/);
+    }
+  }
+  const stale = await dispatcher.invoke('backlog_preview',{...input,expectedGoalVersion:expectedGoalVersion+1});
+  assert.equal(stale.valid,false);
+  assert.equal(stale.errors[0].code,'goal_version_mismatch');
+  await assert.rejects(dispatcher.invoke('backlog_submit',{
+    ...input,expectedGoalVersion:expectedGoalVersion+1,idempotencyKey:'stale-version',
+  }),/version/);
+  assert.equal(c.store.all('task').length,0);
 });
 
 test('MCP advertises the beta-safe schemas and existing task controls preserve the same group', async t => {

@@ -4,12 +4,13 @@ Use a backlog when several assignments fit inside one already approved Mosaic go
 
 ## Preview and submit
 
-Use the active goal's ID and exact approval hash from `goal_get`. Save this shape to a local JSON file. Replace the example goal ID and hash with the approved values.
+Use the active goal's ID, exact approval hash and version from `goal_get`. Save this shape to a local JSON file. Replace the example goal ID, hash and version with the approved values.
 
 ```json
 {
   "goalId": "example-goal-id",
   "expectedGoalHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "expectedGoalVersion": 1,
   "submissionId": "inspect-and-follow-up",
   "items": [
     {
@@ -44,13 +45,15 @@ These commands use the running local coordinator's authenticated operator connec
 
 A group holds 1–20 tasks and fits within the approved goal's remaining task cap. Supply unique local keys and use `dependsOnKeys` for edges between items in that group. Each item takes the regular task fields except `submissionId` and `dependsOn`, which the coordinator derives. Task limits, actor, capabilities, source scope, permissions and protected check mappings remain subject to the approved manifest. JSON files must be smaller than 1 MiB and fit in the local API request envelope.
 
-Preview reports whether the proposed graph validates against the current approval. It reserves no task slots, so submit checks approval and capacity again inside the transaction. All group tasks and references commit together. Keep the same submission ID and key when retrying the same payload. Reusing either identity with different content conflicts. A revised approval requires a fresh preview and a new submission identity for new work. Existing tasks follow the normal explicit rebind rules.
+Preview reports whether the proposed graph validates against the current approval. It reserves no task slots, so submit checks approval and capacity again inside the transaction. Both hash and version must match, including a revision that preserves the same manifest hash. All group tasks and references commit together. Keep the same submission ID and key when retrying the same payload. Reusing either identity with different content conflicts. A revised approval requires a fresh preview and a new submission identity for new work. Replaying a previously committed group returns its original receipt without creating tasks. Existing tasks follow the normal explicit rebind rules.
 
 Overnight v2 uses its own validated planner graph. Its assignments remain visible through the existing task and queue tools. Native assignments need a supported active host and the normal explicit native-start flow. The installed beta's research restrictions apply to backlog submissions.
 
 ## Read the queue
 
-Inspect returns the saved group references and a projection of each task from one consistent read of the coordinator database. Use `--group` to select a group, or pass the returned `nextCursor` to `--cursor` with the same filter. Pages default to 50 groups and allow up to 100. A group's item list stays bounded by the submission limit. MCP clients can use `goalId` and/or `groupId` and the same pagination fields.
+Inspect returns saved backlog groups and workflow receipts with a projection of each task from one consistent read of the coordinator database. Recipes appear once, using the recipe receipt ID; their underlying workflow receipt is omitted from the list. `origin.kind` identifies `backlog_group`, `workflow_run` or `workflow_recipe_run`, with the corresponding workflow or recipe identity. These projections reuse the existing task IDs and create no groups or tasks. Ordinary workflow receipts retain their saved goal version and show `goalHash: null` because they do not store a historical approval hash.
+
+Use `--group` to select the returned group or recipe receipt ID, or pass the returned `nextCursor` to `--cursor` with the same filter. Pages default to 50 groups and allow up to 100, ordered newest saved receipt first. A group's item list stays bounded by the submission limit. MCP clients can use `goalId` and/or `groupId` and the same pagination fields.
 
 - `sourceStatus` is the coordinator's saved status. Each projected status has a `reasonCode` and explanation. A missing task or stale approval remains visible as a hold.
 - `waiting_dependency` means an upstream task still needs acceptance. A failed or stopped prerequisite can block its dependents while independent work remains eligible.

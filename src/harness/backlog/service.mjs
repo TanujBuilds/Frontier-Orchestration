@@ -33,6 +33,9 @@ function checkGroup(c, input, ordered, goal, hash) {
   if (goal.hash !== input.expectedGoalHash || digest(goal.manifest) !== goal.hash) {
     return [diagnostic('goal_hash_mismatch', 'Exact current goal approval hash required')];
   }
+  if (goal.version !== input.expectedGoalVersion) {
+    return [diagnostic('goal_version_mismatch', 'Exact current goal approval version required')];
+  }
   if (goal.status !== 'active' || !Number.isFinite(goal.activatedAt) || !Number.isFinite(goal.deadline)) {
     return [diagnostic('goal_inactive', 'Goal must be active and approved')];
   }

@@ -10,9 +10,12 @@ function requireFields(raw, fields, label) {
 }
 
 export function validateBacklogIdentity(raw) {
-  requireFields(raw, ['goalId', 'expectedGoalHash', 'submissionId', 'items'], 'backlog group');
+  requireFields(raw, ['goalId', 'expectedGoalHash', 'expectedGoalVersion', 'submissionId', 'items'], 'backlog group');
   identifier(raw.goalId, 'goalId');
   identifier(raw.submissionId, 'submissionId');
+  if (!Number.isSafeInteger(raw.expectedGoalVersion) || raw.expectedGoalVersion < 1) {
+    throw Error('Invalid expectedGoalVersion');
+  }
   if (typeof raw.expectedGoalHash !== 'string' || !/^[a-f0-9]{64}$/.test(raw.expectedGoalHash)) {
     throw Error('Invalid expectedGoalHash');
   }

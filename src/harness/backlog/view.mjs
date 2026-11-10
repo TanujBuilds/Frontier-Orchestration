@@ -244,12 +244,16 @@ function groupState(items, groupIssue) {
 }
 
 export function projectBacklog({group,tasks,goal,priorities=new Map(),hostState={},evidence=new Map(),now=Date.now()}) {
+  // Ordinary workflow receipts pin a goal version, but do not save its hash.
+  // Keep that absence visible instead of inventing a historical hash.
+  const versionOnly = group.origin?.kind === 'workflow_run' && group.goalHash === null;
   const groupIssue = !goal || goal.id !== group.goalId ? 'goal_missing' :
-    group.goalVersion !== goal.version || group.goalHash !== goal.hash ? 'stale_group_approval' : null;
+    group.goalVersion !== goal.version || !versionOnly && group.goalHash !== goal.hash ? 'stale_group_approval' : null;
   const byId = tasks instanceof Map ? tasks : new Map(tasks.map(task => [task.id,task]));
   const items = (group.items??[]).slice(0,MAX_BACKLOG_ITEMS).map(ref => projectTask(ref,{group,goal,byId,priorities,hostState,evidence,now}));
   return {
     id:group.id,goalId:group.goalId,goalVersion:group.goalVersion,goalHash:group.goalHash,submissionId:group.submissionId,at:group.at,
+    origin:group.origin??{kind:'backlog_group'},
     currentGoalVersion:goal?.version??null, sourceStatus:goal?.status??null, deadline:goal?.deadline??null,
     sourceRevision:goal?.manifest.project?.baseCommit??null, stale:groupIssue!==null,
     ...groupState(items,groupIssue), items,
@@ -331,9 +335,14 @@ function readBacklogSnapshot({c,worker,filter,before,limit}) {
   const {store} = c;
   const [goalId,groupId] = filter;
   const generatedAt = c.now();
-  const rows = store.db.prepare(`SELECT rowid,data FROM records WHERE kind='backlog_group'
-    AND (? IS NULL OR json_extract(data,'$.goalId')=?) AND (? IS NULL OR id=?)
-    AND (? IS NULL OR rowid<?) ORDER BY rowid DESC LIMIT ?`)
+  const rows = store.db.prepare(`SELECT r.rowid,r.kind,r.data FROM records r
+    WHERE r.kind IN ('backlog_group','workflow_run','workflow_recipe_run')
+    AND (r.kind!='workflow_run' OR NOT EXISTS (
+      SELECT 1 FROM records recipe WHERE recipe.kind='workflow_recipe_run'
+      AND json_extract(recipe.data,'$.goalId')=json_extract(r.data,'$.goalId')
+      AND json_extract(recipe.data,'$.workflowRunId')=r.id))
+    AND (? IS NULL OR json_extract(r.data,'$.goalId')=?) AND (? IS NULL OR r.id=?)
+    AND (? IS NULL OR r.rowid<?) ORDER BY r.rowid DESC LIMIT ?`)
     .all(goalId,goalId,groupId,groupId,before,before,limit+1);
   const priorities = rows.length ? c.effectivePriorities() : new Map();
   const hostState = {};
@@ -341,8 +350,8 @@ function readBacklogSnapshot({c,worker,filter,before,limit}) {
   if (workerToken) {
     try {hostState.workerLease = c.currentLease(workerToken);} catch { /* No verified local ownership. */ }
   }
-  const groups = rows.slice(0,limit).map(({data}) => {
-    const group = JSON.parse(data);
+  const groups = rows.slice(0,limit).map(({kind,data}) => {
+    const group = receiptGroup(store,kind,JSON.parse(data));
     const goal = store.maybe('goal',group.goalId);
     const tasks = new Map();
     const members = [];
@@ -370,9 +379,30 @@ function readBacklogSnapshot({c,worker,filter,before,limit}) {
     'States are derived from saved coordinator records and the original approval window.' :
     isOvernightV2(queriedGoal?.manifest) ?
       'Overnight v2 uses its planner-owned graph. Inspect its existing tasks with queue_get or goal_get.' :
-      'No saved backlog groups match these filters. Inspect approved tasks with queue_get.';
+      'No saved backlog or workflow groups match these filters. Inspect approved tasks with queue_get.';
   return {
     schemaVersion:1,generatedAt,sourceRevision,explanation,groups,
     nextCursor:rows.length > limit ? Buffer.from(JSON.stringify([1,...filter,rows[limit-1].rowid])).toString('base64url') : null,
+  };
+}
+
+function receiptGroup(store, kind, receipt) {
+  if (kind === 'backlog_group') return receipt;
+  const recipe = kind === 'workflow_recipe_run';
+  const submission = recipe ? null : store.db.prepare(
+    "SELECT key FROM submissions WHERE kind='workflow_run' AND scope=? AND id=?",
+  ).get(receipt.goalId,receipt.id);
+  const prefix = recipe ? `recipe-${receipt.id}-` : submission ? `${submission.key}-` : null;
+  return {
+    id:receipt.id,goalId:receipt.goalId,goalVersion:receipt.goalVersion,
+    goalHash:recipe ? receipt.goalHash : null,submissionId:receipt.submissionId??submission?.key??null,at:receipt.at,
+    origin:recipe ? {kind,workflowRunId:receipt.workflowRunId,recipeId:receipt.recipeId,version:receipt.version}
+      : {kind,workflowId:receipt.workflowId,version:receipt.version},
+    items:(receipt.tasks??[]).slice(0,MAX_BACKLOG_ITEMS).map(taskId => {
+      const task = store.maybe('task',taskId);
+      const submissionId = task?.goalId === receipt.goalId ? task.spec.submissionId : null;
+      const key = prefix && submissionId?.startsWith(prefix) ? submissionId.slice(prefix.length) : taskId;
+      return {key,taskId};
+    }),
   };
 }

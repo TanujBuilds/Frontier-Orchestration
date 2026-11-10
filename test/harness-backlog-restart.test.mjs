@@ -66,7 +66,7 @@ async function fixture(t, mode = 'collaborative') {
   const worker = makeWorker(c, 'backlog-worker');
   return {
     c, goal, calls, worker, open, makeWorker, backlog: new Backlog({c, worker}),
-    input: (items, submissionId = 'explanations') => ({goalId: goal.id, expectedGoalHash: goal.hash, submissionId, items}),
+    input: (items, submissionId = 'explanations') => ({goalId: goal.id, expectedGoalHash: goal.hash, expectedGoalVersion: goal.version, submissionId, items}),
     advance: ms => { clock += ms; },
     child: scenario => {
       const owned = ownedChild(root, clock, scenario);

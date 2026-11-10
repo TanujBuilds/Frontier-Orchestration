@@ -49,7 +49,7 @@ export async function backlogDemo(output) {
       key, dependsOnKeys, task: { kind: 'consult', objective, acceptance: ['Save the fixture answer'] },
     });
     const input = {
-      goalId: goal.id, expectedGoalHash: goal.hash, submissionId: 'demo-group',
+      goalId: goal.id, expectedGoalHash: goal.hash, expectedGoalVersion: goal.version, submissionId: 'demo-group',
       items: [
         item('inspect', 'Inspect the example'),
         item('follow-up', 'Check the inspected example', ['inspect']),
