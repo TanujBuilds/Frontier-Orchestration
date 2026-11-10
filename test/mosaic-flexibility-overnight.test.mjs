@@ -99,7 +99,7 @@ async function apiFixture(t, reply) {
   return {baseUrl: `http://127.0.0.1:${server.address().port}/v1`, calls, errors};
 }
 
-test('beta API worker completes exact Overnight v2 planning, checks, review and integration', {timeout: 45_000}, async t => {
+test('combined assignment, behavioral repair, restart and pinned API worker complete Overnight v2', {timeout: 45_000}, async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'mosaic-flexibility-overnight-'));
   let c;
   t.after(async () => {
@@ -107,6 +107,7 @@ test('beta API worker completes exact Overnight v2 planning, checks, review and 
     await rm(root, {recursive: true, force: true});
   });
   const project = await repository(path.join(root, 'source'));
+  project.behavioralChecks = [{criterionId: 'value', description: 'The integrated value is 42', checkIds: ['unit']}];
   const stage = (key, role, dependsOn, checkIds) => ({
     key, kind: 'coding', role, objective: `Fixture ${role}`, acceptance: ['Protected checks pass'], dependsOn,
     permissions: {readPaths: project.readPaths, writePaths: project.writePaths, checks: checkIds},
@@ -116,7 +117,8 @@ test('beta API worker completes exact Overnight v2 planning, checks, review and 
   const {baseUrl, calls, errors} = await apiFixture(t, input => {
     if (input.goal) return plan;
     if (input.task.role === 'implementation' && input.attempt === 2 && input.exchange === 0) {
-      assert.match(input.feedback.find(entry => entry.kind === 'check')?.text ?? '', /expected 42, got 1/);
+      assert.equal(input.repair?.failure.category, 'functional_check');
+      assert.match(input.repair.failure.checks.find(check => check.id === 'unit')?.stderr ?? '', /expected 42, got 1/);
       const file = input.inventory.find(file => file.path === 'src/value.mjs');
       assert.match(file?.hash ?? '', /^[a-f0-9]{64}$/);
       return {type: 'apply_changes', summary: 'Correct the value', edits: [
@@ -134,29 +136,33 @@ test('beta API worker completes exact Overnight v2 planning, checks, review and 
   c = new Coordinator({root: path.join(root, 'state'), now: () => now, beta: true, workerProfile});
   const config = {beta: true, environment: 'fixture', workerApiKey, codexPath: process.execPath};
   const reviews = [];
-  const worker = new Worker({c, config, checksFactory: workspace => new FixtureCheckRunner(workspace, {codex: process.execPath}),
+  const makeWorker = () => new Worker({c, config, checksFactory: workspace => new FixtureCheckRunner(workspace, {codex: process.execPath}),
     reviewer: {reviewCode: async packet => {
       reviews.push(packet);
       return {decision: 'accept', feedback: 'Fixture reviewer accepts the protected check evidence', unverified: []};
     }},
   });
+  let worker = makeWorker();
   c.acquireWorker(worker.owner);
-  const dispatcher = new Dispatcher({c, worker, config});
+  let dispatcher = new Dispatcher({c, worker, config});
   const invoke = (name, input) => dispatcher.invoke(name, input);
   const mutate = (name, idempotencyKey, input) => invoke(name, {...input, idempotencyKey});
   const manifest = {
     objective: 'Correct and verify a value', acceptance: ['The integrated value is 42'], project,
     mode: 'overnight_review', environment: 'fixture',
-    limits: {hours: 1, maxTasks: 2, taskLimits: {coding: {seconds: 600}}},
+    limits: {hours: 1, maxTasks: 2, reviewAgentRuns: 0, taskLimits: {coding: {seconds: 600}}},
   };
   const legacy = await mutate('goal_prepare', 'legacy-prepare', {manifest: {...manifest, submissionId: 'legacy'}});
   assert.equal(legacy.manifest.mode.version, 1);
   assert.equal(Object.hasOwn(legacy.manifest, 'overnightPolicy'), false);
   assert.deepEqual(legacy.manifest.workerProfile, workerProfile);
-  const goal = await mutate('goal_prepare', 'v2-prepare', {manifest: {
+  const prepared = await mutate('assignment_prepare', 'v2-prepare', {manifest: {
     ...manifest, submissionId: 'v2', modeVersion: 2,
     overnightPolicy: {preflightCheckIds: ['starter'], finalOnlyCheckIds: ['final']},
   }});
+  assert.equal(prepared.status, 'prepared', JSON.stringify(prepared));
+  const goal = await invoke('goal_get', {goalId: prepared.goalId});
+  assert.equal(goal.hash, prepared.hash);
   assert.equal(goal.manifest.mode.version, 2);
   assert.deepEqual(goal.manifest.workerProfile, workerProfile);
   assert.equal(goal.hash, digest(goal.manifest));
@@ -203,13 +209,27 @@ test('beta API worker completes exact Overnight v2 planning, checks, review and 
     failed = await getTask(change.id);
     if (failed.feedback.some(entry => entry.kind === 'check')) break;
   }
-  assert.match(failed.feedback.find(entry => entry.kind === 'check')?.text ?? '', /expected 42, got 1/);
+  assert.equal(failed.checkpoint.repairFailure.category, 'functional_check');
+  assert.match(failed.checkpoint.repairFailure.checks.find(check => check.id === 'unit')?.stderr ?? '', /expected 42, got 1/);
   assert.equal(failed.attempts, 1);
   assert.equal(failed.spent.model, 1);
   assert.equal(failed.spent.codexReview, 0);
   assert.equal(failed.deadline, now + 600_000);
   assert.deepEqual(reviews, []);
 
+  const originalRequests = c.store.requestOutcomes(change.id);
+  const originalCheckpoint = structuredClone(failed.checkpoint);
+  c.releaseWorker(worker.owner);
+  c.close();
+  c = new Coordinator({root: path.join(root, 'state'), now: () => now, beta: true, workerProfile});
+  worker = makeWorker();
+  c.acquireWorker(worker.owner);
+  assert.equal(c.getTask(change.id).status, 'uncertain');
+  const recovered = c.recoverSaved(change.id, worker.owner);
+  assert.deepEqual(recovered.checkpoint, originalCheckpoint);
+  assert.deepEqual(recovered.spent, failed.spent);
+  assert.deepEqual(c.store.requestOutcomes(change.id), originalRequests);
+  dispatcher = new Dispatcher({c, worker, config});
   now += 60_000;
   await worker.drain({maxSteps: 20});
   assert.deepEqual(errors, []);
@@ -221,6 +241,7 @@ test('beta API worker completes exact Overnight v2 planning, checks, review and 
   assert.equal(completed.tasks[0].deadline, failed.deadline);
   assert.equal(completed.tasks[1].checkpoint.executionBase, completed.tasks[0].integration.commit);
   assert.deepEqual(reviews.map(({stage}) => stage.role), ['implementation', 'final']);
+  assert.ok(reviews.every(({evidence}) => evidence.behavioralEvidence.criteria.every(criterion => criterion.checks.every(check => check.status === 'passed'))));
   const gateEvidence = ({checks: results}) => results.map(({id, passed, code, stdout}) => [id, passed, code, stdout.trim()]);
   const implementationGates = [['starter', true, 0, 'approved input staged'], ['unit', true, 0, 'unit passed']];
   const finalGates = [...implementationGates, ['final', true, 0, 'final passed']];

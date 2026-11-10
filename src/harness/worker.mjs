@@ -38,22 +38,24 @@ export class Worker {
  question(task,question,checkpoint,owner){
   const state=this.c.ask(task.id,question,checkpoint,owner);this.activity(task,'coding.question',{operationId:state.questions.at(-1).id,requestId:checkpoint.requestId??null,questionId:state.questions.at(-1).id});return state;
  }
- pinModel(task,owner,model,dispatchUntil){
+ pinModel(task,owner,model,dispatchUntil,dispatch=false){
   if(model==null&&dispatchUntil===undefined)return;
   if(typeof model!=='string'||!model.trim()||model.length>200)throw Error('Invalid resolved DeepSeek model identity');
   this.c.store.tx(()=>{
    const current=this.c.owned(task.id,owner);
-   if(dispatchUntil!==undefined){
+   if(dispatch){
     // LocalProvider invokes onModel after discovery and immediately before POST.
     try{
      this.c.liveTask(current);
      if(current.status!=='running')throw Error('Task is no longer running');
-     if(this.c.now()>=dispatchUntil)throw Error('Original provider reconnect window exhausted');
+     if(dispatchUntil!==undefined&&this.c.now()>=dispatchUntil)throw Error('Original provider reconnect window exhausted');
     }catch(error){
      error.requestOutcome='not_dispatched';
      error.dispatchStopped=true;
      throw error;
     }
+    try{this.c.verifyWorkerBinding(this.c.store.get('goal',current.goalId));}
+    catch(error){error.requestOutcome='not_dispatched';error.bindingChanged=true;throw error;}
    }
    if(current.providerModel&&current.providerModel!==model){const e=Error('DeepSeek model differs from pinned task model');e.requestOutcome='completed';throw e;}
    if(!current.providerModel){current.providerModel=model;this.c.store.put('task',current);}
@@ -71,7 +73,7 @@ export class Worker {
   const goal=this.c.store.get('goal',task.goalId);
   const remaining=Math.max(1,Math.min(600000,task.deadline-this.c.now(),goal.deadline-this.c.now()));
   let captured=0,chunkIndex=0,result,invoked=false,expectedModel;
-  let builtInCompletion=false,reachedDispatch=false;
+  let builtInCompletion=false,reachedDispatch=false,dispatchFailure;
   try{
    if(goal.manifest.environment!==(this.config.environment??'live'))throw Error('Approved environment differs from configured providers');
    const provider=this.getProvider();
@@ -80,7 +82,8 @@ export class Worker {
    this.activity(task,'model.request.started',{requestId:reservation.id,key});
    invoked=true;
    result=await provider.complete(messages,{maxTokens,streaming:this.c.workerProfile?.streaming??this.config.deepseekStreaming??false,signal:AbortSignal.timeout(remaining),expectedModel,onModel:model=>{
-    this.pinModel(task,owner,model,reservation.reconnectUntil);
+    try{this.pinModel(task,owner,model,reservation.reconnectUntil,true);}
+    catch(error){dispatchFailure=error;throw error;}
     this.activity(task,'model.request.resolved',{operationId:reservation.id,requestId:reservation.id,model});
     reachedDispatch=true;
    },onContent:content=>{
@@ -103,8 +106,10 @@ export class Worker {
    // A discovery timeout is safe. A completion gateway timeout cannot prove
    // whether upstream inference started, even when it arrives as a 4xx.
    const transientStatus=httpStatus===undefined||[429,502,503,504].includes(httpStatus)||(beforeBuiltInDispatch&&httpStatus===408);
-   const reconnect=invoked&&certified&&!pinnedMismatch&&
-    (error?.dispatchStopped?reservation.reconnectUntil!==undefined:transientStatus);
+   // Provider transport sanitizes thrown errors; retain our own guard's
+   // classification locally instead of relying on custom fields surviving it.
+   const reconnect=invoked&&certified&&!pinnedMismatch&&!dispatchFailure?.bindingChanged&&
+    (dispatchFailure?.dispatchStopped?reservation.reconnectUntil!==undefined:transientStatus);
    this.c.failModelRequest(reservation.id,owner,{reason,outcome,reconnect});
    this.activity(task,'model.request.failed',{requestId:reservation.id,outcome});
    throw error;

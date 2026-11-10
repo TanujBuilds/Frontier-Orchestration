@@ -9,6 +9,7 @@ import {digest} from '../src/harness/contracts.mjs';
 import {Coordinator} from '../src/harness/coordinator.mjs';
 import {OvernightPreflight} from '../src/harness/overnight-preflight.mjs';
 import {Worker} from '../src/harness/worker.mjs';
+import {Journal} from '../src/project/journal.mjs';
 
 const criterion = {
   criterionId: 'filtered-download',
@@ -85,7 +86,7 @@ async function setup(t, {oversized = false} = {}) {
     if (input.task.role === 'implementation' || input.exchange > 0) {
       return result({type: 'finish_stage', summary: 'Claims the export works'});
     }
-    if (input.attempt === 2) seenFailure = input.feedback.find(entry => entry.kind === 'check');
+    if (input.attempt === 2) seenFailure = input.repair?.failure;
     return result({
       type: 'apply_changes', summary: 'Implement the export',
       edits: [{
@@ -120,7 +121,8 @@ async function setup(t, {oversized = false} = {}) {
       tasks: tasks().map(({status, checkpoint, reason}) => ({status, checkpoint, reason})),
     }));
   };
-  return {final, reviewPackets, tickUntil, worker, failureSeen: () => seenFailure, savedGoal: () => c.getGoal(goal.id)};
+  const journalOf = task => new Journal(path.join(root, 'state', 'coding'), task.id).load();
+  return {final, reviewPackets, tickUntil, worker, journalOf, failureSeen: () => seenFailure, savedGoal: () => c.getGoal(goal.id)};
 }
 
 test('worker fixes a real failing download gate before review, with final evidence and combined checks', async t => {
@@ -132,7 +134,12 @@ test('worker fixes a real failing download gate before review, with final eviden
   assert.deepEqual(early.checks.map(receipt => receipt.id), ['starter', 'unit']);
   assert.equal(early.behavioralEvidence.criteria[0].status, 'not_run');
   assert.deepEqual(early.behavioralEvidence.criteria[0].checks.map(check => check.reason), ['not_due', 'not_due']);
-  const fail = JSON.parse(f.final().feedback.find(entry => entry.kind === 'check').text);
+  const failedTask = f.final();
+  const repair = failedTask.checkpoint.repairFailure;
+  assert.equal(repair.category, 'functional_check');
+  assert.deepEqual(repair.checks.map(check => check.id), ['download']);
+  assert.match(repair.checks[0].stderr, /Hidden/);
+  const fail = (await f.journalOf(failedTask)).completed(failedTask.checkpoint.repairEvidence.key).value;
   assert.deepEqual(fail.map(({id, passed}) => [id, passed]), [
     ['starter', true], ['unit', true], ['build', true], ['download', false],
   ]);
@@ -140,6 +147,7 @@ test('worker fixes a real failing download gate before review, with final eviden
 
   await f.tickUntil(() => f.final()?.status === 'accepted');
   assert.ok(f.failureSeen(), 'the local worker received the gate failure for repair');
+  assert.deepEqual(f.failureSeen(), repair);
   assert.equal(f.final().attempts, 2);
   assert.equal(f.final().spent.codexReview, 1);
   const final = f.reviewPackets.at(-1).evidence;

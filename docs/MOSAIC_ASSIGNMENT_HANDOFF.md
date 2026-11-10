@@ -22,6 +22,12 @@ If the reply is lost, retry the identical request with its original key. It retu
 
 The facade pins Collaborative, DeepSeek-only and Codex-only to v1. Overnight review defaults to v2 and accepts historical v1 with an explicit `modeVersion: 1`. Other registered versions are outside the facade's supported modes.
 
+Optional `project.behavioralChecks` mappings pass through the same canonical
+manifest validation as `goal_prepare` and are bound to the approval hash. The
+facade uses the coordinator's canonical manifest in both core and beta, including
+beta's pinned worker profile and parked research capabilities. See
+[behavioral validation](MOSAIC_BEHAVIORAL_VALIDATION.md) for the mapping contract.
+
 The summary identifies the roles selected by the pinned mode. Collaborative uses main Codex planning, scoped Codex and DeepSeek implementation, and main Codex review. DeepSeek-only uses DeepSeek planning and implementation with protected checks governing acceptance. Codex-only uses native Codex planning, implementation and review. Overnight v2 uses DeepSeek planning and implementation, with bounded Codex review after protected checks pass. Provider and model readiness remain unverified during preparation.
 
 The exact prepared record controls what may run. Scope includes the checkout and base, readable and editable paths, literal check arguments, and numerical limits. Keep any host file inspection within approved nonsecret paths. A package script can be proposed as a check and requires the same approval as any other check. Before any start action, use `goal_get` to confirm the current status is `draft` and the hash still matches the receipt. For Overnight v2, the separately authorized `overnight_preflight` must pass before activation. Check the draft and hash again before sending the exact `goalId` and `hash` to `goal_activate` within matching explicit authorization. If authority is missing, present the summary and ask for the specific remaining approval. Review and integration depend on the pinned mode and its evidence gates.

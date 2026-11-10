@@ -13,6 +13,7 @@ coordinator lease. Elapsed time alone does not prove a worker has exited.
 | Model response | SQLite stores the result under the original request ID | Resume the stage with the saved response |
 | Edit batch | The workspace journal records edit intent and completion, keyed by the approved attempt and batch | Recover the journal and reuse the receipt for the same batch |
 | Protected checks | The workspace journal records the check operation and its completed result | A saved completed result can be replayed. A missing result leaves check-process quiescence unverified |
+| Failed-check repair | The checkpoint binds the failed gate to its snapshot, permissions and journal receipt | A quiescent saved repair boundary can resume with its original feedback and counters; missing or changed receipts and unapplied edits prevent automatic continuation |
 | Review | The coordinator records a separate review reservation and verdict | A missing verdict stays spent and requires reconciliation. A saved passing review can proceed through integration |
 | Integration | The goal holds the pending import identity and the integration journal binds the candidate and target commit | Continue or repair the same import under existing controls and protected checks |
 | Report and alert | Saved coordinator state drives the JSON and Markdown report. Alert delivery is reserved before the OS call | Rebuild the report after an interrupted publication. An alert with an uncertain delivery receipt stays reserved |
@@ -44,10 +45,25 @@ correlating evidence across restarts.
 
 ## Isolated verification
 
+Planner callbacks are fenced to the original lease generation, approved goal
+and planning attempt. A replaced worker cannot save a late response, rewrite a
+request outcome or materialize tasks. Responses saved while paused or stopped
+remain available after an explicit resume without another planning request.
+Initial model discovery and reconnect discovery both recheck controls,
+deadlines and the approved worker binding immediately before completion dispatch.
+A refused dispatch retains its spent reservation. Reconnect readiness never
+extends the original reconnect window.
+
+A pause or stop during the protected checks before frontier review preserves
+the unspent review for resume. A caught reviewer failure retains the original
+request identity so the report can identify an unknown outcome; recovery does
+not silently issue another review.
+
 Run from the repository checkout with Node 24 and the pinned dependencies.
 
 ```sh
 node --test --test-concurrency=1 test/mosaic-recovery*.test.mjs test/harness-{crash,idle,integration,overnight-v2}.test.mjs
+node --test --test-concurrency=1 test/mosaic-integration-*.test.mjs test/mosaic-flexibility-overnight.test.mjs
 ```
 
 The interruption tests use disposable SQLite state, Git repositories and

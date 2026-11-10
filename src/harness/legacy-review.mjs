@@ -135,7 +135,7 @@ export class LegacyReview {
      evidence=preparedEvidence?{...preparedEvidence,sourceFixture:fixture}:{...await source.workspace.evidence(),checks,sandbox,sourceFixture:fixture,modelContext:modelContext()};
     }
     try{result=await this.worker.reviewer.reviewCode({brief:g.manifest.objective,approvedPlan:g.manifest.acceptance,stage:task.spec,assignment:task.spec,evidence},AbortSignal.timeout(Math.max(1,Math.min(300000,task.deadline-c.now()))));c.saveRequest(reservation.id,result);}
-    catch(error){c.store.tx(()=>{const t=c.store.get('task',task.id);t.status='blocked';t.reason=error.message;t.checkpoint.legacyReviewKey=null;c.store.put('task',t);c.store.db.prepare("UPDATE requests SET status='failed' WHERE id=?").run(reservation.id);c.emit('legacy_review.failed',g.id,t.id,{id:reservation.id,reason:t.reason});});return c.getTask(task.id);}
+    catch(error){c.store.tx(()=>{const t=c.store.get('task',task.id);t.status='blocked';t.reason=error.message;c.store.put('task',t);c.store.db.prepare("UPDATE requests SET status='failed' WHERE id=?").run(reservation.id);c.emit('legacy_review.failed',g.id,t.id,{id:reservation.id,reason:t.reason});});return c.getTask(task.id);}
    }
    keys(result,['decision','feedback','unverified'],'legacy review');text(result.feedback,'review feedback',12000);if(!['accept','revise','blocked'].includes(result.decision)||!Array.isArray(result.unverified))throw Error('Malformed legacy review');
    if(mapped)await assertReviewedWorkspace();
@@ -156,6 +156,7 @@ export class LegacyReview {
    if(!v2&&!mapped)throw error;
    return c.store.tx(()=>{
     const t=c.store.get('task',task.id);
+    if(['paused','stopped'].includes(t.status)&&t.controlReturnStatus==='awaiting_legacy_review'&&!t.checkpoint?.legacyReviewKey)return c.getTask(t.id);
     if(mapped&&!['awaiting_legacy_review','legacy_reviewing'].includes(t.status))return c.getTask(t.id);
     t.status='blocked';t.reason=String(error.message).slice(0,2000);c.store.put('task',t);c.emit('task.blocked',g.id,t.id,{reason:t.reason});return c.getTask(t.id);
    });

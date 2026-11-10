@@ -2,13 +2,14 @@ import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import {readFileSync} from 'node:fs';
-import {isOvernightV2} from './overnight.mjs';
+import {isOvernightV2,effectiveIntegrationChecks} from './overnight.mjs';
 import {assertOvernightPreflight} from './overnight-preflight.mjs';
 import { Store } from './store.mjs';
 import { Registry, normalizeGoal, normalizeTask, digest, text, identifier } from './contracts.mjs';
 import {verifyLocalAcceptance} from './research-review.mjs';
 import { Learning } from './learning.mjs';
 import {workerProfile as normalizeWorkerProfile} from './worker-profile.mjs';
+import {recordFailedGate} from './repair-progress.mjs';
 
 const TERMINAL=new Set(['accepted','failed','partial','cancelled']);
 const SLOT=new Set(['running','uncertain','taking_over']);
@@ -34,6 +35,31 @@ function savedStageChecks(root,t){
   if(event.type==='operation.completed'&&event.data.key===`harness-attempt-${t.checkpoint.attempt}/checks`)completed=Array.isArray(event.data.value);
  }
  return completed;
+}
+
+function savedFailedGate(c,t,g){
+ const cp=t.checkpoint,gate=cp.failedGate,key=`harness-attempt-${cp.attempt}/checks`;
+ if(cp.repairFailure?.category!=='functional_check'||cp.repairFailure.attempt!==cp.attempt||
+    !gate||gate.attempt!==cp.attempt||cp.attempt!==t.attempts||cp.repairEvidence?.key!==key)return false;
+ let raw;
+ try{raw=readFileSync(path.join(c.store.root,'coding','jobs',t.id+'.jsonl'),'utf8');}
+ catch(error){if(error.code==='ENOENT')return false;throw error;}
+ const events=raw.slice(0,raw.lastIndexOf('\n')+1).split('\n').filter(Boolean).map(line=>JSON.parse(line));
+ if(!events.length||events.some((e,i)=>e.jobId!==t.id||e.sequence!==i+1))return false;
+ const completed=new Set(events.filter(e=>e.type==='operation.completed').map(e=>e.data.key));
+ const applied=new Set(events.filter(e=>e.type==='edits.applied').map(e=>e.data.key));
+ if(events.some(e=>e.type==='operation.started'&&!completed.has(e.data.key)||e.type==='edits.intent'&&!applied.has(e.data.key)))return false;
+ const manifest=events.findLast(e=>e.type==='harness.manifest');
+ const permissions={readPaths:t.spec.permissions.readPaths,writePaths:t.spec.permissions.writePaths,
+  checks:isOvernightV2(g.manifest)?effectiveIntegrationChecks(c,t,g.manifest):g.manifest.project.checks.filter(check=>t.spec.permissions.checks.includes(check.id))};
+ const permissionsHash=digest(permissions);
+ if(!manifest||digest(manifest.data.permissions)!==permissionsHash||cp.repairPermissionsHash!==permissionsHash||gate.permissionsHash!==permissionsHash)return false;
+ const receipt=events.findLast(e=>e.type==='operation.completed'&&e.data.key===key);
+ const snapshot=events.findLast(e=>e.data.snapshot);
+ if(!receipt||!snapshot||snapshot.sequence!==gate.snapshotSequence||receipt.sequence<snapshot.sequence||receipt.sequence<manifest.sequence||
+    !Array.isArray(receipt.data.value)||!receipt.data.value.some(check=>check.passed===false))return false;
+ const verified=recordFailedGate({attempt:cp.attempt,snapshot:snapshot.data.snapshot,results:receipt.data.value}).gate;
+ return verified.candidateId===gate.candidateId&&verified.failureId===gate.failureId&&verified.signature===gate.signature;
 }
 export class Coordinator {
  constructor({root,now=Date.now,registry=new Registry(),beta=false,workerProfile,verifyCurrentWorker}={}){
@@ -95,7 +121,7 @@ export class Coordinator {
   const savedModel=requests.some(r=>r.key===modelKey&&r.status==='completed');
   const learning=t.spec.kind==='learning'&&(cp.phase==='model'||(requests.length>0&&['proposal','evaluate','finalize'].includes(cp.phase)));
   const safePhase=consult||learning||
-   (coding&&(cp.phase==='model'||(savedModel&&(cp.phase==='apply'||cp.phase==='checks'&&savedStageChecks(this.store.root,t)))));
+   (coding&&(cp.phase==='model'||cp.phase==='attempt'&&savedFailedGate(this,t,g)||(savedModel&&(cp.phase==='apply'||cp.phase==='checks'&&savedStageChecks(this.store.root,t)))));
   if(!safePhase)throw Error('Backend/check quiescence requires separate verification');
   const status=controlledStatus(t,g,this.now());
   if(!status&&t.goalVersion!==g.version)throw Error('Saved task requires explicit rebind to the approved goal version');
@@ -305,6 +331,12 @@ export class Coordinator {
    this.store.put('task',t);this.emit('task.uncertain',t.goalId,t.id,{reason,requestId:id});return this.getTask(t.id);
   }
   const controlled=controlledStatus(t,g,at);
+  // A control arriving during initial discovery spends the reservation but
+  // sends no request. Resume coding under a new exchange, never replay that
+  // failed key or classify the deliberate hold as a provider outage.
+  if(!reconnect&&outcome==='not_dispatched'&&controlled&&t.spec.kind==='coding'&&t.checkpoint.phase==='model'){
+   t.checkpoint={...t.checkpoint,exchange:t.checkpoint.exchange+1};
+  }
   if(reconnect&&isOvernightV2(g.manifest)&&t.spec.kind==='coding'&&t.checkpoint.phase==='model'){
    t.providerReconnectStartedAt??=at;
    const until=Math.min(t.deadline,g.deadline,t.providerReconnectStartedAt+g.manifest.overnightPolicy.reconnectMs);

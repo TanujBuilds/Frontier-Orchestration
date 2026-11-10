@@ -57,7 +57,15 @@ const completeTask = c.completeTask.bind(c);
 c.completeTask = (...args) => {
   barrier('checks-saved');
   const result = completeTask(...args);
-  barrier('waiting-review');
+  // Coding commits feedback cleanup and completion in an outer transaction.
+  barrier('review-before-commit');
+  return result;
+};
+
+const tick = worker.tick.bind(worker);
+worker.tick = async (...args) => {
+  const result = await tick(...args);
+  if (c.getTask(taskId).status === 'awaiting_legacy_review') barrier('waiting-review');
   return result;
 };
 

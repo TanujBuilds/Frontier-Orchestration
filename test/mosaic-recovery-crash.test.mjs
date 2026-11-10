@@ -258,6 +258,30 @@ for (const point of ['checks-in-progress', 'checks-saved']) {
   });
 }
 
+test('SIGKILL before review-state commit recovers saved checks without duplicate execution', async t => {
+  const f = await fixture(t);
+  const {taskId} = await crash(f, 'review-before-commit');
+  await restart(f, startTime + 1000, async (c, worker) => {
+    const saved = c.getTask(taskId);
+    assert.equal(saved.status, 'uncertain');
+    assert.equal(saved.checkpoint.phase, 'checks');
+    assert.equal(saved.result, null);
+    const checks = (await journalOf(f, taskId)).completed('harness-attempt-1/checks').value;
+    assert.ok(checks.every(check => check.passed));
+    c.recoverSaved(taskId, owner);
+    await advance(worker, () => c.getTask(taskId).status === 'awaiting_legacy_review');
+    const waiting = c.getTask(taskId);
+    await verifyCandidate(f, waiting);
+    assert.deepEqual(waiting.result.checks, checks);
+    assert.deepEqual(waiting.spent, saved.spent);
+    assert.equal(waiting.deadline, saved.deadline);
+    assert.equal(waiting.attempts, saved.attempts);
+    assert.equal((await calls(f.root, 'model')).length, 2);
+    assert.equal((await calls(f.root, 'check')).filter(call => call.label === 'attempt-1').length, 1);
+    assert.deepEqual(await calls(f.root, 'review'), []);
+  });
+});
+
 test('SIGKILL waiting for review retains checked candidate and requires a real verdict', async t => {
   const f = await fixture(t);
   const {taskId} = await crash(f, 'waiting-review');

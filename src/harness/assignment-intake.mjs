@@ -3,7 +3,7 @@ import { constants } from 'node:fs';
 import { lstat, open, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { digest, goalDispatchInputSchema, normalizeGoal } from './contracts.mjs';
+import { digest, goalDispatchInputSchema } from './contracts.mjs';
 import { isOvernightV2 } from './overnight.mjs';
 import { matches, protectedPath, relativePath, secretPath } from '../project/contracts.mjs';
 import { assignmentSummary } from './assignment-summary.mjs';
@@ -65,7 +65,7 @@ function inspectInput(raw, registry) {
   }
 
   const project = object(raw.project) ? raw.project : {};
-  fields(raw.project, ['repo', 'baseCommit', 'readPaths', 'writePaths', 'checks'], 'project');
+  fields(raw.project, ['repo', 'baseCommit', 'readPaths', 'writePaths', 'checks', 'behavioralChecks'], 'project');
   need(project.repo, 'project.repo', value => text(value, 4096) && path.isAbsolute(value) && !/[\x00-\x1f\x7f]/.test(value), 'Provide the absolute path of the intended Git checkout root.');
   if (project.baseCommit !== undefined && (typeof project.baseCommit !== 'string' || !sha.test(project.baseCommit))) {
     issues.push(issue('invalid_input', 'project.baseCommit', 'Provide the exact 40-character HEAD commit or omit this field.'));
@@ -282,8 +282,8 @@ async function scopeProblem(repo, scope, tracked, write) {
   if (write && files.some(protectedPath)) return 'The selected editable directory includes a tracked protected path.';
 }
 
-async function resolveAssignment(raw, registry) {
-  const { issues, mode } = inspectInput(raw, registry);
+async function resolveAssignment(raw, c) {
+  const { issues, mode } = inspectInput(raw, c.registry);
   const checkout = issues.some(item => ['project.repo', 'project.baseCommit'].includes(item.field))
     ? null : await inspectCheckout(raw.project);
   if (checkout?.issue) issues.push(checkout.issue);
@@ -291,7 +291,7 @@ async function resolveAssignment(raw, registry) {
   const { repo, baseCommit } = checkout;
   const manifest = { ...raw, modeVersion: mode.version, project: { ...raw.project, repo, baseCommit } };
   let expectedHash;
-  try { expectedHash = digest(normalizeGoal(manifest, registry)); }
+  try { expectedHash = digest(c.goalManifest(manifest)); }
   catch { return { issues: [issue('invalid_manifest', 'manifest', 'Check the remaining fields against the coding goal manifest contract.')] }; }
   for (const name of ['readPaths', 'writePaths']) {
     for (const [index, scope] of raw.project[name].entries()) {
@@ -311,7 +311,7 @@ export async function prepareAssignment(c, raw = {}, key) {
   } catch (error) {
     if (error !== unresolved) throw error;
   }
-  const { issues, manifest, expectedHash } = await resolveAssignment(raw, c.registry);
+  const { issues, manifest, expectedHash } = await resolveAssignment(raw, c);
   try {
     return c.store.command(key, command, () => {
       if (issues.length) throw unresolved;
