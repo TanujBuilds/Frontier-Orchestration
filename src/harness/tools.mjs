@@ -12,6 +12,7 @@ import {Observer} from './observer.mjs';
 import {assignmentManifestSchema,prepareAssignment} from './assignment-intake.mjs';
 import {registerOutcomeTools} from './outcomes/tools.mjs';
 import {registerBacklogTools} from './backlog/tools.mjs';
+import {registerWorkflowRecipeTools} from './workflow-recipes/tools.mjs';
 
 const str={type:'string'},obj={type:'object'},bool={type:'boolean'},number={type:'integer'};
 function validate(schema,value,label='input'){
@@ -43,6 +44,7 @@ export class Dispatcher {
   add('mode_register','Register a versioned policy composed only from reviewed capabilities. Existing goals stay pinned.',{definition:obj},['definition'],true,(i,k)=>c.store.command(k,{op:'mode.register',...i},()=>{const definition=c.registry.registerMode(i.definition);c.store.put('mode',{id:`${definition.id}-${definition.version}`,definition});return definition;}));
   add('workflow_register','Register a validated dependency template using supported capabilities.',{definition:obj},['definition'],true,(i,k)=>c.store.command(k,{op:'workflow.register',...i},()=>{const definition=c.registry.registerWorkflow(i.definition);c.store.put('workflow',{id:`${definition.id}-${definition.version}`,definition});return definition;}));
   add('workflow_submit','Instantiate an exact registered workflow within the approved goal. Dependency mapping and submission are atomic.',{goalId:str,workflowId:str,version:{...number,minimum:1},submissionId:str},['goalId','workflowId','version','submissionId'],true,(i,k)=>c.submitWorkflow(i,k));
+  registerWorkflowRecipeTools({add,c});
   const {researchPolicy:parkedGoalPolicy,...codingGoal}=goalDispatchInputSchema.properties;
   const {researchPolicy:parkedTaskPolicy,...codingTask}=taskDispatchInputSchema.properties;
   const goalSchema=config.beta?{...goalDispatchInputSchema,properties:codingGoal}:goalDispatchInputSchema;
