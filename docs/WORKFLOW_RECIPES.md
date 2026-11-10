@@ -97,7 +97,7 @@ The receipt includes the workflow run ID, task IDs, and pinned definition, param
 
 ## Add a data-only recipe
 
-Place a definition in `src/harness/workflow-recipes/definitions/` and add it to the trusted built-in catalog in `src/harness/workflow-recipes/service.mjs`. Use an explicit ID, version, and supported mode ID or array. The graph uses the existing workflow engine. Stable task keys are at most 76 characters and can be referenced in `dependsOn`. Existing workflows have a ten-task ceiling and each goal can approve a smaller cap.
+Place a definition in `src/harness/workflow-recipes/definitions/` as `<id>.v<version>.json`, then regenerate the runtime catalog. Use an explicit ID, version, and supported mode ID or array. The graph uses the existing workflow engine. Stable task keys are at most 76 characters and can be referenced in `dependsOn`. Existing workflows have a ten-task ceiling and each goal can approve a smaller cap.
 
 For example, this complete definition creates one task in Codex-only mode. The project must already approve both paths and register the `verify` check.
 
@@ -133,6 +133,26 @@ For example, this complete definition creates one task in Codex-only mode. The p
 ```
 
 The compiler accepts bounded text, path lists, check ID lists, and enumerations. A definition can declare up to 20 parameters. Each definition, parameter object, and resolved graph has a 256 KiB limit in canonical JSON. A parameter reference occupies the entire supported value position. Literal strings remain literal. Checks are registered IDs whose commands come from the approved goal. Provenance describes where the definition came from. Change a released definition by adding a new version and keeping its prior version in the catalog. The first successful submission pins the version digest in coordinator state. Earlier workflow instances retain their exact resolved tasks and digests.
+
+The JSON files are the source for the catalog. The standalone package includes the generated JavaScript module through its static import. From the repository root, run the following command and commit the resulting `catalog.mjs` alongside the JSON changes.
+
+```sh
+node --input-type=module <<'NODE'
+import {readFileSync, readdirSync, writeFileSync} from 'node:fs';
+import {validateRecipeDefinition} from './src/harness/workflow-recipes/schema.mjs';
+const root = 'src/harness/workflow-recipes';
+const files = readdirSync(root + '/definitions').filter(file => file.endsWith('.json')).sort();
+const definitions = files.map(file => {
+  const source = readFileSync(root + '/definitions/' + file, 'utf8');
+  validateRecipeDefinition(JSON.parse(source));
+  // Keep prose outside the Beta packager's static import matcher.
+  return source.replace(/'/g, '\\u0027').trim().split(/\r?\n/).map(line => '  ' + line).join('\n');
+});
+writeFileSync(root + '/catalog.mjs',
+  '// Generated from definitions/*.json. Regenerate using docs/WORKFLOW_RECIPES.md.\n' +
+  'export const builtins = [\n' + definitions.join(',\n') + '\n];\n');
+NODE
+```
 
 ## Run the disposable demo
 

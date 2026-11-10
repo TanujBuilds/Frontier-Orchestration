@@ -2,11 +2,8 @@ import {digest, identifier, integer, keys} from '../contracts.mjs';
 import {isOvernightV2} from '../overnight.mjs';
 import {compileRecipe} from './compile.mjs';
 import {validateParameterPayload, validateRecipeDefinition} from './schema.mjs';
-import bugfix from './definitions/bugfix.v1.json' with {type: 'json'};
-import feature from './definitions/feature.v1.json' with {type: 'json'};
-import researchComparison from './definitions/research-comparison.v1.json' with {type: 'json'};
+import {builtins} from './catalog.mjs';
 
-const builtins = [bugfix, feature, researchComparison];
 const previewFields = ['goalId', 'recipeId', 'version', 'parameters'];
 const digestFields = ['expectedGoalHash', 'definitionDigest', 'previewDigest', 'parameterDigest'];
 const submitFields = [...previewFields, ...digestFields, 'submissionId'];
