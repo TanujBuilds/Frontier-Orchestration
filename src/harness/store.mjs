@@ -68,5 +68,6 @@ export class Store {
  command(key,input,fn){identifier(key,'idempotencyKey');const hash=digest(input);return this.tx(()=>{const old=this.db.prepare('SELECT * FROM commands WHERE key=?').get(key);if(old){if(old.hash!==hash)throw Error('Idempotency key conflict');return JSON.parse(old.result);}const result=fn();this.db.prepare('INSERT INTO commands(key,hash,result) VALUES(?,?,?)').run(key,hash,canonical(result));return result;});}
  submission(kind,scope,key,hash,create){const old=this.db.prepare('SELECT * FROM submissions WHERE kind=? AND scope=? AND key=?').get(kind,scope,key);if(old){if(old.hash!==hash)throw Error('Submission conflict');return this.get(kind,old.id);}const result=create(randomUUID());this.put(kind,result);this.db.prepare('INSERT INTO submissions VALUES(?,?,?,?,?)').run(kind,scope,key,result.id,hash);return result;}
  request(taskId,key){const row=this.db.prepare('SELECT * FROM requests WHERE task_id=? AND key=?').get(taskId,key);return row?{...row,...JSON.parse(row.data)}:null;}
+ requestOutcomes(taskId){return this.db.prepare("SELECT key,kind,status,json_extract(data,'$.requestOutcome') AS outcome FROM requests WHERE task_id=?").all(taskId);}
  spent(taskId){return Object.fromEntries(this.db.prepare('SELECT kind,COUNT(*) AS n FROM requests WHERE task_id=? GROUP BY kind').all(taskId).map(r=>[r.kind,Number(r.n)]));}
 }
