@@ -61,7 +61,8 @@ test('offline demo persists a genuine targeted repair, fresh review, and unrepai
   assert.equal(fresh.claims.some(claim => claim.support === 'reviewed_supported'), false);
   assert.equal(complete.status, 'accepted');
   assert.equal(complete.claims.find(claim => claim.id === 'C1').support, 'reviewed_supported');
-  assert.equal(complete.asOf, '2026-11-10');
+  assert.equal(complete.asOf, null);
+  assert.equal(complete.requestedBrief.asOf, '2026-11-10');
   assert.match(complete.comparisons[0].text, /valid leases.*intact journal/);
   assert.deepEqual(complete.contradictions[0].claimIds, ['C1', 'C3']);
   assert.match(complete.unanswered[0].text, /power loss/);

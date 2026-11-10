@@ -45,7 +45,7 @@ const inspect = (d, f, fields = {}) => d.invoke('research_mission_inspect', {tas
 
 test('public mission preparation is metadata only and checks exact goal authority and replay', async t => {
   const f = await missionFixture(t);
-  const d = new Dispatcher({c: f.c, worker: f.w, config: {beta: true}});
+  const d = new Dispatcher({c: f.c, worker: f.w});
   const brief = {question: 'Fixture', scope: 'Two local examples', outputShape: 'Comparison', asOf: '2026-11-10'};
   const input = {goalId: f.g.id, expectedGoalHash: f.g.hash, brief, idempotencyKey: 'mission-draft'};
   const before = f.c.store.all('task'), calls = f.calls.length;
@@ -54,11 +54,76 @@ test('public mission preparation is metadata only and checks exact goal authorit
   assert.equal(draft.taskId, null);
   assert.deepEqual(await d.invoke('research_mission_prepare', input), draft);
   assert.deepEqual(f.c.store.all('task'), before);
-  assert.equal((await inspect(d, f)).missionId, draft.missionId);
+  const view = await inspect(d, f);
+  assert.equal(view.missionId, f.task.id);
+  assert.deepEqual(view.requestedBrief, {draftId:draft.missionId, ...brief});
   await assert.rejects(d.invoke('research_mission_prepare', {...input, brief: {...brief, scope: 'Other'}}), /conflict/i);
   await assert.rejects(d.invoke('research_mission_prepare', {...input, expectedGoalHash: 'a'.repeat(64), idempotencyKey: 'other'}), /goal hash/i);
-  assert.ok(!d.tools().some(tool => ['research_start', 'research_review', 'research_action'].includes(tool.name)));
   assert.equal(f.calls.length, calls);
+});
+
+test('the beta catalog omits all research tools, including mission presentation', async t => {
+  const f = await missionFixture(t);
+  const d = new Dispatcher({c:f.c, worker:f.w, config:{beta:true}});
+  assert.deepEqual(d.tools().filter(tool => tool.name.startsWith('research_')), []);
+});
+
+test('a later prepared draft cannot reidentify or rescope a collected accepted task', async t => {
+  const f = await missionFixture(t);
+  const d = new Dispatcher({c:f.c, worker:f.w});
+  await f.accept();
+  await f.collect();
+  const before = await inspect(d, f);
+  const brief = {question:'Fixture', scope:'Outside the approved source scope', outputShape:'New format', asOf:'2099-01-01'};
+  const draft = await d.invoke('research_mission_prepare',
+    {goalId:f.g.id, expectedGoalHash:f.g.hash, brief, idempotencyKey:'later-draft'});
+  const after = await inspect(d, f);
+  for (const field of ['missionId','question','status','reportHash','asOf','approvedSourceScope']) {
+    assert.deepEqual(after[field], before[field], field);
+  }
+  assert.equal(after.missionId, f.task.id);
+  assert.equal(after.asOf, null);
+  assert.match(after.asOfReason, /canonical report/i);
+  assert.deepEqual(after.requestedBrief, {draftId:draft.missionId, ...brief});
+
+  const second = f.c.submitTask({goalId:f.g.id, submissionId:'same-question', kind:'research', objective:brief.question,
+    acceptance:['Reviewed']}, 'same-question');
+  assert.equal((await inspect(d, {task:second})).missionId, second.id);
+
+  const markdown = (await d.invoke('research_mission_export', {taskId:f.task.id, format:'markdown'})).content;
+  assert.match(markdown, /Requested brief metadata/);
+  assert.match(markdown, /Requested as of · 2099-01-01/);
+});
+
+test('an exact accepted review acknowledgment awaits collection without granting reviewed support', async t => {
+  const f = await missionFixture(t);
+  const d = new Dispatcher({c:f.c, worker:f.w});
+  await f.accept();
+  const queued = await inspect(d, f);
+  assert.equal(queued.sourceStatus, 'queued');
+  assert.equal(queued.status, 'awaiting_review');
+  assert.equal(queued.reasonCode, 'awaiting_finalization');
+  assert.equal(queued.review.state, 'acknowledged');
+  assert.equal(queued.review.decision, 'accept');
+  assert.equal(queued.review.candidateHash, f.packet.descriptor.candidateHash);
+  assert.equal(queued.claims[0].support, 'mechanically_linked');
+
+  await f.collect();
+  const collected = await inspect(d, f);
+  assert.equal(collected.status, 'accepted');
+  assert.equal(collected.claims[0].support, 'reviewed_supported');
+});
+
+test('an accepted acknowledgment is hidden when its local reviewer reservation disappears', async t => {
+  const f = await missionFixture(t);
+  const d = new Dispatcher({c:f.c, worker:f.w});
+  await f.accept();
+  assert.equal((await inspect(d, f)).review.state, 'acknowledged');
+  f.c.store.db.prepare("DELETE FROM records WHERE kind = 'reviewer'").run();
+  const view = await inspect(d, f);
+  assert.notEqual(view.review.state, 'acknowledged');
+  assert.equal(view.review.decision, null);
+  assert.equal(view.claims[0].support, 'mechanically_linked');
 });
 
 test('public inspection and exports reject paths, extra fields and oversized pages', async t => {
@@ -142,4 +207,25 @@ test('a malformed contradiction section leaves readable sections and the origina
   assert.ok(view.claims[0].text);
   assert.ok(view.artifacts.some(a => a.name === 'claims.json'));
   assert.ok(view.diagnostics.some(diagnostic => diagnostic.code === 'malformed_section'));
+});
+
+test('repeated mission reads leave saved artifact catalog rows and the store revision unchanged', async t => {
+  const f = await missionFixture(t);
+  const d = new Dispatcher({c:f.c, worker:f.w});
+
+  const proposal = await inspect(d, f);
+  assert.ok(proposal.artifacts.some(artifact => artifact.name === 'proposal.json'));
+  const proposalRevision = f.c.store.revision();
+  await inspect(d, f);
+  await d.invoke('research_mission_export', {taskId:f.task.id, format:'markdown'});
+  assert.equal(f.c.store.revision(), proposalRevision, 'registered proposal reads are read-only');
+
+  await f.accept();
+  await f.collect();
+  const collection = await inspect(d, f);
+  assert.ok(collection.artifacts.some(artifact => artifact.name === 'claims.json'));
+  const collectionRevision = f.c.store.revision();
+  await inspect(d, f);
+  await d.invoke('research_mission_export', {taskId:f.task.id, format:'json'});
+  assert.equal(f.c.store.revision(), collectionRevision, 'registered collection reads are read-only');
 });

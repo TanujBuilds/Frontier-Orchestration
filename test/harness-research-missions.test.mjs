@@ -48,7 +48,7 @@ function mission({decision = 'accept', status = 'accepted', findings = [], cover
   };
   const authority = {
     descriptor, decision, findings, coverage:coverage ?? descriptor.units, ticketId:'review-ticket',
-    reportHash:descriptor.reportSha256, sourcesHash:descriptor.sourcesSha256, brief,
+    reportHash:descriptor.reportSha256, sourcesHash:descriptor.sourcesSha256, requestedBrief:{draftId:'draft', ...brief}, acceptanceStage:'collected',
     generatedAt:'2026-11-10T00:00:00.000Z', sourceRevision:'a'.repeat(40),
     diagnostics:[], artifacts:[{id:hash('f'), name:'claims.json'}], history:[],
   };
@@ -77,7 +77,8 @@ test('full exact independent review preserves selections, qualifiers and the ori
   assert.equal(view.schemaVersion, 1);
   assert.equal(view.title, 'Restart behavior');
   assert.equal(view.question, brief.question);
-  assert.equal(view.asOf, brief.asOf);
+  assert.equal(view.asOf, null);
+  assert.equal(view.requestedBrief.asOf, brief.asOf);
   assert.equal(view.review.decision, 'accept');
   assert.deepEqual(view.review.coverage, ['title','claims:C1','claims:C2','summary:0','comparisons:0','recommendations:0','contradictions:0','unanswered:0']);
   assert.equal(view.claims[0].id, 'C1');

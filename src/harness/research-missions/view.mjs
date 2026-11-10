@@ -151,7 +151,7 @@ function projectReport(report, catalog, verifiedCandidate, issue) {
 }
 
 function projectReview(task, authority, unitIds, integrityFailed, issue) {
-  const {descriptor, decision, coverage, findings, ticketId} = authority;
+  const {descriptor, decision, coverage, findings, ticketId, acceptanceStage} = authority;
   const review = {
     state:'unverified', decision:null, ticketId:null, candidateHash:null, rubricSha256:null,
     coverage:[], findings:[], history:authority.history ?? [],
@@ -185,6 +185,10 @@ function projectReview(task, authority, unitIds, integrityFailed, issue) {
   review.candidateHash = descriptor.candidateHash;
   review.rubricSha256 = descriptor.rubricSha256;
   if (decision == null || (decision === 'accept' && (integrityFailed || authority.historical))) return review;
+  if (decision === 'accept' && !['acknowledged','collected'].includes(acceptanceStage)) {
+    issue('invalid_review', 'The positive review has no verified acknowledgment or collection stage.');
+    return review;
+  }
   try {
     verifyReviewVerdict({decision, coverage, findings}, descriptor);
     if (!boundedText(ticketId, 200) || findings.some(finding => !validFinding(finding, descriptor.units))) {
@@ -194,7 +198,8 @@ function projectReview(task, authority, unitIds, integrityFailed, issue) {
     issue('invalid_review', 'The independent verdict lacks valid findings or required unit coverage.');
     return review;
   }
-  return {...review, state:'bound', decision, ticketId, coverage:[...coverage], findings:structuredClone(findings)};
+  const state = decision === 'accept' && acceptanceStage === 'acknowledged' ? 'acknowledged' : 'bound';
+  return {...review, state, decision, ticketId, coverage:[...coverage], findings:structuredClone(findings)};
 }
 
 function validFinding(finding, units) {
@@ -213,11 +218,12 @@ function missionState(task, report, review, integrityFailed, historical) {
   if (review.decision === 'reject') return ['partial', 'review_rejected'];
   if (task.status === 'partial') return ['partial', 'task_partial'];
   if (review.decision === 'revise') return ['revision_needed', 'review_requested_revision'];
-  if (!integrityFailed && task.status === 'accepted' && review.decision === 'accept' && report.complete) {
+  if (!integrityFailed && task.status === 'accepted' && review.state === 'bound' && review.decision === 'accept' && report.complete) {
     return ['accepted', 'full_independent_review'];
   }
   if (task.status === 'accepted') return ['partial', 'acceptance_evidence_incomplete'];
   if (integrityFailed && report.title !== null) return ['partial', 'report_evidence_incomplete'];
+  if (review.state === 'acknowledged') return ['awaiting_review', 'awaiting_finalization'];
   if (task.status === 'awaiting_review' || (report.title !== null && ['pending','bound'].includes(review.state))) {
     return ['awaiting_review', report.title === null ? 'report_unavailable' :
       review.decision === 'accept' ? 'awaiting_finalization' : 'awaiting_independent_review'];
@@ -255,24 +261,22 @@ export function projectMission({task, report, sources, authority = {}}) {
   const projected = projectReport(report, catalog, !!authority.descriptor, issue);
   const integrityFailed = diagnostics.length > 0;
   const review = projectReview(task, authority, projected.unitIds, integrityFailed, issue);
-  const canSupport = !integrityFailed && review.decision === 'accept';
   const [status, reasonCode] = missionState(task, projected, review, integrityFailed, authority.historical);
   const artifacts = (authority.artifacts ?? []).filter(artifact =>
     isHash(artifact?.id) && artifactNames.has(artifact.name)).map(({id, name}) => ({id, name}));
-  const brief = authority.brief;
   return {
     schemaVersion:1, generatedAt:authority.generatedAt ?? null, sourceRevision:authority.sourceRevision ?? null,
     missionId:task.id, goalId:task.goalId, taskId:task.id,
-    question:brief?.question ?? boundedText(task.spec?.objective, 20000), scope:brief?.scope ?? null,
-    outputShape:brief?.outputShape ?? null, asOf:brief?.asOf ?? null,
-    briefReason:brief ? null : 'No prepared brief matches the saved research task.',
+    question:boundedText(task.spec?.objective, 20000),
+    requestedBrief:authority.requestedBrief ?? null, asOf:null,
+    asOfReason:projected.title === null ? 'No canonical report is available.' : 'No as-of date is recorded in the canonical report.',
     status, sourceStatus:task.status, reasonCode, historical:authority.historical === true,
     environment:task.checkpoint?.manifest?.mode ?? null,
     evidenceExplanation:'Linked passages identify saved source text. Reviewed support requires a bound independent review with full coverage.',
     title:projected.title, complete:projected.complete,
     reportHash:isHash(authority.reportHash) ? authority.reportHash : null,
     sourcesHash:isHash(authority.sourcesHash) ? authority.sourcesHash : null,
-    ...withSupport(projected.ledger, review, canSupport),
+    ...withSupport(projected.ledger, review, status === 'accepted'),
     sources:[...catalog.values()].map(source => source.metadata),
     review, artifacts, diagnostics,
   };

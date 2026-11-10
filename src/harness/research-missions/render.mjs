@@ -20,8 +20,8 @@ export function renderMissionMarkdown(view) {
     line('Status', view.status + ' (' + view.reasonCode + ')'),
     ...(view.collectionReason ? [line('Collection reason', view.collectionReason)] : []),
     line('Task', view.taskId),
-    line('Question', view.question), line('Scope', view.scope), line('Requested output', view.outputShape),
-    line('As of', view.asOf), line('Generated', view.generatedAt), line('Source revision', view.sourceRevision),
+    line('Question', view.question), line('Report as of', view.asOf ?? view.asOfReason),
+    line('Generated', view.generatedAt), line('Source revision', view.sourceRevision),
     '', '## Independent review', '',
     line('State', view.review.state), line('Decision', view.review.decision),
     line('Ticket', view.review.ticketId), line('Candidate SHA-256', view.review.candidateHash),
@@ -30,6 +30,13 @@ export function renderMissionMarkdown(view) {
     line('Covered units', view.review.coverage.length ? view.review.coverage.join(', ') : null),
     '', view.evidenceExplanation,
   );
+  const brief = view.requestedBrief;
+  if (brief) {
+    lines.push('', '## Requested brief metadata', '',
+      'The draft is matched by question. The approved source scope comes from the task. Report dates come from saved report evidence.',
+      line('Draft ID', brief.draftId), line('Requested scope', brief.scope),
+      line('Requested output', brief.outputShape), line('Requested as of', brief.asOf));
+  }
   const scope = view.approvedSourceScope;
   if (scope) {
     lines.push('', '## Approved source scope', '', line('Scope SHA-256', scope.sha256));

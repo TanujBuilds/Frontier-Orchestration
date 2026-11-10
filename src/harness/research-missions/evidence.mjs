@@ -4,12 +4,57 @@ import path from 'node:path';
 import {Artifacts} from '../artifacts.mjs';
 import {digest} from '../contracts.mjs';
 import {readResearchAuthority} from '../release-authority.mjs';
-import {verifyAcceptedArtifacts, verifyDescriptor, verifyProposal, verifyReviewVerdict, verifySubmitAck} from '../research-review.mjs';
+import {verifyAcceptedArtifacts, verifyDescriptor, verifyLocalAcceptance, verifyProposal, verifyReviewVerdict, verifySubmitAck} from '../research-review.mjs';
 
 export const isHash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const same = (left, right) => left != null && right != null && digest(left) === digest(right);
 const need = (condition, message) => { if (!condition) throw Error(message); };
+const reportNames = ['report.md', 'claims.json', 'sources.json', 'manifest.json', 'receipt.json'];
+
+async function savedArtifact(c, artifacts, taskId, file, name, optional = false) {
+  let safeFile;
+  try {
+    safeFile = await artifacts.safe(file);
+  } catch (error) {
+    if (optional && error.code === 'ENOENT') return null;
+    throw error;
+  }
+  const id = digest({taskId, file:safeFile});
+  const record = c.store.maybe('artifact', id);
+  if (record) {
+    need(record.id === id && record.taskId === taskId && record.file === safeFile && record.name === name,
+      'Saved artifact identity mismatch');
+  }
+  return {id, file:safeFile, name, record};
+}
+
+async function currentCatalog(c, artifacts, task) {
+  const {proposalFile, checksumsVerified, directory} = task.result;
+  const candidates = [];
+  if (proposalFile) candidates.push(savedArtifact(c, artifacts, task.id, proposalFile, 'proposal.json'));
+  if (checksumsVerified && directory) {
+    for (const name of reportNames) {
+      candidates.push(savedArtifact(c, artifacts, task.id, path.join(directory, name), name, true));
+    }
+  }
+  const saved = (await Promise.all(candidates)).filter(Boolean);
+  if (saved.every(item => item.record)) return saved.map(item => artifacts.public(item.record));
+  const registered = await artifacts.list(task.id, {limit:8});
+  return registered.filter(entry => saved.some(item => item.id === entry.id && item.name === entry.name));
+}
+
+function proposalAcceptance(c, task, descriptor, diagnostics) {
+  if (!task.researchReviewAcceptance) return null;
+  try {
+    const acceptance = verifyLocalAcceptance(task, id => c.store.maybe('reviewer', id));
+    need(same(acceptance.descriptor, descriptor), 'Proposal acknowledgment candidate mismatch');
+    return acceptance;
+  } catch {
+    diagnostics.push({code:'review_unverified', message:'The saved acknowledgment could not be bound to this proposal and reviewer.'});
+    return null;
+  }
+}
 
 export function negativeReviews(c, task) {
   if (task.spec.researchPolicy?.version !== 3 || task.spec.researchPolicy.review?.version !== 1) return [];
@@ -73,12 +118,20 @@ async function loadProposal({c, artifacts, task, historical, negatives, catalog,
   if (historical) {
     // The historical selector has already been matched to a verified local ticket.
     const proposalFile = path.join(c.store.root, 'research-proposals', task.id, expected.candidateHash + '.json');
-    bytes = await readFile(await artifacts.safe(proposalFile));
-    proposalDescriptor(JSON.parse(bytes), task, expected);
-    // Reuse the normal proposal artifact registration for the exact retained file.
-    const archived = new Artifacts({store: c.store, getTask: () => ({result: {proposalFile}})});
-    catalog.push(...await archived.list(task.id));
-    need(catalog[0]?.sha256 === sha(bytes), 'Historical proposal changed while being read');
+    const saved = await savedArtifact(c, artifacts, task.id, proposalFile, 'proposal.json');
+    if (saved.record) {
+      catalog.push(artifacts.public(saved.record));
+      bytes = (await artifacts.read(saved.id)).data;
+    } else {
+      // Validate retained bytes before using normal lazy artifact registration.
+      const original = await readFile(saved.file);
+      proposalDescriptor(JSON.parse(original), task, expected);
+      const archived = new Artifacts({store:c.store, getTask:() => ({result:{proposalFile}})});
+      const [entry] = await archived.list(task.id);
+      need(entry?.id === saved.id && entry.sha256 === sha(original), 'Historical proposal changed while being read');
+      catalog.push(entry);
+      bytes = (await artifacts.read(entry.id)).data;
+    }
   } else {
     const entry = catalog.find(item => item.name === 'proposal.json');
     need(entry, 'Missing proposal artifact');
@@ -101,8 +154,9 @@ async function loadProposal({c, artifacts, task, historical, negatives, catalog,
     diagnostics.push({code: 'proposal_invalid', message: 'The bound proposal failed protocol validation. Displayed sections are partial evidence.'});
   }
   const repair = verified && descriptor.version === 2 ? packet.repair.receipt : null;
+  const acceptance = verified && !historical ? proposalAcceptance(c, task, descriptor, diagnostics) : null;
   return {
-    descriptor, verified, repair,
+    descriptor, verified, repair, acceptance, acceptanceStage:'acknowledged',
     report: parseEvidence(packet.canonical.report, 'malformed_report_json', diagnostics),
     sources: parseEvidence(packet.canonical.sources, 'malformed_sources_json', diagnostics),
     reportHash: descriptor.reportSha256, sourcesHash: descriptor.sourcesSha256
@@ -148,7 +202,7 @@ async function loadCollection({c, artifacts, task, catalog, diagnostics}) {
     diagnostics.push({code: 'unsupported_review', message: 'This research result has no supported independent review policy.'});
   }
   return {
-    descriptor, verified,
+    descriptor, verified, acceptance:verified ? task.researchReviewAcceptance : null, acceptanceStage:'collected',
     repair: verified && descriptor.version === 2 ? receipt.targetedRepair.receipt : null,
     report: report && parseEvidence(report, 'malformed_report_json', diagnostics),
     sources: sources && parseEvidence(sources, 'malformed_sources_json', diagnostics),
@@ -162,7 +216,7 @@ export async function loadMissionEvidence({c, artifacts, task, historical, negat
   const empty = {descriptor: null, report: null, sources: null, reportHash: null, sourcesHash: null, verified: false};
   if (!historical && !task.result?.proposalFile && !task.result?.checksumsVerified) return {...empty, diagnostics, artifacts: catalog};
   try {
-    if (!historical) catalog.push(...await artifacts.list(task.id, {limit: 8}));
+    if (!historical) catalog.push(...await currentCatalog(c, artifacts, task));
     const context = {c, artifacts, task, historical, negatives, catalog, diagnostics};
     const data = historical || task.result.proposalFile ? await loadProposal(context) : await loadCollection(context);
     return {...data, diagnostics, artifacts: catalog};

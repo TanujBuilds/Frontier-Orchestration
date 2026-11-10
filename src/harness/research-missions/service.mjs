@@ -95,8 +95,7 @@ export class ResearchMissions {
     const {descriptor, report, sources, diagnostics, reportHash, sourcesHash} = evidence;
     const bound = evidence.verified && descriptor?.reportSha256 === reportHash && descriptor.sourcesSha256 === sourcesHash;
     const negative = bound && negatives.find(review => review.descriptor.candidateHash === descriptor.candidateHash);
-    const acceptance = bound && !historical && task.status === 'accepted' && task.result?.reviewBinding
-      ? task.researchReviewAcceptance : null;
+    const acceptance = bound && !historical ? evidence.acceptance : null;
     const history = negatives.map(({ticketId, descriptor, decision, findings}) => ({
       ticketId, candidateHash: descriptor.candidateHash, reportHash: descriptor.reportSha256,
       sourcesHash: descriptor.sourcesSha256, decision, affectedUnits: [...new Set(findings.map(f => f.unit))]
@@ -106,10 +105,12 @@ export class ResearchMissions {
       decision: acceptance?.input.decision ?? negative?.decision ?? null,
       coverage: acceptance?.input.coverage ?? negative?.coverage ?? [],
       findings: negative?.findings ?? [], ticketId: acceptance?.ticketId ?? negative?.ticketId ?? null,
-      brief: draft?.brief ?? null, sourceRevision, generatedAt: iso(c.now()), history, historical: !!historical,
+      acceptanceStage: acceptance ? evidence.acceptanceStage : null,
+      requestedBrief: draft ? {draftId:draft.id, ...draft.brief} : null,
+      sourceRevision, generatedAt: iso(c.now()), history, historical: !!historical,
     }});
     return paginate({
-      ...view, missionId: draft?.missionId ?? taskId, goalHash: goal?.hash ?? null, goalVersion: task.goalVersion,
+      ...view, goalHash: goal?.hash ?? null, goalVersion: task.goalVersion,
       sourceRevision, sourceRevisionReason: sourceRevision ? null : 'No repository revision was recorded for this research task.',
       taskHash: task.hash, approvedSourceScope: publicScope(task.spec.scope), historical: !!historical,
       repair: evidence.repair ?? null, collectionReason: evidence.collectionReason ?? null,
