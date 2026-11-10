@@ -152,6 +152,7 @@ test('malformed rows give incomplete coverage while preserving unaffected task a
   assert.ok(report.diagnostics.some(row => row.id === 'bad-task'));
   assert.ok(report.diagnostics.some(row => row.id === 'bad-request'));
   assert.ok(report.diagnostics.some(row => row.source === 'events'));
+  assert.ok(report.events.some(row => row.type === 'task.reviewed' && row.data === null));
   assert.deepEqual(files(root), before);
 });
 
@@ -164,6 +165,20 @@ test('missing and unsafe database selections fail without creating state', async
   symlinkSync(path.join(root, 'target-does-not-exist'), path.join(root, 'harness.sqlite3'));
   assert.throws(() => readOutcomeSnapshot({ stateRoot: root }), /regular file|unsafe/i);
   assert.deepEqual(readdirSync(root), ['harness.sqlite3']);
+});
+
+test('a complete explicit goal scope preserves exact goal planner ownership evidence', async t => {
+  const { readOutcomeSnapshot } = await module();
+  const root = fixture(t);
+  const store = new Store(root);
+  seed(store);
+  const planning = {id: 'goal-a', goalId: 'goal-a', status: 'uncertain', attempt: 1};
+  store.put('planning', planning);
+  store.close();
+  const snapshot = readOutcomeSnapshot({stateRoot: root, goalId: 'goal-a'});
+  assert.deepEqual(snapshot.evidence.find(row => row.kind === 'planning'),
+    {kind: 'planning', id: 'goal-a', data: planning});
+  assert.ok(!readOutcomeSnapshot({stateRoot: root}).evidence.some(row => row.kind === 'planning'));
 });
 
 test('project mismatch excludes goal-owned planning requests from the selected cohort', async t => {
@@ -204,6 +219,22 @@ test('an oversized event cannot disappear from an otherwise complete report', as
   assert.equal(report.coverage.complete, false);
   assert.ok(report.diagnostics.some(row => row.code === 'row_size_limit' && row.source === 'events'));
   assert.equal(report.tasks.length, 4);
+});
+
+test('a capped task history retains its newest authority event', async t => {
+  const { readOutcomeSnapshot } = await module();
+  const root = fixture(t);
+  const store = new Store(root);
+  seed(store);
+  store.db.prepare(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<10000)
+    INSERT INTO events(at,goal_id,task_id,type,data)
+    SELECT ?, 'goal-a', 'task-a', 'fixture.activity', '{}' FROM n`).run(created);
+  const latest = store.event('task.integrated', {goalId: 'goal-a', taskId: 'task-a', at: created, data: {}});
+  store.close();
+  const report = readOutcomeSnapshot({stateRoot: root, goalId: 'goal-a'});
+  assert.equal(report.coverage.complete, false);
+  assert.equal(report.events.length, 10000);
+  assert.equal(report.events.at(-1).seq, latest);
 });
 
 test('schema mismatch and existing transaction produce explicit errors without altering state', async t => {

@@ -245,3 +245,91 @@ test('preserves valid rows when collections, event identities and timestamps are
   'invalid_snapshot_time','malformed_snapshot_row','malformed_snapshot_collection','conflicting_event_rows','invalid_event_timestamp',
  ]));
 });
+
+test('reports saved remote research reservations separately from local usage and preserves per-kind coverage', () => {
+ const research = (id,status,extra={}) => task(id,status,{
+  spec:{kind:'research',actor:'deepseek'},...extra,
+ });
+ const saved = research('research-one','running',{
+  startedAt:1000,checkpoint:{remoteJobId:'remote-one'},
+  remoteSpent:{model:3,search:2,download:0},
+ });
+ const report = summarizeOutcomes(snapshot({
+  tasks:[saved,structuredClone(saved),research('research-two','blocked',{
+   startedAt:1000,checkpoint:{remoteJobId:'remote-two'},
+   remoteSpent:{model:0,search:-1},
+  }),research('research-three','queued')],
+  requests:[{...request('local-model','completed',{prompt_tokens:10,completion_tokens:5}),task_id:'research-one'}],
+ }));
+ assert.equal(report.usage.reservations,1);
+ assert.equal(report.usage.input.knownTokens,10);
+ assert.equal(report.usage.eligibleCompletedRequests,1);
+ const remote = report.usage.remoteResearch;
+ assert.equal(remote.source,'task.remoteSpent');
+ assert.equal(remote.eligibleTasks,3);
+ assert.equal(remote.tokens,null);
+ assert.deepEqual(remote.byKind,{
+  model:{knownReservations:3,knownTasks:2,missingTasks:1,reason:null},
+  search:{knownReservations:2,knownTasks:1,missingTasks:2,reason:null},
+  download:{knownReservations:0,knownTasks:1,missingTasks:2,reason:null},
+ });
+ assert.deepEqual(remote.tasks.map(row=>[row.taskId,row.remoteJobId,row.missingReasons.search]),[
+  ['research-one','remote-one',null],['research-two','remote-two','invalid_counter_value'],
+  ['research-three',null,'counters_not_recorded'],
+ ]);
+ assert.match(renderOutcomeMarkdown(report),/Local ledger.*1 reservation/);
+ assert.match(renderOutcomeMarkdown(report),/remote research.*reservations/i);
+ assert.match(renderOutcomeMarkdown(report),/model 3 across 2 of 3/i);
+});
+
+test('reports unknown remote reservations if no selected research task has saved counts', () => {
+ const report = summarizeOutcomes(snapshot({
+  tasks:[task('research','running',{spec:{kind:'research',actor:'codex'},startedAt:1000,remoteSpent:{model:'0'}})],
+ }));
+ const remote = report.usage.remoteResearch;
+ assert.equal(remote.byKind.model.knownReservations,null);
+ assert.equal(remote.byKind.model.reason,'no_valid_counter_values');
+ assert.equal(remote.byKind.search.knownReservations,null);
+ assert.equal(remote.tasks[0].missingReasons.search,'field_not_recorded');
+ assert.match(renderOutcomeMarkdown(report),/model unknown across 0 of 1/i);
+});
+
+test('labels planning usage eligibility separately from otherwise complete task scope', () => {
+ const omitted = summarizeOutcomes(snapshot({scope:{...scope,goalId:null,planningRequestsIncluded:false}}));
+ assert.equal(omitted.coverage.complete,true);
+ assert.equal(omitted.usage.planning.eligible,false);
+ assert.match(omitted.usage.planning.reason,/whole goal/i);
+ assert.match(renderOutcomeMarkdown(omitted),/planning reservations are outside this report/i);
+ const wholeGoal = summarizeOutcomes(snapshot({scope:{...scope,planningRequestsIncluded:true}}));
+ assert.equal(wholeGoal.usage.planning.eligible,true);
+ assert.match(renderOutcomeMarkdown(wholeGoal),/goal planning reservations are eligible/i);
+});
+
+test('marks interrupted ownership on unresolved task and planner reservations', () => {
+ const report = summarizeOutcomes(snapshot({
+  scope:{...scope,planningRequestsIncluded:true},
+  tasks:[task('task','uncertain',{startedAt:1000}),task('active','running',{startedAt:1000})],
+  requests:[
+   request('unknown-request-id','reserved'),
+   request('identified','reserved'),
+   request('already-saved','completed',{prompt_tokens:1,completion_tokens:2}),
+   {...request('ordinary-pending','reserved'),task_id:'active'},
+   {...request('planner-pending','reserved'),task_id:'goal',key:'plan-2'},
+  ],
+  events:[
+   event(20,'task.uncertain',{data:{requestId:null}}),
+   event(21,'task.interrupted',{data:{requestId:'identified'}}),
+  ],
+  evidence:[{kind:'planning',id:'goal',data:{id:'goal',goalId:'goal',status:'uncertain',attempt:2}}],
+ }));
+ assert.equal(report.usage.requestStates.reserved,4);
+ assert.equal(report.usage.uncertainRequests,3);
+ assert.equal(report.usage.observedStarts,0);
+ assert.deepEqual(report.usage.requests.map(row=>[row.id,row.uncertain,row.uncertaintyEventIds,row.uncertaintyOwner]),[
+  ['unknown-request-id',true,[],{kind:'task',id:'task',status:'uncertain'}],
+  ['identified',true,[21],{kind:'task',id:'task',status:'uncertain'}],
+  ['already-saved',false,[],null],
+  ['ordinary-pending',false,[],null],
+  ['planner-pending',true,[],{kind:'planning',id:'goal',status:'uncertain',attempt:2}],
+ ]);
+});

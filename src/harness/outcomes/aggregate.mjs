@@ -76,9 +76,13 @@ function tokenTotals(eligible,field){
  return {knownRequests:known.length,eligibleRequests:eligible.length,knownTokens:exact?sum:null,missingRequests:eligible.length-known.length,reason};
 }
 
-function summarizeUsage(requests,events,diagnostics){
+function summarizeUsage({requests,events,tasks,evidence,diagnostics}){
  const starts = groupBy(events.filter(e=>e.type==='model.request.started'),e=>e.data?.requestId);
- const held = groupBy(events.filter(e=>e.type==='task.uncertain'),e=>e.data?.requestId);
+ const held = groupBy(events.filter(e=>['task.uncertain','task.interrupted'].includes(e.type)),e=>e.data?.requestId);
+ const heldTasks = new Map(tasks.filter(task=>task.status==='uncertain').map(task=>[task.id,task]));
+ const heldPlanners = new Map(evidence.filter(row=>row.kind==='planning'&&
+  row.data?.status==='uncertain'&&row.id===row.data.id&&row.id===row.data.goalId&&
+  nonnegative(row.data.attempt)&&row.data.attempt>0).map(row=>[row.id,row.data]));
  const planningHolds = groupBy(events.filter(e=>e.type==='planning.uncertain'&&e.task_id===null),e=>e.goal_id);
  const rows = [];
  const requestStates = {reserved:0,completed:0,failed:0,unknown:0};
@@ -99,12 +103,16 @@ function summarizeUsage(requests,events,diagnostics){
   requestStates[status]++;
   const started = (starts.get(id)??[]).filter(e=>e.task_id===row.task_id);
   const uncertainty = (held.get(id)??[]).filter(e=>e.task_id===row.task_id);
+  const task = status==='reserved'?heldTasks.get(row.task_id):null;
+  const planner = status==='reserved'&&row.kind==='model'?heldPlanners.get(row.task_id):null;
+  const uncertaintyOwner = task?{kind:'task',id:task.id,status:task.status}
+   :planner&&row.key==='plan-'+planner.attempt?{kind:'planning',id:planner.id,status:planner.status,attempt:planner.attempt}:null;
   if(row.kind==='model'&&status==='reserved'){
    uncertainty.push(...(planningHolds.get(row.task_id)??[]).filter(e=>
     nonnegative(e.data?.attempt)&&row.key==='plan-'+e.data.attempt));
   }
   const outcome = !conflict&&['not_dispatched','unknown','completed'].includes(row.data?.requestOutcome)?row.data.requestOutcome:null;
-  const uncertain = status==='unknown'||status==='failed'&&(outcome==='unknown'||outcome===null)||status==='reserved'&&uncertainty.length>0;
+  const uncertain = status==='unknown'||status==='failed'&&(outcome==='unknown'||outcome===null)||status==='reserved'&&(uncertainty.length>0||uncertaintyOwner!==null);
   const eligible = status==='completed'&&row.kind==='model';
   const raw = eligible?row.data?.result?.usage??null:null;
   const missing = eligible
@@ -116,7 +124,7 @@ function summarizeUsage(requests,events,diagnostics){
    id,ownerId:conflict?null:row.task_id,kind:conflict?null:row.kind,status,
    providerOutcome:outcome,uncertain,
    observedStart:started.length>0,
-   startEventIds:started.map(e=>e.seq),uncertaintyEventIds:uncertainty.map(e=>e.seq),
+   startEventIds:started.map(e=>e.seq),uncertaintyEventIds:uncertainty.map(e=>e.seq),uncertaintyOwner,
    reservedAt:!conflict&&nonnegative(row.data?.reservedAt)?row.data.reservedAt:null,
    savedAt:!conflict&&nonnegative(row.data?.savedAt)?row.data.savedAt:null,
    model:eligible&&typeof row.data?.result?.model==='string'?row.data.result.model.slice(0,200):null,
@@ -137,6 +145,48 @@ function summarizeUsage(requests,events,diagnostics){
   definition:'One ledger row per request ID represents a spent reservation, even without dispatch. Starts are observed model invocation events. Uncertainty overlaps ledger states. Token coverage uses completed model requests. Totals sum only valid recorded fields from saved results.',
   requests:rows,
  };
+}
+
+const researchCounterKinds = ['model','search','download'];
+function summarizeRemoteResearch(tasks){
+ const research = tasks.filter(task=>task.spec?.kind==='research');
+ const rows = research.map(task=>{
+  const counters = task.remoteSpent;
+  const commonReason = counters==null?'counters_not_recorded':!isObject(counters)?'invalid_counter_object':null;
+  const fields = researchCounterKinds.map(kind=>{
+   const reason = commonReason??(!Object.hasOwn(counters,kind)?'field_not_recorded':!nonnegative(counters[kind])?'invalid_counter_value':null);
+   return {kind,reason,known:reason?null:counters[kind]};
+  });
+  const remoteJobId = task.checkpoint?.remoteJobId??task.result?.remoteJobId;
+  return {
+   taskId:task.id,goalId:task.goalId,
+   remoteJobId:typeof remoteJobId==='string'?remoteJobId.slice(0,200):null,
+   counts:Object.fromEntries(fields.map(({kind,known})=>[kind,known])),
+   missingReasons:Object.fromEntries(fields.map(({kind,reason})=>[kind,reason])),
+  };
+ });
+ const byKind = Object.fromEntries(researchCounterKinds.map(kind=>{
+  const observed = rows.map(row=>row.counts[kind]).filter(value=>value!==null);
+  const sum = observed.reduce((total,n)=>total+n,0);
+  const exact = observed.length>0&&Number.isSafeInteger(sum);
+  const reason = exact?null:!rows.length?'no_selected_research_tasks':!observed.length?'no_valid_counter_values':'sum_exceeds_exact_integer_range';
+  return [kind,{knownReservations:exact?sum:null,knownTasks:observed.length,missingTasks:rows.length-observed.length,reason}];
+ }));
+ return {
+  source:'task.remoteSpent',eligibleTasks:rows.length,byKind,tasks:rows,
+  tokens:null,tokenReason:'Remote research counters record reservations. Remote token telemetry is unavailable in this report.',
+  definition:'Last saved cumulative research backend counters for selected research tasks, including zero when recorded. The denominator is all selected research tasks. Totals sum only observed values for each kind, separately from local ledger totals.',
+ };
+}
+
+function planningCoverage(scope){
+ const eligible = typeof scope?.planningRequestsIncluded==='boolean'?scope.planningRequestsIncluded:null;
+ const reason = eligible===true
+  ?'Goal planning reservations are eligible in this whole goal scope. Report coverage applies to the included rows.'
+  :eligible===false
+   ?'Planning reservations are outside this report. They are eligible for a complete, unpaged whole goal with no time window.'
+   :'Planning reservation coverage is unknown for this snapshot.';
+ return {eligible,reason};
 }
 
 const reviewDecisions = new Map([
@@ -288,7 +338,7 @@ export function summarizeOutcomes(snapshot){
  const knownAttempts = classified.map(row=>row.attemptCount).filter(nonnegative);
  const failureReasons = new Map([
   ['attempt.protocol_failed','protocol_failure'],['checks.failed','check_failure'],['task.provider_wait','provider_reconnect_wait'],
-  ['task.uncertain','task_ownership_or_request_uncertain'],['task.blocked','task_blocked'],['task.failed','task_failed'],
+  ['task.uncertain','task_ownership_or_request_uncertain'],['task.interrupted','task_ownership_interrupted'],['task.blocked','task_blocked'],['task.failed','task_failed'],
   ['task.expired','task_deadline_reached'],['planning.blocked','planning_blocked'],['planning.uncertain','planning_request_uncertain'],
   ['planning.provider_wait','planning_provider_reconnect_wait'],['legacy_review.failed','legacy_review_failure'],
  ]);
@@ -297,7 +347,10 @@ export function summarizeOutcomes(snapshot){
   eventId:e.seq,taskId:e.task_id,goalId:e.goal_id,type:e.type,
   reason:e.type==='task.blocked'&&e.data?.category==='no_progress'?'no_progress':failureReasons.get(e.type),
  }));
- const usage = summarizeUsage(requests,events,diagnostics);
+ const usage = {
+  ...summarizeUsage({requests,events,tasks,evidence,diagnostics}),
+  planning:planningCoverage(scope),remoteResearch:summarizeRemoteResearch(tasks),
+ };
  const storedDiagnostics = Array.isArray(snapshot.diagnostics)?snapshot.diagnostics.length:0;
  const diagnosticCount = Math.max(storedDiagnostics,snapshot.coverage?.diagnosticCount??0)+diagnostics.length-storedDiagnostics;
  const coverage = {...snapshot.coverage,complete:snapshot.coverage?.complete===true&&diagnosticCount===0,diagnosticCount};

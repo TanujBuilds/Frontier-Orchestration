@@ -21,7 +21,7 @@ export function renderOutcomeMarkdown(report){
  lines.push(
   '',
   coverage?.complete===true
-   ?'Complete selected scope.'
+   ?'Complete selected task scope.'
    :'**Partial coverage.** Totals describe only the records included in this report.',
   '',
   '## Outcomes','',
@@ -34,12 +34,21 @@ export function renderOutcomeMarkdown(report){
   counts.acceptanceRate.definition,
   '',
   '## Recorded usage','',
-  `${usage.reservations} ledger reservations · ${usage.observedStarts} observed model starts · ${tally(usage.requestStates)}`,
+  `Local ledger — ${usage.reservations} reservations · ${usage.observedStarts} observed model starts · ${tally(usage.requestStates)}`,
+  usage.planning.reason,
   `${usage.uncertainRequests} with uncertain outcomes · ${usage.certifiedNonDispatch} certified as undispatched`,
   `Input — ${coverageLine(usage.input)}`,
   `Output — ${coverageLine(usage.output)}`,
   `Both token fields recorded for ${usage.knownUsageRequests} of ${usage.eligibleCompletedRequests} completed provider requests.`,
   `Native host tokens — ${cell(usage.nativeHost.reason)}.`,
+ );
+ const remote = usage.remoteResearch;
+ if(remote.eligibleTasks){
+  const counters = Object.entries(remote.byKind).map(([kind,row])=>
+   `${words(kind)} ${row.knownReservations??'unknown'} across ${row.knownTasks} of ${remote.eligibleTasks} selected research tasks`);
+  lines.push('',`Last saved remote research reservations — ${counters.join(', ')}.`,remote.tokenReason);
+ }
+ lines.push(
   '',
   '## Retries, interactions and timing','',
   `Worker attempt counts are available for ${retries.tasksWithKnownAttemptCount} of ${retries.eligibleTasks} tasks. Recorded attempts ${retries.knownWorkerAttempts??'unknown'}, retries beyond the first ${retries.knownWorkerRetries??'unknown'}.`,

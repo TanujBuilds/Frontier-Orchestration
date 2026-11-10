@@ -79,6 +79,50 @@ test('CLI report reads a closed fixture and the Dispatcher agrees over its live 
   assert.equal(continuation.coverage.nextCursor, null);
 });
 
+test('a later unreadable integration event prevents acceptance by an older receipt', async t => {
+  const {stateRoot, goalId} = await createOutcomeDemo(temp(t));
+  const c = new Coordinator({root: stateRoot});
+  try {
+    const integrated = c.store.all('task').find(task => task.status === 'accepted');
+    c.store.db.prepare("INSERT INTO events(at,goal_id,task_id,type,data) VALUES(?,?,?,'task.integrated',?)")
+      .run(Date.now(), goalId, integrated.id, '{');
+  } finally {
+    c.close();
+  }
+  const report = JSON.parse(run('report', '--state-root', stateRoot, '--goal', goalId));
+  assert.equal(report.coverage.complete, false);
+  assert.equal(report.counts.acceptedCoding, 0);
+  const unverified = report.tasks.find(task => task.sourceStatus === 'accepted');
+  assert.equal(unverified.usefulAccepted, null);
+  assert.equal(unverified.reason, 'integration_event_missing_or_mismatched');
+});
+
+test('an interrupted live fixture reports uncertainty for a reservation with no saved request link', async t => {
+  const c = new Coordinator({root: temp(t)});
+  t.after(() => c.close());
+  const goal = c.prepareGoal({
+    submissionId: 'interrupt-goal', objective: 'Observe interruption', acceptance: ['Track the reservation'],
+    mode: 'collaborative', environment: 'fixture',
+  }, 'prepare');
+  c.activateGoal({goalId: goal.id, hash: goal.hash}, 'activate');
+  const task = c.submitTask({
+    goalId: goal.id, submissionId: 'interrupted', kind: 'consult',
+    objective: 'Answer a fixture question', acceptance: ['Give a short answer'],
+  }, 'submit');
+  assert.equal(c.claimNext('worker').id, task.id);
+  const request = c.reserve(task.id, {key: 'consult-1', kind: 'model'}, 'worker');
+  c.interruptWorker();
+  assert.equal(c.getTask(task.id).status, 'uncertain');
+  const interrupted = c.store.events().find(event => event.type === 'task.uncertain');
+  assert.equal(interrupted.data.requestId, null);
+
+  const report = await new Dispatcher({c}).invoke('outcomes_report', {goalId: goal.id});
+  const row = report.usage.requests.find(row => row.id === request.id);
+  assert.equal(row.status, 'reserved');
+  assert.equal(row.uncertain, true);
+  assert.equal(row.observedStart, false);
+});
+
 for (const beta of [false, true]) {
   test(`Dispatcher exposes a read-only outcomes report in ${beta ? 'beta' : 'core'}`, async t => {
     const root = temp(t);

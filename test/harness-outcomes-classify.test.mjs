@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {spawnSync} from 'node:child_process';
 import {digest, normalizeGoal, normalizeTask} from '../src/harness/contracts.mjs';
 import {deriveBehavioralEvidence} from '../src/harness/behavioral-validation.mjs';
 import {fixture as reviewedResearchFixture, policy as researchPolicy} from '../test-support/research-review-binding.mjs';
@@ -60,6 +61,15 @@ function coding({mode = 'collaborative', mapped = false, native = false, overnig
   ];
   return {task, goal, events, requests: [], evidence: []};
 }
+
+test('classification imports as a standalone pure module', () => {
+  const moduleUrl = new URL('../src/harness/outcomes/classify.mjs', import.meta.url);
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e',
+    `import {classifyTaskOutcome} from ${JSON.stringify(moduleUrl.href)};
+     if (typeof classifyTaskOutcome !== 'function') process.exit(1);`,
+  ], {encoding: 'utf8'});
+  assert.equal(result.status, 0, result.stderr);
+});
 
 test('operator integration requires its exact checked and reviewed candidate receipt', () => {
   const raw = coding({mapped: true});
@@ -272,4 +282,85 @@ test('targeted completion also binds the prior completed revise reviewer', async
   assert.equal(classifyTaskOutcome(raw).usefulAccepted, true);
   raw.evidence.pop();
   assert.equal(classifyTaskOutcome(raw).usefulAccepted, null);
+});
+
+test('persisted release authority rejects invalid research approval, deadline, control and reviewer timing', async t => {
+  const f = await reviewedResearchFixture(t, {environment: 'fixture'});
+  await f.accept();
+  await f.collect();
+  const raw = {
+    task: f.c.store.get('task', f.task.id), goal: f.c.store.get('goal', f.g.id),
+    events: f.c.store.events(0, 100), requests: [],
+    evidence: f.c.store.all('reviewer').map(data => ({kind: 'reviewer', id: data.id, data})),
+  };
+  assert.equal(classifyTaskOutcome(raw).usefulAccepted, true);
+
+  for (const [label, corrupt] of Object.entries({
+    unapproved: input => { input.goal.status = 'draft'; },
+    invalidGoalDeadline: input => { input.goal.deadline++; },
+    createdBeforeApproval: input => { input.task.createdAt = input.goal.activatedAt - 1; },
+    extendedTaskDeadline: input => {
+      input.task.deadline++;
+      input.task.checkpoint.manifest.not_after = Math.floor(input.task.deadline / 1000);
+    },
+    missingOwnerClearance: input => { delete input.task.owner; },
+    localPause: input => { input.task.pauseRequested = true; },
+    localStop: input => { input.task.stopRequested = true; },
+    localYield: input => { input.task.yieldRequested = true; },
+    remotePause: input => { input.task.checkpoint.remotePaused = true; },
+    invalidExecutionActor: input => { input.task.executionActor = 'codex'; },
+    unknownEnvironment: input => {
+      input.goal.manifest.environment = input.task.checkpoint.manifest.mode = 'unknown';
+      input.goal.hash = digest(input.goal.manifest);
+    },
+    reviewerBeforeStart: input => { input.evidence[0].data.at = input.task.startedAt - 1; },
+    reviewerAfterIntent: input => { input.evidence[0].data.at = input.task.researchReviewAcceptance.intentAt + 1; },
+  })) {
+    const broken = structuredClone(raw);
+    corrupt(broken);
+    assert.equal(classifyTaskOutcome(broken).usefulAccepted, null, label);
+  }
+});
+
+test('revised research approval must retain the predecessor deadline', async t => {
+  const f = await reviewedResearchFixture(t, {environment: 'fixture'});
+  await f.accept();
+  await f.collect();
+  const goal = f.c.store.get('goal', f.g.id);
+  const task = f.c.store.get('task', f.task.id);
+  const history = {...structuredClone(goal), id: goal.id + '-1', goalId: goal.id};
+  goal.version = task.goalVersion = 2;
+  goal.manifest.limits.hours = 24;
+  goal.hash = digest(goal.manifest);
+  const raw = {task, goal, events: f.c.store.events(0, 100), requests: [],
+    evidence: [{kind: 'goal_history', id: history.id, data: history},
+      ...f.c.store.all('reviewer').map(data => ({kind: 'reviewer', id: data.id, data}))]};
+  assert.equal(classifyTaskOutcome(raw).usefulAccepted, true);
+  raw.evidence.shift();
+  assert.equal(classifyTaskOutcome(raw).usefulAccepted, null);
+});
+
+test('malformed newer coding candidate and review events fence older valid evidence', () => {
+  for (const type of ['task.integrated', 'task.result', 'task.reviewed']) {
+    const raw = coding();
+    raw.events.push(event(type, 5, null));
+    assert.equal(classifyTaskOutcome(raw).usefulAccepted, null, type);
+  }
+});
+
+test('malformed newer research completion and review events fence older valid evidence', async t => {
+  const f = await reviewedResearchFixture(t, {environment: 'fixture'});
+  await f.accept();
+  await f.collect();
+  const events = f.c.store.events(0, 100);
+  const raw = {
+    task: f.c.store.get('task', f.task.id), goal: f.c.store.get('goal', f.g.id),
+    events, requests: [],
+    evidence: f.c.store.all('reviewer').map(data => ({kind: 'reviewer', id: data.id, data})),
+  };
+  const seq = events.at(-1).seq + 1;
+  for (const type of ['task.result', 'research.review_submitted']) {
+    const malformed = event(type, seq, null, raw.task.id, raw.goal.id);
+    assert.equal(classifyTaskOutcome({...raw, events: [...events, malformed]}).usefulAccepted, null, type);
+  }
 });

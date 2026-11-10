@@ -1,5 +1,6 @@
-import {deriveBehavioralEvidence} from '../behavioral-validation.mjs';
+// Initialize the contracts module before its circular behavioral dependency.
 import {digest, normalizeResearchPolicy} from '../contracts.mjs';
+import {deriveBehavioralEvidence} from '../behavioral-validation.mjs';
 import {isOvernightV2} from '../overnight.mjs';
 import {verifyLocalAcceptance, verifyReviewVerdict, verifySubmitAck} from '../research-review.mjs';
 
@@ -17,19 +18,25 @@ const modePolicies = new Map([
   ['overnight_review@1', 'legacy'], ['overnight_review@2', 'legacy'],
 ]);
 const versions = new Map([['coding', [1]], ['research', [1, 2, 3, 4, 5, 6]], ['consult', [1]], ['learning', [1]]]);
+const approvedStatuses = new Set(['active', 'paused', 'stopped', 'completed', 'partial']);
+const researchTicketId = /^[a-zA-Z0-9_-]{1,100}$/;
 const hashPattern = /^[a-f0-9]{64}$/;
 const commitPattern = /^[a-f0-9]{40}$/;
 const nonnegative = value => Number.isSafeInteger(value) && value >= 0;
+const positiveTime = value => nonnegative(value) && value > 0;
 const same = (a, b) => a !== undefined && b !== undefined && digest(a) === digest(b);
 const ref = entry => ({kind: 'event', id: entry.seq, type: entry.type});
 
-function approvedGoal(task, goal, evidence) {
-  if (task.goalId !== goal?.id || !Number.isSafeInteger(task.goalVersion) ||
-      task.goalVersion < 1 || task.goalVersion > goal.version) return null;
-  if (task.goalVersion === goal.version) return goal;
-  const id = `${goal.id}-${task.goalVersion}`;
+function historicalGoal(evidence, goalId, version) {
+  const id = `${goalId}-${version}`;
   const saved = evidence.find(row => row.kind === 'goal_history' && row.id === id)?.data;
-  return saved?.id === id && saved.goalId === goal.id && saved.version === task.goalVersion ? saved : null;
+  return saved?.id === id && saved.goalId === goalId && saved.version === version ? saved : null;
+}
+
+function approvedGoal(task, goal, evidence) {
+  if (!goal || task.goalId !== goal.id || !Number.isSafeInteger(task.goalVersion) ||
+      !Number.isSafeInteger(goal.version) || task.goalVersion < 1 || task.goalVersion > goal.version) return null;
+  return task.goalVersion === goal.version ? goal : historicalGoal(evidence, goal.id, task.goalVersion);
 }
 
 function passingChecks(receipts, project, required, allowed = project.checks.map(check => check.id)) {
@@ -93,13 +100,14 @@ function codingAcceptance(task, goal, events) {
   if (directNative) return {reason: 'direct_native_checks_committed', evidenceRefs};
 
   const nativeCandidate = task.native?.layout === 'candidate_v1';
-  const candidateEvent = events.findLast(event => event.seq < integrationEvent.seq &&
+  const candidateEvent = events.findLast(event =>
     event.type === (nativeCandidate ? 'task.native_finished' : 'task.result'));
   const candidateChecks = task.result?.checks;
   // This event identifies the completed candidate. For a historical rebind,
   // the original candidate's check list may differ from integration's new check
   // list. The mapped integration receipt below binds the re-run to the candidate.
-  if (!candidateEvent || !Array.isArray(candidateChecks) || !candidateChecks.length ||
+  if (!candidateEvent || candidateEvent.seq >= integrationEvent.seq ||
+      !Array.isArray(candidateChecks) || !candidateChecks.length ||
       !candidateChecks.every(check => check?.passed === true && check.code === 0 && !check.stopped) ||
       (nativeCandidate
         ? task.native.writerActive || task.native.status !== 'integrated' ||
@@ -121,9 +129,9 @@ function codingAcceptance(task, goal, events) {
 
   if (mode.review !== 'checks') {
     const reviewType = mode.review === 'legacy' ? 'task.legacy_reviewed' : 'task.reviewed';
-    const review = events.findLast(event => event.seq > candidateEvent.seq && event.seq < integrationEvent.seq &&
-      event.type === reviewType);
-    if (review?.data?.decision !== 'accept' || (mode.review === 'legacy' && task.legacyDecision?.decision !== 'accept')) {
+    const review = events.findLast(event => event.type === reviewType);
+    if (review?.data?.decision !== 'accept' || review.seq <= candidateEvent.seq || review.seq >= integrationEvent.seq ||
+        (mode.review === 'legacy' && task.legacyDecision?.decision !== 'accept')) {
       return {reason: 'candidate_review_missing_or_not_accepted'};
     }
     if (mode.review === 'legacy' && project.behavioralChecks) {
@@ -136,6 +144,32 @@ function codingAcceptance(task, goal, events) {
     evidenceRefs.push(ref(review));
   }
   return {reason: 'checked_candidate_integrated', evidenceRefs};
+}
+
+// Match the persisted part of release-authority.mjs. The report relies on the
+// coordinator's recorded artifact verification and has no filesystem authority.
+function researchDeadlineMatches(task, goal, evidence) {
+  const {activatedAt, deadline} = goal;
+  const hours = goal.manifest.limits?.hours;
+  const seconds = task.spec.limits?.seconds;
+  if (!approvedStatuses.has(goal.status) || !positiveTime(activatedAt) || !positiveTime(deadline) ||
+      deadline <= activatedAt || !positiveTime(hours) || !positiveTime(seconds)) return false;
+
+  let approvedDeadline = activatedAt + hours * 3_600_000;
+  if (goal.version > 1) {
+    const previous = historicalGoal(evidence, task.goalId, goal.version - 1);
+    if (previous?.activatedAt !== activatedAt || !positiveTime(previous.deadline) ||
+        previous.deadline <= activatedAt) return false;
+    approvedDeadline = Math.min(previous.deadline, approvedDeadline);
+  }
+  return deadline === approvedDeadline && positiveTime(task.createdAt) && task.createdAt >= activatedAt &&
+    positiveTime(task.startedAt) && task.startedAt >= task.createdAt && positiveTime(task.deadline) &&
+    task.deadline === Math.min(deadline, task.startedAt + seconds * 1000);
+}
+
+function timelyResearchReviewer(reviewer, task, intent) {
+  return positiveTime(reviewer?.at) && positiveTime(intent?.intentAt) &&
+    reviewer.at >= task.startedAt && reviewer.at <= intent.intentAt;
 }
 
 function targetedReview(task, events, evidence, accepted, submitted) {
@@ -158,8 +192,8 @@ function targetedReview(task, events, evidence, accepted, submitted) {
   const previousReviewer = evidence.find(row => row.kind === 'reviewer' && row.id === prior.nativeReservationId)?.data;
   if (previousReviewer?.id !== prior.nativeReservationId || previousReviewer.taskId !== task.id ||
       previousReviewer.goalId !== task.goalId || previousReviewer.status !== 'completed' ||
-      !nonnegative(previousReviewer.at) || previousReviewer.at < task.startedAt || previousReviewer.at > intent.intentAt ||
-      !nonnegative(intent.intentAt) || !nonnegative(intent.acknowledgedAt) || intent.acknowledgedAt < intent.intentAt ||
+      !timelyResearchReviewer(previousReviewer, task, intent) ||
+      !positiveTime(intent.acknowledgedAt) || intent.acknowledgedAt < intent.intentAt ||
       intent.acknowledgedAt > accepted.intentAt ||
       !same(previousReviewer.result, {ticketId: prior.id, decision: 'revise', candidateHash: baseHash,
         submissionHash: intent.inputHash})) return null;
@@ -176,9 +210,18 @@ function researchAcceptance(task, goal, events, evidence, version) {
   }
   if (!same(policy, goal.manifest.researchPolicy) || !same(policy, normalizeResearchPolicy(policy)) ||
       version !== (policy.correctionStrategy === 'targeted_v1' ? 6 : policy.repairContextVersion === 1 ? 5 : 4) ||
-      task.spec.actor !== 'deepseek' || task.checkpoint?.manifest?.mode !== goal.manifest.environment ||
-      task.checkpoint?.manifest?.not_after !== Math.floor(task.deadline / 1000)) {
+      task.spec.actor !== 'deepseek' || !goal.manifest.mode.actors?.includes('codex')) {
     return {reason: 'research_policy_or_approval_mismatch'};
+  }
+  if (!researchDeadlineMatches(task, goal, evidence)) return {reason: 'research_approval_deadline_mismatch'};
+  const environment = goal.manifest.environment;
+  if (!['live', 'fixture'].includes(environment) || task.checkpoint?.manifest?.mode !== environment ||
+      task.checkpoint.manifest.not_after !== Math.floor(task.deadline / 1000)) {
+    return {reason: 'research_environment_or_remote_deadline_mismatch'};
+  }
+  if (task.owner !== null || task.pauseRequested || task.stopRequested || task.yieldRequested ||
+      task.checkpoint.remotePaused || task.executionActor && task.executionActor !== 'deepseek') {
+    return {reason: 'research_acceptance_ownership_or_control_unverified'};
   }
   const {result} = task;
   if (result?.receiptStatus !== 'completed' || result.checksumsVerified !== true ||
@@ -186,7 +229,11 @@ function researchAcceptance(task, goal, events, evidence, version) {
     return {reason: 'research_verified_completion_missing'};
   }
   const accepted = task.researchReviewAcceptance;
-  const reviewer = evidence.find(row => row.kind === 'reviewer' && row.id === accepted?.nativeReservationId)?.data;
+  if (typeof accepted?.ticketId !== 'string' || !researchTicketId.test(accepted.ticketId)) {
+    return {reason: 'research_local_review_binding_invalid'};
+  }
+  const reviewer = evidence.find(row => row.kind === 'reviewer' && row.id === accepted.nativeReservationId)?.data;
+  if (!timelyResearchReviewer(reviewer, task, accepted)) return {reason: 'research_reviewer_timing_unverified'};
   try {
     verifyLocalAcceptance(task, id => reviewer?.id === id ? reviewer : null);
   } catch {
@@ -197,9 +244,10 @@ function researchAcceptance(task, goal, events, evidence, version) {
     return {reason: 'research_candidate_binding_mismatch'};
   }
   const completion = events.findLast(event => event.type === 'task.result');
-  const submitted = events.findLast(event => event.type === 'research.review_submitted' && event.seq < completion?.seq);
+  const submitted = events.findLast(event => event.type === 'research.review_submitted');
   if (completion?.data?.status !== 'accepted' || !same(completion.data.result, result) ||
-      submitted?.data?.decision !== 'accept' || submitted.data.ticketId !== accepted.ticketId ||
+      submitted?.data?.decision !== 'accept' || submitted.seq >= completion.seq ||
+      submitted.data.ticketId !== accepted.ticketId ||
       submitted.data.candidateHash !== descriptor.candidateHash) return {reason: 'research_completion_event_unverified'};
   const priorReview = descriptor.version === 2 ? targetedReview(task, events, evidence, accepted, submitted) : [];
   if (!priorReview) return {reason: 'research_targeted_prior_review_unverified'};

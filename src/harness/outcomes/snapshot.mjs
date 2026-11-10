@@ -177,6 +177,7 @@ function readSnapshot(db, { scope, start, end, cursorScope, after }) {
     }
     return evidenceKeys.get(key);
   };
+  if (includePlanning) addEvidence('planning', scope.goalId);
   const commits = new Set(goals.map(goal => goal.manifest?.project?.baseCommit));
   for (const task of tasks) {
     if (bytes > SNAPSHOT_BYTES) break;
@@ -197,8 +198,10 @@ function readSnapshot(db, { scope, start, end, cursorScope, after }) {
     }
   }
 
+  // Read the newest evidence first so a capped history cannot expose a stale
+  // receipt while omitting a newer transition of the same task.
   const taskEvents = db.prepare(`SELECT seq,at,goal_id,task_id,type,${boundedData} FROM events
-    WHERE task_id=? AND type!='model.output' ORDER BY seq LIMIT ?`);
+    WHERE task_id=? AND type!='model.output' ORDER BY seq DESC LIMIT ?`);
   const requestRows = db.prepare(`SELECT id,task_id,key,kind,status,${boundedData} FROM requests
     WHERE task_id=? ORDER BY key LIMIT ?`);
   let eventCount = 0, requestCount = 0;
@@ -210,7 +213,8 @@ function readSnapshot(db, { scope, start, end, cursorScope, after }) {
     }
     const { bytes: _bytes, ...event } = row;
     const data = decode(row, 'events', row.seq);
-    if (data) events.push({ ...event, data });
+    // An unreadable latest receipt supersedes older evidence of the same kind.
+    events.push({ ...event, data });
     return true;
   };
   const addRequests = id => {

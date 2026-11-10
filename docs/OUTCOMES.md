@@ -49,7 +49,10 @@ can require a narrower filter.
   Input and output coverage are separate. A genuine zero is recorded usage,
   while absent or invalid fields are unknown. Goal-owned planning requests are
   included only for an explicitly selected, unwindowed goal that fits on the
-  first page. Provider detail fields can overlap
+  first page. An unresolved reservation can be held under uncertain task or
+  planner ownership even when no event links the exact request ID. Remote
+  research reservation counters are shown separately when saved, with their
+  own coverage. Provider detail fields can overlap
   totals. Native host token totals are unknown where Mosaic lacks telemetry.
 - Elapsed intervals come from saved clocks and lifecycle evidence, with open
   intervals measured as of the snapshot where known. Per-task intervals can
