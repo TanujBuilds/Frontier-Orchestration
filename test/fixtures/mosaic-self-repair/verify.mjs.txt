@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import { answer } from '../src/answer.mjs';
+import { offset } from '../src/offset.mjs';
+
+try {
+  assert.equal(answer + offset, 42, 'Repair assertion: the computed answer must equal 42');
+} catch (error) {
+  process.exitCode = 1;
+  console.error(error.stack);
+  if (process.argv.includes('--noisy')) {
+    console.log('Fixture progress with no failure details\n'.repeat(2500) + 'Saved stdout tail marker');
+    console.error('Routine post-failure cleanup progress\n'.repeat(2500) + 'Saved stderr tail marker');
+  }
+}
