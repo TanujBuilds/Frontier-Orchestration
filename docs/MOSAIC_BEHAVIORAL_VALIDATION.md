@@ -49,11 +49,12 @@ Integration verifies the checked candidate again and runs the applicable
 checks against the combined result. Its saved record carries behavioral
 evidence for the integration snapshot and links to the integration commit.
 A successful candidate run alone cannot certify the combined result. Mosaic
-checks that approved readable files match the bytes recorded in the Git tree.
-It stops if Git clean conversion would change those bytes or an external
-filter is declared on a path it would check before committing. Receipts
-describe the checked workspace and Git tree. Checkout settings elsewhere
-can affect how those bytes are materialized.
+checks that the approved readable files and their Git executable bits
+match the recorded tree. Mapped integrations require Git executable-bit
+tracking before they commit and decline clean conversions that change
+checked bytes. They also decline CRLF checkout settings and applicable
+Git filter, ident, or working-tree encoding attributes. Receipts describe
+the checked workspace and Git tree under those settings.
 
 The mapping's coverage is limited to the behavior the approved checks exercise.
 The existing mode-specific review and acceptance rules still apply.
