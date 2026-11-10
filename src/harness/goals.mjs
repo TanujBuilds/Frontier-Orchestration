@@ -1,14 +1,14 @@
 import {isOvernightV2,overnightCompletionReady} from './overnight.mjs';
 import {assertOvernightPreflight} from './overnight-preflight.mjs';
 import {randomUUID} from 'node:crypto';
-import {normalizeGoal,normalizeTask,digest,text} from './contracts.mjs';
+import {normalizeTask,digest,text} from './contracts.mjs';
 
 function quiescent(c,goalId){return !c.store.get('goal',goalId).integrationOwner&&!c.store.get('goal',goalId).integrationPending&&!c.store.all('task').some(t=>t.goalId===goalId&&(t.owner||t.native?.writerActive||t.executionActor==='codex'&&['paused','stopped'].includes(t.status)||['codex_active','legacy_reviewing'].includes(t.status)))&&!['running','uncertain'].includes(c.store.maybe('planning',goalId)?.status);}
 export class Goals {
  constructor(c){this.c=c;}
  prepareRevision(input,key){return this.c.store.command(key,{op:'goal.revise.prepare',...input},()=>{
   const g=this.c.store.get('goal',input.goalId);if(['completed','partial'].includes(g.status))throw Error('Goal is terminal');if(g.hash!==input.expectedHash)throw Error('Goal approval changed');
-  const manifest=normalizeGoal(input.manifest,this.c.registry);if(manifest.submissionId!==g.manifest.submissionId)throw Error('Goal submission identity cannot change');
+  const manifest=this.c.goalManifest(input.manifest);if(manifest.submissionId!==g.manifest.submissionId)throw Error('Goal submission identity cannot change');
   if(manifest.environment!==g.manifest.environment)throw Error('Execution environment cannot change after approval');
   if(g.integration||this.c.store.all('task').some(t=>t.goalId===g.id&&t.startedAt)){
    if(manifest.project?.repo!==g.manifest.project?.repo||manifest.project?.baseCommit!==g.manifest.project?.baseCommit)throw Error('Started work requires explicit stale-base handling in a new goal');
@@ -17,7 +17,9 @@ export class Goals {
  });}
  activateRevision(input,key){return this.c.store.command(key,{op:'goal.revise.activate',...input},()=>{
   const revision=this.c.store.get('goal_revision',input.revisionId),g=this.c.store.get('goal',revision.goalId);
+  if(['completed','partial'].includes(g.status))throw Error('Goal is terminal');
   if(input.hash!==revision.hash)throw Error('Exact revision approval hash required');if(g.hash!==revision.previousHash||revision.status!=='draft')throw Error('Revision is stale');
+  this.c.verifyGoalBinding(revision);
   if(!quiescent(this.c,g.id))throw Error('Verify quiescent owners before changing an approved version');
   if(this.c.now()>=g.deadline)throw Error('Original deadline exceeded');
   if(isOvernightV2(revision.manifest))assertOvernightPreflight(this.c,{...g,hash:revision.hash,manifest:revision.manifest});
@@ -30,6 +32,7 @@ export class Goals {
   if(t.owner||t.native?.writerActive||g.integrationPending?.taskId===t.id||['codex_active','legacy_reviewing','accepted'].includes(t.status)||(t.status==='partial'&&!(t.native?.layout==='candidate_v1'&&t.goalVersion<g.version)))throw Error('Task must be quiescent and unfinished');
   if(isOvernightV2(g.manifest))throw Error('Overnight v2 stage graph changes require a separately validated plan; preserve original IDs and spending');
   const spec=normalizeTask(input.spec??t.spec,g.manifest,this.c.registry);if(spec.submissionId!==t.spec.submissionId||spec.kind!==t.spec.kind)throw Error('Task identity/kind cannot change');
+  if(t.workerProfile&&digest(t.workerProfile)!==digest(g.manifest.workerProfile??null))throw Error('Started assignments retain their approved worker profile');
   if(t.startedAt&&spec.actor!==t.spec.actor)throw Error('Started actor changes require explicit takeover');
   let nextNativePermissions=null;if(t.native?.layout==='candidate_v1'){const permissions={readPaths:spec.permissions.readPaths,writePaths:spec.permissions.writePaths,checks:g.manifest.project.checks.filter(x=>spec.permissions.checks.includes(x.id))};if(digest(permissions)!==digest(t.native.manifest.permissions)){if(t.goalVersion>=g.version)throw Error('Changed native scope/checks require an explicitly approved goal version');nextNativePermissions=permissions;}}
   for(const [name,limit] of Object.entries(spec.limits))if(limit>t.spec.limits[name])throw Error('Rebind cannot refresh assignment limits');
@@ -53,12 +56,14 @@ export class Goals {
  });}
  finalize(input,key){return this.c.store.command(key,{op:'goal.finalize',...input},()=>{
   const g=this.c.store.get('goal',input.goalId);text(input.summary,'summary',12000);if(g.status==='draft'||['completed','partial'].includes(g.status))throw Error('Goal is not ready for finalization');
-  const tasks=this.c.store.all('task').filter(t=>t.goalId===g.id);if(!tasks.length||!quiescent(this.c,g.id))throw Error('Goal has unfinished owners or no accepted work');
+  const tasks=this.c.store.all('task').filter(t=>t.goalId===g.id);
+  const emptyStopped=this.c.beta&&g.status==='stopped'&&input.partial===true&&!tasks.length;
+  if(!tasks.length&&!emptyStopped||!quiescent(this.c,g.id))throw Error('Goal has unfinished owners or no accepted work');
   if(isOvernightV2(g.manifest)&&!input.partial&&!overnightCompletionReady(this.c,g,tasks))throw Error('Overnight v2 requires validated plan, independent reviews, integrations and full final suite');
   const unfinished=tasks.filter(t=>t.status!=='accepted');if(unfinished.length&&!input.partial)throw Error('Goal has unfinished tasks; accepted work is required');
   if(unfinished.some(t=>['queued','suspended','running','codex_ready'].includes(t.status)))throw Error('Stop unfinished work before partial finalization');
   const spending={model:this.c.store.spent(g.id).model??0,search:0,download:0,codexReview:0};for(const t of tasks)for(const [kind,n] of Object.entries(this.c.getTask(t.id).spent))spending[kind]=(spending[kind]??0)+n;
   const receipt={schema:1,goalId:g.id,approvalHash:g.hash,goalVersion:g.version,mode:g.manifest.mode,capabilities:g.manifest.capabilities,environment:g.manifest.environment,deadline:g.deadline,finishedAt:this.c.now(),summary:input.summary,spending,nativeCodexUsage:'host accounting; token totals unavailable',tasks:tasks.map(t=>({id:t.id,hash:t.hash,status:t.status,goalVersion:t.goalVersion,attempts:t.attempts,reviews:t.reviews,deadline:t.deadline,resultHash:digest(t.result),integration:t.integration??null,memory:(t.memory??[]).map(x=>({id:x.id,version:x.version,recipeHash:x.recipeHash}))}))};
-  g.status=unfinished.length?'partial':'completed';g.receipt=receipt;g.receiptHash=digest(receipt);this.c.store.put('goal',g);this.c.emit('goal.finalized',g.id,null,{status:g.status,receiptHash:g.receiptHash});return {goalId:g.id,status:g.status,receipt,receiptHash:g.receiptHash};
+  g.status=unfinished.length||emptyStopped?'partial':'completed';g.receipt=receipt;g.receiptHash=digest(receipt);this.c.store.put('goal',g);this.c.emit('goal.finalized',g.id,null,{status:g.status,receiptHash:g.receiptHash});return {goalId:g.id,status:g.status,receipt,receiptHash:g.receiptHash};
  });}
 }

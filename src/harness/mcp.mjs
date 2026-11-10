@@ -6,8 +6,8 @@ import { isEntry } from './entry.mjs';
 import { Registry } from './contracts.mjs';
 
 export const registryTool={name:'registry_list',description:'List the registered versioned modes, capabilities and workflows. Does not dispatch work.',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true}};
-export async function startMcp({invoke,tools=[registryTool]}={}){
- const server=new Server({name:'frontier-harness',version:'0.1.0'},{capabilities:{tools:{}}});
+export async function startMcp({invoke,tools=[registryTool],name='frontier-harness'}={}){
+ const server=new Server({name,version:'0.1.0'},{capabilities:{tools:{}}});
  server.setRequestHandler(ListToolsRequestSchema,async()=>({tools}));
  server.setRequestHandler(CallToolRequestSchema,async request=>{
   try{

@@ -43,17 +43,22 @@ export class Worker {
   if(typeof model!=='string'||!model.trim()||model.length>200)throw Error('Invalid resolved DeepSeek model identity');
   this.c.store.tx(()=>{const current=this.c.owned(task.id,owner);if(current.providerModel&&current.providerModel!==model){const e=Error('DeepSeek model differs from pinned task model');e.requestOutcome='completed';throw e;}if(!current.providerModel){current.providerModel=model;this.c.store.put('task',current);}});
  }
- providerClient(){return this.provider??=new LocalProvider({baseUrl:this.config.deepseekBaseUrl,model:this.config.deepseekModelId,streaming:this.config.deepseekStreaming??false});}
+ getProvider({planning=false}={}){
+  const profile=this.c.workerProfile;
+  this.provider??=new LocalProvider(profile?{...profile,apiKey:this.config.workerApiKey,openAICompatible:true}:{baseUrl:this.config.deepseekBaseUrl,model:this.config.deepseekModelId,streaming:planning?false:this.config.deepseekStreaming??false});
+  return this.provider;
+ }
  async model(task,owner,key,messages,{maxTokens=12000}={}){
+  this.c.verifyWorkerBinding(this.c.store.get('goal',task.goalId));
   const reservation=this.c.reserve(task.id,{key,kind:'model'},owner);
-  if(reservation.cached){this.pinModel(task,owner,reservation.result.model);this.activity(task,'model.request.completed',{operationId:reservation.id,requestId:reservation.id,model:reservation.result.model??null,finishReason:reservation.result.finishReason??null});return reservation.result;}
+  if(reservation.cached){this.pinModel(task,owner,(reservation.result.requestedModel??reservation.result.model));this.activity(task,'model.request.completed',{operationId:reservation.id,requestId:reservation.id,model:reservation.result.model??null,finishReason:reservation.result.finishReason??null});return reservation.result;}
   const remaining=Math.max(1,Math.min(600000,task.deadline-this.c.now()));let captured=0,chunkIndex=0;
   try{
    this.activity(task,'model.request.started',{requestId:reservation.id,key});
    if(this.c.store.get('goal',task.goalId).manifest.environment!==(this.config.environment??'live'))throw Error('Approved environment differs from configured providers');
-   this.providerClient();
+   const provider=this.getProvider();
    const expectedModel=this.c.getTask(task.id).providerModel;
-   const result=await this.provider.complete(messages,{maxTokens,streaming:this.config.deepseekStreaming??false,signal:AbortSignal.timeout(remaining),expectedModel,onModel:model=>{this.pinModel(task,owner,model);this.activity(task,'model.request.resolved',{operationId:reservation.id,requestId:reservation.id,model});},onContent:content=>{
+   const result=await provider.complete(messages,{maxTokens,streaming:this.c.workerProfile?.streaming??this.config.deepseekStreaming??false,signal:AbortSignal.timeout(remaining),expectedModel,onModel:model=>{this.pinModel(task,owner,model);this.activity(task,'model.request.resolved',{operationId:reservation.id,requestId:reservation.id,model});},onContent:content=>{
     if(typeof content!=='string'||captured>=128*1024)return;
     const bytes=Buffer.from(content),take=Math.min(bytes.length,128*1024-captured);captured+=take;
     // Fixed-size captured fragments; UI sinks are not awaited and cannot execute actions.
@@ -63,7 +68,7 @@ export class Worker {
    if(Buffer.byteLength(JSON.stringify(result))>512*1024)throw Error('Provider result exceeds bound');
    this.c.saveRequest(reservation.id,result);
    this.activity(task,'model.request.completed',{operationId:reservation.id,requestId:reservation.id,model:result.model??null,finishReason:result.finishReason??null});
-   this.pinModel(task,owner,result.model);return result;
+   this.pinModel(task,owner,result.requestedModel??result.model);return result;
   }catch(error){
    this.c.store.tx(()=>{const row=this.c.store.db.prepare('SELECT status,data FROM requests WHERE id=?').get(reservation.id);const data=JSON.parse(row.data);data.error=error.message.slice(0,500);data.requestOutcome=error.requestOutcome??'unknown';this.c.store.db.prepare('UPDATE requests SET status=?,data=? WHERE id=?').run(row.status==='completed'?'completed':'failed',JSON.stringify(data),reservation.id);});
    const goal=this.c.store.get('goal',task.goalId);
@@ -107,6 +112,7 @@ export class Worker {
   try{
    if(task.spec.kind!=='research'){task=this.c.boundary(task.id,task.checkpoint,this.owner);if(task.status!=='running')return task;}
    if(this.c.store.get('goal',task.goalId).manifest.environment!==(this.config.environment??'live'))throw Error('Approved environment differs from configured providers');
+   this.c.verifyWorkerBinding(this.c.store.get('goal',task.goalId));
    if(task.spec.kind==='coding'&&!task.checkpoint.executionBase){const executionBase=await this.integration.executionBase(task.goalId);if(typeof executionBase!=='string'||!/^[a-f0-9]{40}$/.test(executionBase))throw Error('Integration execution base must be a committed SHA');task=this.c.boundary(task.id,{...task.checkpoint,executionBase},this.owner);if(task.status!=='running')return task;}
    if(task.spec.kind==='consult'){
     if(!task.attempts)this.c.beginAttempt(task.id,this.owner);
@@ -115,7 +121,7 @@ export class Worker {
     return this.c.completeTask(task.id,result,this.owner,{reviewRequired:true});
    }
    if(task.providerWait){
-    try{this.providerClient();if(typeof this.provider?.availability!=='function')throw Error('Provider readiness probe unavailable');await this.provider.availability(AbortSignal.timeout(Math.max(1,Math.min(10000,task.providerWait.until-this.c.now()))));this.c.store.tx(()=>{const current=this.c.owned(task.id,this.owner);delete current.providerWait;this.c.store.put('task',current);});task=this.c.getTask(task.id);}
+    try{const provider=this.getProvider();if(typeof provider.availability!=='function')throw Error('Provider readiness probe unavailable');await provider.availability(AbortSignal.timeout(Math.max(1,Math.min(10000,task.providerWait.until-this.c.now()))));this.c.store.tx(()=>{const current=this.c.owned(task.id,this.owner);delete current.providerWait;this.c.store.put('task',current);});task=this.c.getTask(task.id);}
     catch{this.c.store.tx(()=>{const current=this.c.owned(task.id,this.owner);current.status='suspended';current.owner=null;current.providerWait.retryAt=this.c.now()+15000;this.c.store.put('task',current);});return this.c.getTask(task.id);}
    }
    const adapter=this.adapters[task.spec.kind];if(!adapter)throw Error(`Capability ${task.spec.kind} is not configured`);

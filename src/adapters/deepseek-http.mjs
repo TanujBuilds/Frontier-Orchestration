@@ -45,8 +45,13 @@ function requestWithoutHeaderDeadline(url, options, signal) {
 }
 
 export class DeepSeekHttpAdapter {
-  constructor({ baseUrl, model, timeoutMs = 600_000, fetchImpl = requestWithoutHeaderDeadline } = {}) {
-    if (!baseUrl) throw new Error('DEEPSEEK_BASE_URL is required (include /v1)');
+  constructor({ baseUrl, model, timeoutMs = 600_000, apiKey, openAICompatible = false, fetchImpl = requestWithoutHeaderDeadline } = {}) {
+    if (!baseUrl) throw new Error(openAICompatible?'Configure an API worker base URL':'DEEPSEEK_BASE_URL is required (include /v1)');
+    this.label=openAICompatible?'API worker':'DeepSeek';
+    this.openAICompatible=openAICompatible;
+    if(apiKey!==undefined&&(typeof apiKey!=='string'||!apiKey||apiKey.length>2048||/[^\x21-\x7e]/.test(apiKey)))throw Error('Invalid API worker bearer key');
+    this.apiKey=apiKey;
+    this.authHeaders=apiKey?{authorization:'Bearer '+apiKey}:{};
     this.modelsUrl = endpoint(baseUrl, 'models');
     this.chatUrl = endpoint(baseUrl, 'chat/completions');
     this.model = model || null;
@@ -55,36 +60,44 @@ export class DeepSeekHttpAdapter {
     this.identity = model ? `deepseek-http/${model}` : 'deepseek-http/unresolved';
   }
 
+  redact(text) { return this.apiKey ? text.replaceAll(this.apiKey,'[redacted]') : text; }
+
   async request(url, options, signal) {
     const timeout = AbortSignal.timeout(this.timeoutMs);
     const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
     let response;
     try {
-      response = await this.fetchImpl(url, { ...options, signal: combined }, combined);
+      response = await this.fetchImpl(url, { ...options, headers:{...options.headers,...this.authHeaders}, signal: combined }, combined);
     } catch (error) {
-      if (signal?.aborted) throw requestError('DeepSeek call interrupted',url);
-      if (timeout.aborted) throw requestError(`DeepSeek call timed out after ${this.timeoutMs} ms`,url);
-      const detail = error.cause?.code ?? error.message;
-      throw requestError(`DeepSeek connection failed: ${detail}`,url);
+      if (signal?.aborted) throw requestError(this.label+' call interrupted',url);
+      if (timeout.aborted) throw requestError(`${this.label} call timed out after ${this.timeoutMs} ms`,url);
+      const detail = this.apiKey?'connection error':(error.cause?.code ?? error.message);
+      throw requestError(`${this.label} connection failed: ${detail}`,url);
     }
-    if (!response.ok) throw requestError(`DeepSeek ${url.pathname} returned HTTP ${response.status}`,url,response.status);
+    if (!response.ok) throw requestError(`${this.label} ${this.redact(url.pathname)} returned HTTP ${response.status}`,url,response.status);
     try {
       return await response.json();
     } catch {
-      if (signal?.aborted) throw requestError('DeepSeek call interrupted',url);
-      if (timeout.aborted) throw requestError(`DeepSeek call timed out after ${this.timeoutMs} ms`,url);
-      throw requestError(`DeepSeek ${url.pathname} returned invalid JSON`,url);
+      if (signal?.aborted) throw requestError(this.label+' call interrupted',url);
+      if (timeout.aborted) throw requestError(`${this.label} call timed out after ${this.timeoutMs} ms`,url);
+      throw requestError(`${this.label} ${this.redact(url.pathname)} returned invalid JSON`,url);
     }
+  }
+
+  async listModels(signal) {
+    const body = await this.request(this.modelsUrl, { method: 'GET' }, signal);
+    if (!Array.isArray(body?.data)) throw new Error(this.label+' /models returned no model list');
+    const ids = body.data.map((item) => item?.id).filter((id) => typeof id === 'string' && id.trim() && (!this.openAICompatible || (id.length<=200&&!/[\x00-\x1f\x7f-\x9f]/u.test(id)&&(!this.apiKey||!id.includes(this.apiKey)))));
+    if (ids.length === 0) throw new Error(this.label+' /models returned no model IDs');
+    return this.openAICompatible?[...new Set(ids)]:ids;
   }
 
   async resolveModel(signal) {
     if (this.resolvedModel) return this.resolvedModel;
-    const body = await this.request(this.modelsUrl, { method: 'GET' }, signal);
-    if (!Array.isArray(body?.data)) throw new Error('DeepSeek /models returned no model list');
-    const ids = body.data.map((item) => item?.id).filter((id) => typeof id === 'string' && id.trim());
-    if (ids.length === 0) throw new Error('DeepSeek /models returned no model IDs');
+    if(this.openAICompatible&&this.model)return this.resolvedModel=this.model;
+    const ids=await this.listModels(signal);
     if (this.model && !ids.includes(this.model)) throw new Error(`Configured DeepSeek model ${this.model} is not advertised by /models`);
-    if (!this.model && ids.length !== 1) throw new Error('DeepSeek /models advertised multiple models; set DEEPSEEK_MODEL_ID');
+    if (!this.model && ids.length !== 1) throw new Error(this.openAICompatible?'Select a model advertised by /models':'DeepSeek /models advertised multiple models; set DEEPSEEK_MODEL_ID');
     this.resolvedModel = this.model ?? ids[0];
     this.identity = `deepseek-http/${this.resolvedModel}`;
     return this.resolvedModel;
