@@ -1,32 +1,100 @@
-import { DeepSeekHttpAdapter } from '../adapters/deepseek-http.mjs';
-import { streamCompletion, redactStream } from './stream.mjs';
+import { DeepSeekHttpAdapter, validModelId } from '../adapters/deepseek-http.mjs';
+import { normalizeProviderCapabilities } from './provider-capabilities.mjs';
+import { streamCompletion, redactStream, validCompletionMetadata } from './stream.mjs';
+
+function failure(message, outcome, status) {
+  const error = new Error(message);
+  error.requestOutcome = outcome;
+  if (status !== undefined) error.httpStatus = status;
+  return error;
+}
 
 export class LocalProvider extends DeepSeekHttpAdapter {
- constructor({streaming=false,...options}={}){super(options);if(typeof streaming!=='boolean')throw Error(this.label+' streaming must be boolean');this.streaming=streaming;}
- async availability(signal){const body=await this.request(this.modelsUrl,{method:'GET'},signal);if(!Array.isArray(body?.data)||!body.data.some(m=>m.id===(this.resolvedModel??this.model)||(!this.model&&!this.resolvedModel&&typeof m.id==='string')))throw Error('Configured provider model is unavailable');return true;}
- async complete(messages,{signal,maxTokens=12000,onContent,expectedModel,onModel,streaming=this.streaming}={}){
-  if(typeof streaming!=='boolean'){const error=Error(this.label+' streaming must be boolean');error.requestOutcome='not_dispatched';throw error;}
-  const model=await this.resolveModel(signal);
-  if(expectedModel&&model!==expectedModel){const error=Error('Resolved '+this.label+' model differs from pinned task model');error.requestOutcome='not_dispatched';throw error;}
-  onModel?.(model);
-  const payload=JSON.stringify({model,stream:streaming,max_tokens:maxTokens,...(this.openAICompatible?{}:{chat_template_kwargs:{enable_thinking:false}}),messages});
-  const capture=this.apiKey&&onContent?redactStream(this.apiKey,onContent):null;
-  const streamed=streaming?await streamCompletion(this.chatUrl,payload,{signal,timeoutMs:this.timeoutMs,onContent:capture?.push??onContent,model,authHeaders:this.authHeaders,label:this.label}):null;
-  capture?.finish();
-  const body=streaming?null:await this.request(this.chatUrl,{method:'POST',headers:{'content-type':'application/json'},body:payload},signal);
-  const choice=body?.choices?.[0];
-  if(!streamed&&typeof choice?.message?.content!=='string')throw Error(this.label+' returned no content');
-  let result=streamed??{content:choice.message.content,model:body.model??model,usage:body.usage??null,finishReason:choice.finish_reason??null};
-  if(this.apiKey){
-   const redact=value=>typeof value==='string'?this.redact(value):Array.isArray(value)?value.map(redact):value&&typeof value==='object'?Object.fromEntries(Object.entries(value).map(([key,item])=>[this.redact(key),redact(item)])):value;
-   result=redact(result);
+  constructor({ streaming = false, capabilities, ...options } = {}) {
+    super(options);
+    if (typeof streaming !== 'boolean') throw failure(this.label + ' streaming must be boolean', 'not_dispatched');
+    this.streaming = streaming;
+    try {
+      this.capabilities = normalizeProviderCapabilities(capabilities, streaming);
+    } catch (error) {
+      throw failure(this.redact(error.message), 'not_dispatched');
+    }
   }
-  if(this.openAICompatible){
-   if(typeof result.model!=='string'||!result.model.trim()||result.model.length>200||typeof result.finishReason!=='string'&&result.finishReason!==null)throw Error('API worker returned invalid completion metadata');
-   // Hosted providers may return a dated model behind an explicitly selected alias.
-   result={...result,requestedModel:model};
+
+  async availability(signal) {
+    const configured = this.resolvedModel ?? this.model;
+    const ids = await this.listModels(signal, { strict: this.capabilities?.modelDiscovery === 'advertised' });
+    if (configured && !ids.includes(configured)) throw Error('Configured provider model is unavailable');
+    return true;
   }
-  if(Buffer.byteLength(JSON.stringify(result))>512*1024)throw Error('Provider result exceeds bound');
-  return result;
- }
+
+  async complete(messages, { signal, maxTokens = 12000, onContent, expectedModel, onModel, streaming = this.streaming } = {}) {
+    let model, payload;
+    try {
+      if (typeof streaming !== 'boolean') throw Error(this.label + ' streaming must be boolean');
+      if (this.capabilities && !this.capabilities.transports.includes(streaming ? 'sse' : 'json')) {
+        throw Error('Requested response mode is unsupported by API worker capabilities');
+      }
+      model = this.capabilities ? this.model : await this.resolveModel(signal);
+      if (!validModelId(model) || this.containsCredential(model)) {
+        throw Error('Invalid configured provider model identity');
+      }
+      if (expectedModel != null && model !== expectedModel) {
+        throw Error('Resolved ' + this.label + ' model differs from pinned task model');
+      }
+      // A successful prior call does not prove the endpoint still advertises this model.
+      if (this.capabilities?.modelDiscovery === 'advertised') {
+        const ids = await this.listModels(signal, { strict: true });
+        if (!ids.includes(model)) throw Error('Configured provider model is not advertised by /models');
+      }
+      payload = JSON.stringify({
+        model, stream: streaming, max_tokens: maxTokens,
+        ...(this.openAICompatible ? {} : { chat_template_kwargs: { enable_thinking: false } }),
+        messages: this.redactData(messages),
+      });
+      onModel?.(model);
+    } catch (error) {
+      throw failure(this.redact(error?.message ?? 'Provider request could not be prepared'), 'not_dispatched', error?.httpStatus);
+    }
+
+    const capture = streaming && this.apiKey && onContent ? redactStream(this.apiKey, onContent) : null;
+    let result;
+    if (streaming) {
+      result = await streamCompletion(this.chatUrl, payload, {
+        signal, timeoutMs: this.timeoutMs, onContent: capture?.push ?? onContent,
+        model, authHeaders: this.authHeaders, label: this.label,
+      });
+      capture?.finish();
+    } else {
+      const body = await this.request(this.chatUrl, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: payload,
+      }, signal);
+      const choice = body?.choices?.[0];
+      if (typeof choice?.message?.content !== 'string') {
+        throw failure(this.label + ' returned no content', 'unknown');
+      }
+      result = {
+        content: choice.message.content,
+        model: body.model ?? model,
+        usage: body.usage ?? null,
+        finishReason: choice.finish_reason ?? null,
+      };
+      if (!validCompletionMetadata(result)) throw failure(this.label + ' returned invalid completion metadata', 'unknown');
+    }
+
+    try {
+      if (this.apiKey) {
+        result.content = this.redact(result.content);
+        result.model = this.redact(result.model);
+        result.usage = this.redactData(result.usage);
+        result.finishReason = this.redactData(result.finishReason);
+      }
+      // A provider can report a dated model behind the selected alias.
+      if (this.openAICompatible || this.capabilities) result.requestedModel = model;
+      if (Buffer.byteLength(JSON.stringify(result)) > 512 * 1024) throw Error('Provider result exceeds bound');
+      return result;
+    } catch (error) {
+      throw failure(this.redact(error.message), 'unknown');
+    }
+  }
 }

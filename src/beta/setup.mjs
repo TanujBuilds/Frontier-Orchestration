@@ -8,6 +8,7 @@ import {promisify} from 'node:util';
 import path from 'node:path';
 import {LocalProvider} from '../harness/provider.mjs';
 import {workerEndpoint,workerProfile} from '../harness/worker-profile.mjs';
+import {STRUCTURED_WORKER_PROTOCOL} from '../harness/provider-capabilities.mjs';
 import {atomic,entry,fileBytes,hash,jsonFile,localDirectory,saveJson,shellQuote,withLock} from './files.mjs';
 import {client} from './client.mjs';
 import {assertMaintenanceIdle,launchAgent,startLaunchAgent,stopForMaintenance,verifyLaunchAgent} from './service.mjs';
@@ -159,9 +160,12 @@ async function askSession(input,output,work){
  try{return await work(ask);}finally{rl.close();}
 }
 
+const WORKER_PROBE_TIMEOUT_MS=10000;
 const yes=value=>/^y(es)?$/i.test(value);
-function discoveryProvider(profile,apiKey,model){
- return new LocalProvider({baseUrl:profile.baseUrl,model,apiKey,openAICompatible:true,streaming:profile.streaming,timeoutMs:10000});
+const responseMode=profile=>profile.streaming?'streaming SSE':'completed JSON';
+const requiresAdvertisedModel=profile=>profile?.capabilities?.modelDiscovery==='advertised';
+function discoveryProvider(profile,apiKey){
+ return new LocalProvider({...profile,apiKey,openAICompatible:true,timeoutMs:WORKER_PROBE_TIMEOUT_MS});
 }
 
 async function configureWorker(ask,output,previous){
@@ -177,22 +181,42 @@ async function configureWorker(ask,output,previous){
   apiKey=previous.apiKey;
  }else if(yes(keyChoice))apiKey=(await ask('Bearer key (hidden): ',{secret:true}))||undefined;
  if(apiKey&&[baseUrl,displayName].some(value=>value.includes(apiKey)))throw Error('The bearer key must appear only in the credential field.');
- const streaming= /^s$/i.test(await ask('Responses [C]ompleted (default) or [s]treaming? '));
- const profile={baseUrl,displayName,streaming,revision:randomUUID()};
+ const mode=await ask(`Responses [C]ompleted or [s]treaming [${old?.streaming?'s':'c'}]: `);
+ const streaming=mode?/^s$/i.test(mode):old?.streaming??false;
+ const profile={baseUrl,displayName,streaming,revision:old?.revision??randomUUID()};
  const provider=discoveryProvider(profile,apiKey);
+ const discovery=await ask(`Request model IDs from ${baseUrl}/models? [${requiresAdvertisedModel(old)?'Y/n':'y/N'}] `);
+ const keepAdvertised=requiresAdvertisedModel(old)&&!/^n(o)?$/i.test(discovery);
+ const discover=yes(discovery)||keepAdvertised;
  let models=[];
- if(yes(await ask(`Request model IDs from ${baseUrl}/models? [y/N] `))){
-  try{models=(await provider.listModels()).slice(0,25);models.forEach((model,i)=>output.write(`  ${i+1}. ${model}\n`));}
-  catch{output.write('Model discovery is unavailable. Enter a model ID manually.\n');}
+ if(discover){
+  try{models=await provider.listModels(undefined,{strict:true});}
+  catch{output.write('Model discovery is unavailable.\n');}
  }
- const choice=await ask(`Model ID${models.length?' or list number':''}${old?` [${old.model}]`:''}: `);
- const model=/^[1-9]\d*$/.test(choice)&&models[Number(choice)-1]?models[Number(choice)-1]:choice||old?.model;
+ const choices=models.slice(0,25);
+ choices.forEach((model,i)=>output.write(`  ${i+1}. ${model}\n`));
+ const choice=await ask(`Model ID${choices.length?' or list number':''}${old?` [${old.model}]`:''}: `);
+ const listedModel=/^[1-9]\d*$/.test(choice)?choices[Number(choice)-1]:undefined;
+ const model=listedModel??(choice||old?.model);
  if(apiKey&&model?.includes(apiKey))throw Error('The bearer key must appear only in the credential field.');
- const final=workerProfile({...profile,model});
- if(old&&canonical({...final,revision:old.revision})===canonical(old)&&apiKey===previous.apiKey)final.revision=old.revision;
+ const advertised=models.includes(model);
+ const modelDiscovery=advertised||keepAdvertised?'advertised':'manual';
+ if(advertised)output.write('Completion requests will check that the selected model remains advertised.\n');
+ else if(discover)output.write(keepAdvertised?
+  'The selected model is not advertised. Completion requests require this model to be advertised.\n':
+  'The selected model is not advertised. Setup will save manual model selection.\n');
+ const candidate={...profile,model};
+ const unchangedLegacy=old&&!old.capabilities&&modelDiscovery==='manual'&&apiKey===previous.apiKey&&canonical(candidate)===canonical(old);
+ const sameProvider=old&&old.baseUrl===baseUrl&&old.model===model&&old.streaming===streaming&&apiKey===previous.apiKey;
+ const retainedTransports=sameProvider?old.capabilities?.transports:undefined;
+ const capabilities={protocol:STRUCTURED_WORKER_PROTOCOL,transports:retainedTransports??[streaming?'sse':'json'],modelDiscovery};
+ const final=workerProfile(unchangedLegacy?candidate:{...candidate,capabilities});
+ if(old&&(canonical(final)!==canonical(old)||apiKey!==previous.apiKey))final.revision=randomUUID();
  if(yes(await ask('Send one connection-test prompt with no repository data (10 seconds, 32 tokens)? [y/N] '))){
   try{
-   const result=await discoveryProvider(final,apiKey,final.model).complete([{role:'user',content:'Reply with the single word OK.'}],{maxTokens:32});
+   const result=await discoveryProvider(final,apiKey).complete([{role:'user',content:'Reply with the single word OK.'}],{
+    maxTokens:32,signal:AbortSignal.timeout(WORKER_PROBE_TIMEOUT_MS)
+   });
    if(!result.content.trim())throw Error();
    output.write('Connection test received a completion. Coding quality is unverified.\n');
   }catch{output.write('Connection test failed. Check the endpoint, key, model ID and response mode.\n');}
@@ -279,7 +303,7 @@ export async function setup(paths,{explicitCodex,input=process.stdin,output=proc
    `Codex MCP: ${shellQuote(codex)} mcp add mosaic-beta -- ${shellQuote(launcher)} mcp`;
   output.write(`\nPrivate settings: ${config}\n${registrationPreview}\nSkill: ${skillFile}\n`);
   if(!paths.isolated)output.write(`LaunchAgent: ${plist}\n`);
-  output.write(worker?`Worker: ${worker.profile.displayName} · ${worker.profile.baseUrl} · ${worker.profile.model} · ${worker.profile.streaming?'streaming':'completed'}\n`:'Worker: Codex only\n');
+  output.write(worker?`Worker: ${worker.profile.displayName} · ${worker.profile.baseUrl} · ${worker.profile.model} · ${responseMode(worker.profile)} · ${requiresAdvertisedModel(worker.profile)?'advertised model required':'manual model selection'}\n`:'Worker: Codex only\n');
   if(!yes(await ask('Apply these beta settings and registrations? [y/N] ')))return false;
   return withLock(paths,async()=>{
    if(await entry(paths.setupIntent))throw Error('Another setup already has pending changes. Run mosaic setup to resume.');
@@ -330,12 +354,18 @@ export async function doctor(paths,output=process.stdout){
  catch{check('Coordinator',false,paths.isolated?'Start the isolated instance with mosaic serve.':'Run mosaic setup to repair the LaunchAgent.');}
  if(settings?.worker){
   const {profile,apiKey}=settings.worker;
+  const requireAdvertised=requiresAdvertisedModel(profile);
+  const untested=` The configured ${responseMode(profile)} completion is untested.`;
   try{
-   const models=await discoveryProvider(profile,apiKey).listModels();
-   check('API worker',true,models.includes(profile.model)?`${profile.displayName} advertised the configured model.`:'Discovery works. The manual model ID is not advertised; check it or use the optional setup connection test.');
+   const models=await discoveryProvider(profile,apiKey).listModels(undefined,{strict:requireAdvertised});
+   const advertised=models.includes(profile.model);
+   check('API worker',advertised||!requireAdvertised,(advertised?`${profile.displayName} advertised the configured model.`:
+    requireAdvertised?'The required model is not advertised.':'Discovery works. The manual model ID is not advertised.')+untested);
   }catch(error){
-   const reachable=error.httpStatus===404||error.httpStatus===405;
-   check('API worker',reachable,reachable?'Discovery is unsupported. The manually selected model can be checked with the optional setup connection test.':'Model discovery failed. Check the endpoint and bearer key, or verify the manual model in setup.');
+   const unsupported=error.httpStatus===404||error.httpStatus===405;
+   check('API worker',!requireAdvertised&&unsupported,(requireAdvertised?
+    'Could not confirm the required model through discovery. Check the endpoint and bearer key.':
+    unsupported?'Discovery is unsupported. The model is configured manually.':'Model discovery failed. Check the endpoint and bearer key.')+untested);
   }
  }else check('API worker',true,'Codex only.');
  for(const {name,ok,detail} of checks)output.write(`${ok?'OK':'CHECK'}  ${name} · ${detail}\n`);

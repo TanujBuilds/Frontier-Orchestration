@@ -4,11 +4,16 @@ import {randomUUID} from 'node:crypto';
 import {normalizeTask,digest,text} from './contracts.mjs';
 
 function quiescent(c,goalId){return !c.store.get('goal',goalId).integrationOwner&&!c.store.get('goal',goalId).integrationPending&&!c.store.all('task').some(t=>t.goalId===goalId&&(t.owner||t.native?.writerActive||t.executionActor==='codex'&&['paused','stopped'].includes(t.status)||['codex_active','legacy_reviewing'].includes(t.status)))&&!['running','uncertain'].includes(c.store.maybe('planning',goalId)?.status);}
+function assertWorkerUnchanged(g,manifest){
+ if(g.activatedAt!=null&&digest(g.manifest.workerProfile??null)!==digest(manifest.workerProfile??null))
+  throw Error('An approved goal retains its worker profile. Prepare and approve a new goal to select a different worker.');
+}
 export class Goals {
  constructor(c){this.c=c;}
  prepareRevision(input,key){return this.c.store.command(key,{op:'goal.revise.prepare',...input},()=>{
   const g=this.c.store.get('goal',input.goalId);if(['completed','partial'].includes(g.status))throw Error('Goal is terminal');if(g.hash!==input.expectedHash)throw Error('Goal approval changed');
   const manifest=this.c.goalManifest(input.manifest);if(manifest.submissionId!==g.manifest.submissionId)throw Error('Goal submission identity cannot change');
+  assertWorkerUnchanged(g,manifest);
   if(manifest.environment!==g.manifest.environment)throw Error('Execution environment cannot change after approval');
   if(g.integration||this.c.store.all('task').some(t=>t.goalId===g.id&&t.startedAt)){
    if(manifest.project?.repo!==g.manifest.project?.repo||manifest.project?.baseCommit!==g.manifest.project?.baseCommit)throw Error('Started work requires explicit stale-base handling in a new goal');
@@ -19,6 +24,7 @@ export class Goals {
   const revision=this.c.store.get('goal_revision',input.revisionId),g=this.c.store.get('goal',revision.goalId);
   if(['completed','partial'].includes(g.status))throw Error('Goal is terminal');
   if(input.hash!==revision.hash)throw Error('Exact revision approval hash required');if(g.hash!==revision.previousHash||revision.status!=='draft')throw Error('Revision is stale');
+  assertWorkerUnchanged(g,revision.manifest);
   this.c.verifyGoalBinding(revision);
   if(!quiescent(this.c,g.id))throw Error('Verify quiescent owners before changing an approved version');
   if(this.c.now()>=g.deadline)throw Error('Original deadline exceeded');

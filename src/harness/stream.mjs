@@ -1,10 +1,16 @@
 import http from 'node:http';
 import https from 'node:https';
 import { StringDecoder } from 'node:string_decoder';
+import { validModelId } from '../adapters/deepseek-http.mjs';
 
 // SSE framing repeats metadata per delta; bound the wire separately from model output.
 const MAX_WIRE=8*1024*1024,MAX_RESPONSE=512*1024,MAX_CAPTURE=128*1024;
 function failure(message,outcome='unknown',status){const e=new Error(message);e.requestOutcome=outcome;if(status!==undefined)e.httpStatus=status;return e;}
+export function validCompletionMetadata({model,usage,finishReason}){
+ return (model===undefined||validModelId(model))&&
+  (usage==null||typeof usage==='object'&&!Array.isArray(usage))&&
+  (finishReason==null||validModelId(finishReason));
+}
 // Keep a possible secret prefix across chunks, without delaying unrelated output.
 export function redactStream(secret,write){
  let pending='';
@@ -35,11 +41,14 @@ export function streamCompletion(url,body,{signal,timeoutMs,onContent,model,auth
     if(done)throw failure(label+' stream contains data after terminal marker');
     if(data==='[DONE]'){done=true;return;}
     let item;try{item=JSON.parse(data);}catch{throw failure('Malformed '+label+' SSE JSON');}
-    if(item?.error)throw failure(label+' stream reported an error');
-    if(item?.model!==undefined){if(typeof item.model!=='string'||item.model.length>200||(actualModel&&actualModel!==item.model))throw failure(label+' stream model identity changed');actualModel=item.model;}
-    if(item?.usage!==undefined)usage=item.usage;
-    const choice=item?.choices?.[0];
-    if(choice?.finish_reason!=null)finishReason=choice.finish_reason;
+    if(!item||typeof item!=='object'||Array.isArray(item)||item.choices!=null&&!Array.isArray(item.choices))throw failure(label+' stream returned invalid event');
+    if(item.error)throw failure(label+' stream reported an error');
+    const choice=item.choices?.[0];
+    const reason=choice?.finish_reason;
+    if(!validCompletionMetadata({model:item.model,usage:item.usage,finishReason:reason}))throw failure(label+' stream returned invalid completion metadata');
+    if(item.model!==undefined){if(actualModel!==null&&actualModel!==item.model)throw failure(label+' stream model identity changed');actualModel=item.model;}
+    if(item.usage!==undefined)usage=item.usage;
+    if(reason!=null){if(finishReason!==null&&finishReason!==reason)throw failure(label+' stream finish reason changed');finishReason=reason;}
     const visible=choice?.delta?.content;
     if(visible!==undefined&&visible!==null){
      if(typeof visible!=='string')throw failure('Invalid '+label+' visible content');

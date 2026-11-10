@@ -1,3 +1,5 @@
+import {normalizeProviderCapabilities} from './provider-capabilities.mjs';
+
 function field(value, limit) {
  return typeof value==='string'&&value.length<=limit&&value.trim()===value&&value.length>0&&!/[\x00-\x1f\x7f-\x9f]/u.test(value);
 }
@@ -11,8 +13,11 @@ export function workerEndpoint(value) {
 }
 
 export function workerProfile(raw) {
- if(!raw||Object.keys(raw).some(key=>!['baseUrl','model','displayName','revision','streaming'].includes(key))||
+ if(!raw||typeof raw!=='object'||Array.isArray(raw)||
+    Object.keys(raw).some(key=>!['baseUrl','model','displayName','revision','streaming','capabilities'].includes(key))||
     !field(raw.model,200)||!field(raw.displayName,80)||!field(raw.revision,80)||typeof raw.streaming!=='boolean')
   throw Error('Invalid API worker profile');
- return {baseUrl:workerEndpoint(raw.baseUrl),model:raw.model,displayName:raw.displayName,revision:raw.revision,streaming:raw.streaming};
+ const capabilities=normalizeProviderCapabilities(raw.capabilities,raw.streaming);
+ return {baseUrl:workerEndpoint(raw.baseUrl),model:raw.model,displayName:raw.displayName,revision:raw.revision,streaming:raw.streaming,
+  ...(capabilities?{capabilities}:{})};
 }

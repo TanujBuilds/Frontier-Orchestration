@@ -1,17 +1,37 @@
 import http from 'node:http';
 import https from 'node:https';
 
-function endpoint(baseUrl, route) {
-  const url = new URL(baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`);
-  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('DeepSeek base URL must use HTTP or HTTPS');
-  return new URL(route, url);
+function endpoint(baseUrl, openAICompatible) {
+  const message = openAICompatible
+    ? 'Use an HTTP or HTTPS API base URL without credentials, query parameters or fragment'
+    : 'DeepSeek base URL must use HTTP or HTTPS';
+  let url;
+  try {
+    url = new URL(baseUrl.endsWith('/') ? baseUrl : baseUrl + '/');
+  } catch {
+    throw requestError(message);
+  }
+  if (!['http:', 'https:'].includes(url.protocol) ||
+      openAICompatible && (url.username || url.password || url.search || url.hash)) {
+    throw requestError(message);
+  }
+  return url;
 }
 
 function requestError(message,url,status){
   const error=new Error(message);
-  error.requestOutcome=url.pathname.endsWith('/chat/completions')&&(status===undefined||status>=500)?'unknown':'not_dispatched';
+  error.requestOutcome=url?.pathname.endsWith('/chat/completions')&&(status===undefined||status>=500)?'unknown':'not_dispatched';
   if(status!==undefined)error.httpStatus=status;
   return error;
+}
+
+export function validModelId(value) {
+  return typeof value === 'string' && value.length > 0 && value.length <= 200 &&
+    value.trim() === value && !/[\x00-\x1f\x7f-\x9f]/u.test(value);
+}
+
+function decodeUrlBytes(url) {
+  return url.replace(/%([a-f0-9]{2})/gi, (_encoded, hex) => String.fromCharCode(Number.parseInt(hex, 16)));
 }
 
 function requestWithoutHeaderDeadline(url, options, signal) {
@@ -22,6 +42,12 @@ function requestWithoutHeaderDeadline(url, options, signal) {
       headers: options.headers,
       signal,
     }, response => {
+      response.on('error', reject);
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        resolve({ ok: false, status: response.statusCode });
+        response.destroy();
+        return;
+      }
       const chunks = [];
       let size = 0;
       response.on('data', chunk => {
@@ -33,11 +59,11 @@ function requestWithoutHeaderDeadline(url, options, signal) {
         chunks.push(chunk);
       });
       response.on('end', () => resolve({
-        ok: response.statusCode >= 200 && response.statusCode < 300,
+        ok: true,
         status: response.statusCode,
         json: async () => JSON.parse(Buffer.concat(chunks).toString('utf8')),
       }));
-      response.on('error', reject);
+      response.on('aborted', () => reject(new Error('Provider response disconnected')));
     });
     request.on('error', reject);
     request.end(options.body);
@@ -45,22 +71,50 @@ function requestWithoutHeaderDeadline(url, options, signal) {
 }
 
 export class DeepSeekHttpAdapter {
+  #jsonApiKey;
+
   constructor({ baseUrl, model, timeoutMs = 600_000, apiKey, openAICompatible = false, fetchImpl = requestWithoutHeaderDeadline } = {}) {
-    if (!baseUrl) throw new Error(openAICompatible?'Configure an API worker base URL':'DEEPSEEK_BASE_URL is required (include /v1)');
+    if (!baseUrl) throw requestError(openAICompatible?'Configure an API worker base URL':'DEEPSEEK_BASE_URL is required (include /v1)');
     this.label=openAICompatible?'API worker':'DeepSeek';
     this.openAICompatible=openAICompatible;
-    if(apiKey!==undefined&&(typeof apiKey!=='string'||!apiKey||apiKey.length>2048||/[^\x21-\x7e]/.test(apiKey)))throw Error('Invalid API worker bearer key');
-    this.apiKey=apiKey;
+    if(apiKey!==undefined&&(typeof apiKey!=='string'||!apiKey||apiKey.length>2048||/[^\x21-\x7e]/.test(apiKey)))throw requestError('Invalid API worker bearer key');
+    this.apiKey = apiKey;
+    this.#jsonApiKey = apiKey ? JSON.stringify(apiKey).slice(1, -1) : undefined;
+    const base = endpoint(baseUrl, openAICompatible);
+    if (apiKey && (typeof model === 'string' && this.containsCredential(model) ||
+        this.containsCredential(baseUrl) || this.containsCredential(decodeUrlBytes(baseUrl)) ||
+        this.containsCredential(decodeUrlBytes(base.href)))) {
+      throw requestError('The bearer key must appear only in the credential field');
+    }
     this.authHeaders=apiKey?{authorization:'Bearer '+apiKey}:{};
-    this.modelsUrl = endpoint(baseUrl, 'models');
-    this.chatUrl = endpoint(baseUrl, 'chat/completions');
+    this.modelsUrl = new URL('models', base);
+    this.chatUrl = new URL('chat/completions', base);
     this.model = model || null;
     this.timeoutMs = timeoutMs;
     this.fetchImpl = fetchImpl;
     this.identity = model ? `deepseek-http/${model}` : 'deepseek-http/unresolved';
   }
 
-  redact(text) { return this.apiKey ? text.replaceAll(this.apiKey,'[redacted]') : text; }
+  containsCredential(text) {
+    return Boolean(this.apiKey && (text.includes(this.apiKey) || text.includes(this.#jsonApiKey)));
+  }
+
+  redact(text) {
+    if (!this.apiKey) return text;
+    // The coordinator also embeds JSON inside message strings.
+    if (this.#jsonApiKey !== this.apiKey) text = text.replaceAll(this.#jsonApiKey, '[redacted]');
+    return text.replaceAll(this.apiKey, '[redacted]');
+  }
+
+  redactData(value) {
+    if (!this.apiKey || value === null) return value;
+    if (typeof value === 'string') return this.redact(value);
+    if (Array.isArray(value)) return value.map(item => this.redactData(item));
+    if (typeof value === 'object') {
+      return Object.fromEntries(Object.entries(value).map(([key, item]) => [this.redact(key), this.redactData(item)]));
+    }
+    return value;
+  }
 
   async request(url, options, signal) {
     const timeout = AbortSignal.timeout(this.timeoutMs);
@@ -84,11 +138,15 @@ export class DeepSeekHttpAdapter {
     }
   }
 
-  async listModels(signal) {
+  async listModels(signal, { strict = false } = {}) {
     const body = await this.request(this.modelsUrl, { method: 'GET' }, signal);
-    if (!Array.isArray(body?.data)) throw new Error(this.label+' /models returned no model list');
-    const ids = body.data.map((item) => item?.id).filter((id) => typeof id === 'string' && id.trim() && (!this.openAICompatible || (id.length<=200&&!/[\x00-\x1f\x7f-\x9f]/u.test(id)&&(!this.apiKey||!id.includes(this.apiKey)))));
-    if (ids.length === 0) throw new Error(this.label+' /models returned no model IDs');
+    if (!Array.isArray(body?.data)) throw requestError(this.label+' /models returned no model list');
+    const listed = body.data.map(item => item?.id);
+    if (strict && !listed.every(validModelId)) throw requestError(this.label+' /models returned invalid model IDs');
+    const ids = listed.filter(id =>
+      (this.openAICompatible || strict ? validModelId(id) : typeof id === 'string' && id.trim()) &&
+      !this.containsCredential(id));
+    if (ids.length === 0) throw requestError(this.label+' /models returned no model IDs');
     return this.openAICompatible?[...new Set(ids)]:ids;
   }
 
@@ -120,7 +178,7 @@ export class DeepSeekHttpAdapter {
         stream: false,
         messages: [
           { role: 'system', content: 'Complete the project-design assignment as text. Do not request or claim tool use, file edits, or shell execution. Address revision feedback directly if provided.' },
-          { role: 'user', content: JSON.stringify(assignment) },
+          { role: 'user', content: JSON.stringify(this.redactData(assignment)) },
         ],
       }),
     }, signal);
@@ -129,10 +187,10 @@ export class DeepSeekHttpAdapter {
     if (typeof answer !== 'string' || !answer.trim()) throw new Error('DeepSeek returned an empty or unsupported answer');
     const result = {
       status: choice.finish_reason === 'length' ? 'failed' : 'completed',
-      answer,
-      model: body.model ?? model,
-      finishReason: choice.finish_reason ?? null,
-      ...(body.usage ? { usage: body.usage } : {}),
+      answer: this.redact(answer),
+      model: this.redactData(body.model ?? model),
+      finishReason: this.redactData(choice.finish_reason ?? null),
+      ...(body.usage ? { usage: this.redactData(body.usage) } : {}),
     };
     if (result.status === 'failed') result.summary = 'DeepSeek answer was truncated';
     return result;
