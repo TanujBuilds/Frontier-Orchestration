@@ -13,6 +13,7 @@ import {assignmentManifestSchema,prepareAssignment} from './assignment-intake.mj
 import {registerOutcomeTools} from './outcomes/tools.mjs';
 import {registerBacklogTools} from './backlog/tools.mjs';
 import {registerWorkflowRecipeTools} from './workflow-recipes/tools.mjs';
+import {registerResearchMissionTools} from './research-missions/tools.mjs';
 
 const str={type:'string'},obj={type:'object'},bool={type:'boolean'},number={type:'integer'};
 function validate(schema,value,label='input'){
@@ -30,6 +31,7 @@ export class Dispatcher {
   const add=(name,description,properties,required,mutating,fn)=>{if(config.beta&&['mode_register','workflow_register'].includes(name))return;const p=mutating?{...properties,idempotencyKey:str}:properties,r=mutating?[...required,'idempotencyKey']:required;this.definitions.set(name,{name,description:config.beta?description.replaceAll('DeepSeek-only','API-worker-only').replaceAll('DeepSeek','API worker'):description,inputSchema:{type:'object',properties:p,required:r,additionalProperties:false},annotations:{readOnlyHint:!mutating,idempotentHint:true},fn,mutating});};
   registerOutcomeTools({add,c});
   add('tools_list','Discover harness tools.',{},[],false,()=>this.tools());
+  if(!config.beta)registerResearchMissionTools({add,c,worker,artifacts:this.artifacts});
   add('service_stop','Stop the coordinator process after preserving worker ownership. Does not stop native Codex goal mode.',{},[],true,(_,key)=>c.store.command(key,{op:'service.stop'},()=>{if(!this.onStop)throw Error('Service controls are unavailable');this.onStop();return {stopping:true};}));
   add('registry_list','List pinned-capability and mode definitions.',{},[],false,()=>{
    const registry=c.registry.snapshot();
