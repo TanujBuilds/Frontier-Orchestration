@@ -316,12 +316,20 @@ export class Coordinator {
   if(this.store.all('planning').some(p=>['running','uncertain'].includes(p.status)))return null;
   const tasks=this.store.all('task');if(tasks.some(t=>SLOT.has(t.status)&&t.spec.actor==='deepseek'))return null;
   const priorities=this.effectivePriorities();const candidates=tasks.filter(t=>['queued','suspended'].includes(t.status)&&t.spec.actor==='deepseek'&&t.executionActor!=='codex'&&this.eligible(t)).sort((a,b)=>priorities.get(b.id)-priorities.get(a.id)||a.sequence-b.sequence);
-  if(!candidates.length)return null;const t=candidates[0],g=this.store.get('goal',t.goalId);
-  if(g.manifest.providerPolicy)this.verifyWorkerBinding(g,t);
-  t.startedAt??=this.now();t.deadline??=Math.min(g.deadline,t.startedAt+t.spec.limits.seconds*1000);t.owner=owner;t.status='running';t.yieldRequested=false;
-  delete t.interruptedOwner;
-  if(lease)t.ownerLease=lease.generation;else delete t.ownerLease;
-  this.store.put('task',t);this.learning.pin(t.id);this.emit('task.claimed',t.goalId,t.id,{owner});return this.getTask(t.id);
+  for(const t of candidates){
+   const g=this.store.get('goal',t.goalId);
+   if(g.manifest.providerPolicy){
+    try{this.verifyWorkerBinding(g,t);}catch(error){
+     this.settleTask(t,'blocked','Approved API worker binding cannot be used: '+String(error?.message??error).slice(0,500)+'. Restore the approved provider configuration, or prepare and approve a new goal with the current catalog.');
+     continue;
+    }
+   }
+   t.startedAt??=this.now();t.deadline??=Math.min(g.deadline,t.startedAt+t.spec.limits.seconds*1000);t.owner=owner;t.status='running';t.yieldRequested=false;
+   delete t.interruptedOwner;
+   if(lease)t.ownerLease=lease.generation;else delete t.ownerLease;
+   this.store.put('task',t);this.learning.pin(t.id);this.emit('task.claimed',t.goalId,t.id,{owner});return this.getTask(t.id);
+  }
+  return null;
  });}
  owned(id,owner){
   const t=this.store.get('task',id);

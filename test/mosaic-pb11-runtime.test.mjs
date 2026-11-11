@@ -73,7 +73,7 @@ async function fixture(t, profiles, {beta = true} = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'mosaic-pb11-runtime-'));
   const registry = registryFor(profiles), opened = [], children = [];
   let now = clock, sequence = 0;
-  const open = () => { const c = new Coordinator({root: path.join(root, 'state'), now: () => now, beta, providerRegistry: registry}); opened.push(c); return c; };
+  const open = (providerRegistry = registry) => { const c = new Coordinator({root: path.join(root, 'state'), now: () => now, beta, providerRegistry}); opened.push(c); return c; };
   t.after(async () => {
     for (const {child, closed} of children) { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); await closed; }
     for (const c of opened) c.close(); await rm(root, {recursive: true, force: true});
@@ -312,4 +312,58 @@ for (const point of ['response-saved', 'request-inflight']) test(`owned-child re
     await new Worker({c, owner: 'restart-owner', config}).tick(); assert.equal(c.getTask(task.id).status, 'uncertain');
   }
   assert.equal(c.store.request(task.id, 'consult-1').id, original.id); assert.equal(c.getTask(task.id).spent.model, 1); assert.equal(a.posts().length, 1); assertPrivate(c);
+});
+
+
+function prepareCurrentConsult(c, profiles, submissionId) {
+  const goal = c.prepareGoal({submissionId, objective: 'Run separately approved current-profile work', acceptance: ['Bound healthy answer'],
+    mode: 'collaborative', environment: 'fixture', providerPolicy: policyFor(c.providerRegistry, profiles)}, 'prepare-' + submissionId);
+  c.activateGoal({goalId: goal.id, hash: goal.hash}, 'activate-' + submissionId);
+  const task = c.submitTask({goalId: goal.id, submissionId: 'task-' + submissionId, kind: 'consult',
+    objective: 'Use only the separately approved current worker', acceptance: ['Bound healthy answer']}, 'submit-' + submissionId);
+  return {goal, task};
+}
+
+test('reopened stale queued binding is blocked once while separately approved current work runs', async t => {
+  const a = await endpoint(t, 'a'), b = await endpoint(t, 'b'), f = await fixture(t, [profile('a', a.baseUrl)]);
+  const stale = await f.prepare(); f.c.close();
+  const revised = profile('a', b.baseUrl, {revision: 'revision-2', model: 'alias-b', credentialRef: 'credential-b'});
+  const c = f.open(registryFor([revised])), healthy = prepareCurrentConsult(c, [revised], 'healthy-current');
+  const worker = new Worker({c, config});
+  for (let n = 0; n < 3; n++) await worker.tick();
+  const blocked = c.getTask(stale.task.id), completed = c.getTask(healthy.task.id);
+  assert.equal(blocked.status, 'blocked'); assert.match(blocked.reason, /approved.*binding|provider.*configuration/i);
+  assert.deepEqual(blocked.providerBinding, stale.task.providerBinding); assert.equal(blocked.spent.model, 0);
+  assert.equal(blocked.startedAt, stale.task.startedAt); assert.equal(blocked.deadline, stale.task.deadline); assert.equal(blocked.owner, null);
+  assert.equal(c.getGoal(stale.goal.id).deadline, stale.goal.deadline);
+  assert.equal(a.calls.length, 0); assert.equal(b.posts().length, 1); assert.equal(completed.status, 'awaiting_review'); assert.equal(completed.result.content, 'answer-b');
+  assert.deepEqual(completed.providerBinding, healthy.task.providerBinding); assert.equal(completed.spent.model, 1);
+  assert.equal(c.store.db.prepare('SELECT COUNT(*) AS n FROM requests').get().n, 1);
+  const events = c.store.events(0, 1000);
+  assert.equal(events.filter(e => e.type === 'task.blocked' && e.task_id === stale.task.id).length, 1);
+  assert.equal(events.filter(e => e.type === 'service.error').length, 0); assertPrivate(c);
+});
+
+test('actual uncertain in-flight old binding keeps the slot when a healthy revised goal is queued', async t => {
+  const a = await endpoint(t, 'a', {holdPost: true}), b = await endpoint(t, 'b');
+  const f = await fixture(t, [profile('a', a.baseUrl)]), stale = await f.prepare(); f.c.close();
+  const child = spawn(process.execPath, [childDriver, JSON.stringify({root: path.join(f.root, 'state'), now: clock, profiles: f.profiles, point: 'request-inflight'})],
+    {env: {PATH: process.env.PATH, TMPDIR: f.root}, stdio: ['ignore', 'ignore', 'pipe', 'pipe']});
+  const closed = once(child, 'close'); f.children.push({child, closed});
+  const marker = await childMarker(child); assert.equal(marker.pid, child.pid);
+  await Promise.race([a.posted.promise, closed.then(() => assert.fail('Owned child exited before the in-flight POST'))]);
+  child.kill('SIGKILL'); assert.deepEqual(await closed, [null, 'SIGKILL']);
+  const revised = profile('a', b.baseUrl, {revision: 'revision-2', model: 'alias-b', credentialRef: 'credential-b'});
+  const c = f.open(registryFor([revised])), owner = 'uncertain-slot-after-restart'; c.acquireWorker(owner);
+  const original = c.getTask(stale.task.id), request = c.store.request(stale.task.id, 'consult-1');
+  assert.equal(original.status, 'uncertain'); assert.equal(request.status, 'reserved'); assert.equal(original.spent.model, 1);
+  assert.throws(() => c.recoverSaved(original.id, owner), /ambiguous|pending/i);
+  const healthy = prepareCurrentConsult(c, [revised], 'healthy-after-uncertain'), worker = new Worker({c, owner, config});
+  for (let n = 0; n < 3; n++) await worker.tick();
+  const held = c.getTask(original.id); assert.equal(held.status, 'uncertain'); assert.deepEqual(held.providerBinding, original.providerBinding);
+  assert.equal(held.deadline, original.deadline); assert.equal(held.spent.model, 1); assert.equal(c.getGoal(stale.goal.id).deadline, stale.goal.deadline);
+  assert.deepEqual(c.store.request(original.id, 'consult-1'), request); assert.equal(c.getTask(healthy.task.id).status, 'queued');
+  assert.equal(c.getTask(healthy.task.id).spent.model, 0); assert.equal(a.posts().length, 1); assert.equal(b.calls.length, 0);
+  assert.equal(c.store.db.prepare('SELECT COUNT(*) AS n FROM requests').get().n, 1);
+  assert.equal(c.store.events(0, 1000).filter(e => ['task.blocked', 'service.error'].includes(e.type)).length, 0); assertPrivate(c);
 });

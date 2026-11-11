@@ -117,6 +117,13 @@ Before claim and model reservation the coordinator checks the current identities
 of all pool members, including members other than the selected default. A changed
 endpoint, model, capability, revision or missing catalog entry blocks progress
 before new request spend. A cached request must carry the exact task binding.
+At claim, an unusable portable binding places that queued or suspended task in
+a durable `blocked` state with a reason explaining how to restore its approved
+configuration or prepare a new goal. The task keeps its original pin, spending
+and deadlines; other eligible approved work can then run sequentially. An active
+or uncertain in-flight request still holds its slot and prevents another task
+from dispatching. Catalog changes never release that held inference or select
+another pool member for it.
 Portable autonomous research and learning are unsupported because the worker
 profile task kinds currently cover only coding and consult. Beta research stays
 parked.

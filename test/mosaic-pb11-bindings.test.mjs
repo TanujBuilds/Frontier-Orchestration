@@ -126,8 +126,16 @@ for(const phase of ['claim','reservation'])test('changed catalog identity blocks
  if(phase==='reservation')f.c.claimNext('owner');
  // The changed pool member is not the default: every approved pool member must still match.
  f.reopen([a,{...b,revision:'r2',model:'changed-model'}]);const before=counts(f.c);
- assert.throws(()=>phase==='claim'?f.c.claimNext('owner'):f.c.reserve(submitted.id,{key:'consult-1',kind:'model'},'owner'),/provider|profile|catalog|approved|revision/i);
- assert.deepEqual(counts(f.c),before);assert.equal(f.c.getTask(submitted.id).spent.model,0);
+ if(phase==='claim'){
+  assert.equal(f.c.claimNext('owner'),null);const blocked=f.c.getTask(submitted.id);
+  assert.equal(blocked.status,'blocked');assert.match(blocked.reason,/approved.*binding|provider.*configuration/i);
+  assert.deepEqual(blocked.providerBinding,submitted.providerBinding);assert.equal(blocked.startedAt,null);assert.equal(blocked.deadline,null);assert.equal(blocked.owner,null);
+  const after=counts(f.c),revision=f.c.store.revision();assert.equal(f.c.claimNext('owner'),null);assert.deepEqual(counts(f.c),after);assert.equal(f.c.store.revision(),revision);
+  assert.equal(f.c.store.events().filter(event=>event.type==='task.blocked'&&event.task_id===submitted.id).length,1);
+ }else{
+  assert.throws(()=>f.c.reserve(submitted.id,{key:'consult-1',kind:'model'},'owner'),/provider|profile|catalog|approved|revision/i);assert.deepEqual(counts(f.c),before);
+ }
+ assert.equal(f.c.getTask(submitted.id).spent.model,0);
 });
 
 test('started tasks cannot rebind to the default from an explicitly approved policy revision',async t=>{
