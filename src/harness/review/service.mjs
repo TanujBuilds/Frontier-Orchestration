@@ -4,6 +4,7 @@ import {normalizeReviewPolicy,normalizeVerdict,assertReviewMode,assertBinding,bi
 import {candidateEvidence,reviewRubric,savedCandidateIdentity} from './evidence.mjs';
 
 const apiAuthority=Symbol('API review submission');
+function apiError(reasonCode,message){const error=Error(message);error.reviewReasonCode=reasonCode;return error;}
 const commandReplay=(c,key,input)=>{
  identifier(key,'idempotencyKey');const saved=c.store.db.prepare('SELECT hash,result FROM commands WHERE key=?').get(key);
  if(!saved)return null;if(saved.hash!==digest(input))throw Error('Idempotency key conflict');return {result:JSON.parse(saved.result)};
@@ -51,8 +52,14 @@ export class ReviewService {
   return this.c.store.command(key,command,()=>{
    const t=this.c.getTask(input.taskId),{g}=policyFor(this.c,t);
    if(digest(savedCandidateIdentity(t))!==digest(savedCandidateIdentity(context.t))||g.hash!==context.g.hash)throw Error('Candidate changed before review reservation');
-   const existing=this.c.store.all('review_ticket').find(r=>r.taskId===t.id&&r.status==='reserved');
-   if(existing)throw Error('Review ticket already reserved; reconnect to the saved ticket');
+   for(const existing of this.c.store.all('review_ticket').filter(r=>r.taskId===t.id&&r.status==='reserved')){
+    if(existing.reviewer.source!=='host'||!bindingFields.some(field=>existing.binding[field]!==binding[field]))throw Error('Review ticket already reserved; reconnect to the saved ticket');
+    // Only a host ticket with a definitively superseded binding can retire.
+    // Retain the original count, reviewer, request identity and expiry; API
+    // reservations never use this recovery, regardless of remote outcome.
+    existing.status='stale';existing.reasonCode='binding_superseded';existing.staleAt=this.c.now();this.c.store.put('review_ticket',existing);
+    this.c.emit('review.stale',g.id,t.id,{ticketId:existing.id,reasonCode:existing.reasonCode});
+   }
    const originalBudget=Math.min(g.manifest.limits.reviewAgentRuns,...this.c.store.all('goal_history').filter(h=>h.goalId===g.id).map(h=>h.manifest.limits.reviewAgentRuns));
    const spent=this.c.store.all('review_ticket').filter(r=>r.goalId===g.id).length+this.c.store.all('reviewer').filter(r=>r.goalId===g.id).length;
    if(t.reviews>=t.spec.limits.reviews||spent>=originalBudget)throw Error('Original review budget exhausted');
@@ -73,6 +80,7 @@ export class ReviewService {
   const context=await this.context(ticket.taskId,{includeFiles:false});assertBinding(context.binding,ticket.binding);
   return this.c.store.command(key,command,()=>{
    const current=this.c.store.get('review_ticket',ticket.id);if(current.status==='completed'){if(current.verdictHash!==verdictHash)throw Error('Conflicting review submission replay');return current.result;}
+   if(current.status!=='reserved')throw Error('Review ticket is not available; original reservation remains spent');
    const t=this.c.getTask(ticket.taskId),{g,policy}=policyFor(this.c,t);
    if(g.hash!==ticket.binding.goalHash||g.version!==ticket.binding.goalVersion||digest(savedCandidateIdentity(t))!==digest(ticket.savedCandidateIdentity))throw Error('Candidate or approval changed before verdict');
    if(this.c.now()>=ticket.expiresAt)throw Error('Original review ticket expiry reached');
@@ -85,6 +93,7 @@ export class ReviewService {
     t.status=exhausted?'blocked':t.native?.layout==='candidate_v1'?'codex_ready':'queued';t.checkpoint={...t.checkpoint,phase:'attempt'};
     if(t.native?.layout==='candidate_v1')t.native.status='revision_requested';if(exhausted)t.reason='Original review, attempt or request budget exhausted';
    }
+   if(t.reviewWait?.ticketId===ticket.id)delete t.reviewWait;
    this.c.store.put('task',t);current.status='completed';current.verdictHash=verdictHash;current.verdict=verdict;current.completedAt=this.c.now();current.result=this.c.getTask(t.id);this.c.store.put('review_ticket',current);
    this.c.emit('task.reviewed',g.id,t.id,{decision:verdict.decision,source:policy.source,ticketId:ticket.id});this.c.requestUrgentYield();return current.result;
   });
@@ -103,13 +112,39 @@ export class ReviewService {
   const {signal,...data}=input;identifier(key,'idempotencyKey');
   if(!this.#runs.has(key)&&this.#runs.size)throw Error('Another API review is active; wait without spending');
   if(this.#runs.has(key)){const running=this.#runs.get(key);if(running.hash!==digest(data))throw Error('Idempotency key conflict');return running.promise;}
-  const promise=this.#runApi(data,key,signal);this.#runs.set(key,{hash:digest(data),promise});try{return await promise;}catch(error){const request=this.c.store.request(data.taskId,`api-review-${digest(key)}`);if(request){const t=this.c.getTask(data.taskId);t.reviewWait={source:'api',ticketId:request.ticketId,requestId:request.id,requestOutcome:request.requestOutcome,reason:'API review needs operator attention; saved requests remain spent and no fallback is dispatched'};this.c.store.put('task',t);this.c.emit('review.waiting',t.goalId,t.id,t.reviewWait);}throw error;}finally{this.#runs.delete(key);}
+  const promise=this.#runApi(data,key,signal);this.#runs.set(key,{hash:digest(data),promise});try{return await promise;}catch(error){const request=this.c.store.request(data.taskId,`api-review-${digest(key)}`);if(request)this.c.store.tx(()=>{
+   const t=this.c.getTask(data.taskId),reasonCode=request.status==='reserved'?'request_uncertain':request.status==='failed'?'request_failed':error.reviewReasonCode??'response_rejected';
+   t.reviewWait={source:'api',ticketId:request.ticketId,requestId:request.id,requestOutcome:request.requestOutcome,reasonCode,recovery:reasonCode==='controls_active'?'after_resume':'operator',reason:reasonCode==='controls_active'?'Saved API response awaits supported resume; original request remains spent':'API review needs operator attention; saved requests remain spent and no fallback is dispatched'};
+   this.c.store.put('task',t);this.c.emit('review.waiting',t.goalId,t.id,t.reviewWait);
+  });throw error;}finally{this.#runs.delete(key);}
+ }
+ async #submitApiResponse(input,key,request){
+  const c=this.c,ticket=c.store.get('review_ticket',request.ticketId),t=c.getTask(input.taskId),g=c.store.get('goal',t.goalId);
+  if(request.status!=='completed'||request.requestOutcome!=='completed'||request.runKey!==key||request.inputHash!==digest(input)||request.task_id!==t.id||request.kind!=='apiReview'||request.id!==ticket.requestId||ticket.taskId!==t.id||ticket.reviewer.source!=='api')throw apiError('response_mismatch','Saved API review request/ticket binding changed; original request remains spent');
+  assertBinding(input,ticket.binding);
+  let verdict;try{if(typeof request.result?.content!=='string')throw Error('Missing response');verdict=normalizeVerdict(JSON.parse(request.result.content),t.spec.permissions);}catch{throw apiError('invalid_response','Invalid API review JSON or verdict; completed request remains spent');}
+  // An already submitted verdict is immutable history. Preserve its receipt
+  // replay without using it to submit under a later approval or task version.
+  if(ticket.status==='completed')return this.submit({...input,ticketId:ticket.id,verdict},`api-submit-${digest(key)}`,apiAuthority);
+  const policy=normalizeReviewPolicy(g.manifest.reviewPolicy);assertReviewMode(g.manifest.mode,policy);
+  if(policy?.source!=='api'||g.hash!==digest(g.manifest)||t.hash!==digest(t.spec)||g.hash!==input.goalHash||g.version!==input.goalVersion||t.goalVersion!==g.version||digest(policy)!==input.reviewPolicyHash||g.manifest.reviewPolicyHash!==input.reviewPolicyHash||digest(savedCandidateIdentity(t))!==digest(ticket.savedCandidateIdentity))throw apiError('response_rejected','Saved API review has stale candidate or approval bindings');
+  const binding={version:1,providerId:policy.reviewer.id,revision:policy.reviewer.revision,profileHash:digest(policy.reviewer),policyHash:input.reviewPolicyHash};
+  if(digest(binding)!==digest(request.reviewerBinding)||ticket.reviewer.providerId!==binding.providerId||ticket.reviewer.revision!==binding.revision||ticket.reviewer.profileHash!==binding.profileHash||input.goalId!==g.id||input.generation!==(t.native?.generation??t.checkpoint?.attempt??1)||input.rubricHash!==digest(reviewRubric(g,t))||input.expiresAt!==Math.min(g.deadline,t.deadline??g.deadline))throw apiError('response_mismatch','Saved API review has stale reviewer or task bindings');
+  try{return await this.submit({...input,ticketId:ticket.id,verdict},`api-submit-${digest(key)}`,apiAuthority);}
+  catch(error){
+   // Controls may interrupt submission after the billed response is durable.
+   // Classify only an unchanged, unexpired reservation under supported controls;
+   // all other failures are terminal automatic waits. Replay rechecks evidence.
+   const current=c.getTask(t.id),goal=c.store.get('goal',g.id),waiting=current.status==='awaiting_review'||['paused','stopped'].includes(current.status)&&current.controlReturnStatus==='awaiting_review';
+   if(ticket.status==='reserved'&&c.now()<ticket.expiresAt&&goal.hash===g.hash&&goal.version===g.version&&digest(savedCandidateIdentity(current))===digest(ticket.savedCandidateIdentity)&&waiting&&(['paused','stopped'].includes(goal.status)||current.pauseRequested||current.stopRequested))error.reviewReasonCode='controls_active';
+   throw error;
+  }
  }
  async #runApi(input,key,signal){
   keys(input,bindingFields,'API review');
   const c=this.c,requestKey=`api-review-${digest(key)}`,old=c.store.request(input.taskId,requestKey);
   if(old&&old.inputHash!==digest(input))throw Error('API review idempotency key conflict');
-  if(old?.status==='completed')return this.submit({...input,ticketId:old.ticketId,verdict:JSON.parse(old.result.content)},`api-submit-${digest(key)}`,apiAuthority);
+  if(old?.status==='completed')return this.#submitApiResponse(input,key,old);
   if(old)throw Error('Interrupted or failed API review remains spent; no blind retry');
   if(signal?.aborted)throw Error('API review cancelled before dispatch');
   const context=await this.context(input.taskId);assertBinding(input,context.binding);
@@ -142,7 +177,6 @@ export class ReviewService {
   // Preserve the response before validating it or checking whether approval was
   // revoked during the await. A late result never revives a stale candidate.
 
-  let verdict;try{verdict=JSON.parse(result.content);}catch{throw Error('Invalid API review JSON; completed request remains spent');}
-  return this.submit({...input,ticketId:reservation.ticketId,verdict},`api-submit-${digest(key)}`,apiAuthority);
+  return this.#submitApiResponse(input,key,c.store.request(input.taskId,requestKey));
  }
 }
