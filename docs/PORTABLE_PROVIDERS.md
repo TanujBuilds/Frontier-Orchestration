@@ -144,6 +144,12 @@ for that profile is in flight. Rotation never resets request spend or authorizes
 replaying an uncertain result. Unknown request outcomes remain held for existing
 recovery controls.
 
+An asynchronous credential resolver receives an optional second argument
+`{signal}` when the caller supplied an operation signal. Mosaic stops waiting
+when that signal aborts, even if the resolver cannot cancel its own lookup.
+The cancelled invocation is recorded as not dispatched; a late credential
+result cannot start an HTTP request. Already-aborted calls do not read credentials.
+
 The schema 1 adapter is an explicit conversion of private configuration. It does
 not rewrite saved goals or normalize historical worker objects into a different
 shape. Legacy approval manifests, historical input schemas, capability snapshots

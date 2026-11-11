@@ -8,6 +8,23 @@ const hashPattern=/^[a-f0-9]{64}$/;
 const key=(id,revision)=>JSON.stringify([id,revision]);
 const fingerprint=value=>createHash('sha256').update(value??'').digest('hex');
 function failure(message){const error=Error(message);error.requestOutcome='not_dispatched';return error;}
+async function resolveCredential(resolver,reference,signal){
+ if(!signal)return resolver(reference);
+ if(signal.aborted)throw failure('Provider call interrupted before credential resolution');
+ let abort;
+ const interrupted=new Promise((_,reject)=>{
+  abort=()=>reject(failure('Provider call interrupted during credential resolution'));
+  signal.addEventListener('abort',abort,{once:true});
+ });
+ try{
+  // Race locally even when a resolver cannot cancel its own lookup. A late
+  // credential must never resume this invocation or reach the HTTP transport.
+  return await Promise.race([Promise.resolve().then(()=>{
+   if(signal.aborted)throw failure('Provider call interrupted before credential resolution');
+   return resolver(reference,{signal});
+  }),interrupted]);
+ }finally{signal.removeEventListener('abort',abort);}
+}
 function adapterOptions(profile){
  return {baseUrl:profile.baseUrl,model:profile.model,openAICompatible:true,streaming:profile.streaming,
   capabilities:{protocol:profile.capabilities.workerProtocol,transports:profile.capabilities.transports,
@@ -78,11 +95,13 @@ export function ProviderRegistry({profiles,credentialResolver}={}){
    const cacheKey=canonical(binding);if(cache.has(cacheKey))return cache.get(cacheKey);
    const profileKey=key(profile.id,profile.revision);
    const invoke=async(method,args)=>{
+    const signal=method==='complete'?args[1]?.signal:method==='execute'?args[0]?.signal:args[0];
     let apiKey;
     try{
+     if(signal?.aborted)throw Error();
      if(profile.credentialRef!==null){
       if(!credentialResolver)throw Error();
-      apiKey=await credentialResolver(profile.credentialRef);
+      apiKey=await resolveCredential(credentialResolver,profile.credentialRef,signal);
       if(typeof apiKey!=='string'||!apiKey||apiKey.length>2048||/[^\x21-\x7e]/.test(apiKey))throw Error();
      }
     }catch{throw failure('Provider credentials are unavailable or invalid');}
