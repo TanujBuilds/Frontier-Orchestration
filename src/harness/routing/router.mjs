@@ -1,6 +1,47 @@
-import {digest} from '../contracts.mjs';
+import {digest,identifier} from '../contracts.mjs';
 import {normalizeProviderPolicy,profileIdentity} from '../providers/contracts.mjs';
 import {normalizeRoutingPolicy,normalizeTaskRouting} from './contracts.mjs';
+
+function subset(value,allowed){
+ return Array.isArray(value)&&value.length>0&&value.length<=allowed.length&&
+  Array.from(value).every(item=>allowed.includes(item))&&new Set(value).size===value.length;
+}
+function plain(value){
+ return value&&typeof value==='object'&&!Array.isArray(value)&&
+  [Object.prototype,null].includes(Object.getPrototypeOf(value));
+}
+function workerEligibility(manifest,spec){
+ const unknown={code:'mode_eligibility_unknown',explanation:'Trusted pinned mode, actor and task capability metadata are required for worker eligibility.'};
+ const mode=manifest.mode,fields=['id','version','planner','actors','review','capabilities'];
+ try{
+  // Match Registry.registerMode's contract, including custom registered modes.
+  // Approval integrity is checked by the coordinator; names imply no authority.
+  if(!plain(mode)||Reflect.ownKeys(mode).length!==fields.length||
+     fields.some(field=>!Object.hasOwn(mode,field))||
+     Reflect.ownKeys(mode).some(field=>typeof field!=='string'||!fields.includes(field)))return unknown;
+  identifier(mode.id,'pinned mode id');
+  if(!Number.isSafeInteger(mode.version)||mode.version<1||mode.version>10000||
+     !subset(mode.actors,['codex','deepseek'])||!mode.actors.includes(mode.planner)||
+     !['operator','checks','legacy'].includes(mode.review)||
+     !subset(mode.capabilities,['coding','research','consult','learning'])||
+     mode.review==='operator'&&!mode.actors.includes('codex')||
+     mode.review==='legacy'&&(mode.actors.join()!=='deepseek'||mode.capabilities.join()!=='coding')||
+     !['codex','deepseek'].includes(spec.actor))return unknown;
+  if(!mode.actors.includes('deepseek'))return {code:'mode_worker_prohibited',explanation:'The pinned mode does not permit API worker execution.'};
+  // These are historical execution-channel aliases, never model/provider brands.
+  if(spec.actor!=='deepseek'||!mode.actors.includes(spec.actor))return {code:'task_actor_prohibited',explanation:'This task uses host execution rather than the permitted worker channel.'};
+  if(!mode.capabilities.includes(spec.kind))return {code:'mode_capability_prohibited',explanation:'The pinned mode does not permit '+spec.kind+' tasks.'};
+  if(!Array.isArray(manifest.capabilities)||manifest.capabilities.length>100)return unknown;
+  const pinned=Array.from(manifest.capabilities).filter(capability=>capability?.id===spec.kind);
+  if(pinned.length!==1)return unknown;
+  const capability=pinned[0];
+  if(!plain(capability)||!['id','version','actors','handler'].every(field=>Object.hasOwn(capability,field))||
+     !Number.isSafeInteger(capability.version)||capability.version<1||capability.version>10000||
+     capability.handler!==spec.kind||!subset(capability.actors,['codex','deepseek']))return unknown;
+  if(!capability.actors.includes(spec.actor))return {code:'mode_capability_prohibited',explanation:'The pinned task capability does not permit the worker execution actor.'};
+  return null;
+ }catch{return unknown;}
+}
 
 function observationFor(availability,profile,profileHash){
  const rows=availability?.providers;
@@ -61,6 +102,8 @@ export function selectRoute({task,goal,availability}={}){
   return result('ineligible','worker_role_unsupported','The chosen profile does not support the worker transport and role.');
  if(!['coding','consult'].includes(spec?.kind))
   return result('ineligible','task_kind_unsupported','Routing supports only coding and consult tasks.');
+ const eligibility=workerEligibility(manifest,spec);
+ if(eligibility)return result('ineligible',eligibility.code,eligibility.explanation);
  // A proposer may add requirements, but can never erase the actual task kind.
  const required=new Set([spec.kind,...routing.requiredCapabilities]);
  const unsupported=[...required].filter(kind=>!profile.capabilities.taskKinds.includes(kind));

@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {canonical,digest} from '../src/harness/contracts.mjs';
+import {canonical,digest,Registry} from '../src/harness/contracts.mjs';
 import {normalizeProviderPolicy,profileIdentity} from '../src/harness/providers/contracts.mjs';
 import {normalizeRoutingPolicy,normalizeTaskRouting} from '../src/harness/routing/contracts.mjs';
 import {selectRoute} from '../src/harness/routing/router.mjs';
 
 const observedAt='2026-11-11T20:00:00.000Z';
+const registry=new Registry();
 const profile=(id,overrides={})=>profileIdentity({schema:1,id,revision:'revision-1',displayName:'Dummy '+id,
  transport:'openai-chat',baseUrl:'https://'+id.toLowerCase()+'.invalid/v1',model:'fixture-model',roles:['worker'],
  capabilities:{workerProtocol:'mosaic-structured-v1',transports:['json'],modelDiscovery:'manual',taskKinds:['coding','consult']},
@@ -13,18 +14,21 @@ const profile=(id,overrides={})=>profileIdentity({schema:1,id,revision:'revision
  streaming:false,...overrides});
 function fixture({workers=[profile('workerA'),profile('workerB')],rules=[
  {id:'backend-first',category:'backend',providerId:'workerA'},
- {id:'frontend-first',category:'frontend',providerId:'workerB'}],defaultWorkerId='workerA'}={}){
+ {id:'frontend-first',category:'frontend',providerId:'workerB'}],defaultWorkerId='workerA',
+ modeId='deepseek_only',modeVersion=1}={}){
  const providerPolicy=normalizeProviderPolicy({version:1,workers,plannerWorkerId:workers[0].id,
   defaultWorkerId:workers[0].id,capacityGroups:[{id:'fixture-service',limit:1}]});
  const routingPolicy={version:1,rules,defaultWorkerId};
- return {providerPolicy,providerPolicyHash:digest(providerPolicy),routingPolicy,routingPolicyHash:digest(routingPolicy)};
+ const mode=registry.mode(modeId,modeVersion),capabilities=registry.snapshot().capabilities
+  .filter(capability=>mode.capabilities.includes(capability.id)&&capability.version===1);
+ return {mode,capabilities,providerPolicy,providerPolicyHash:digest(providerPolicy),routingPolicy,routingPolicyHash:digest(routingPolicy)};
 }
 function availability(goal,status='available',remainingModelCalls=5){
  return {providers:goal.providerPolicy.workers.map(worker=>({providerId:worker.id,revision:worker.revision,
   profileHash:digest(worker),status,observedAt,provenance:'fixture bounded availability probe'})),
   budget:{remainingModelCalls}};
 }
-const task=(routing={})=>({kind:'coding',routing:{version:1,...routing}});
+const task=(routing={})=>({kind:'coding',actor:'deepseek',routing:{version:1,...routing}});
 const choose=(goal,assignment=task({category:'backend'}),snapshot=availability(goal))=>
  selectRoute({task:assignment,goal,availability:snapshot});
 function freeze(value){
@@ -113,7 +117,7 @@ test('unmatched category and omitted new routing input use the routing default i
  const route=choose(goal,task({category:'docs'}));
  assert.equal(route.binding.providerId,'workerB');assert.equal(route.reasonCode,'selected_by_default');
  assert.equal(route.matchedRule,null);
- assert.equal(choose(goal,{kind:'coding'}).binding.providerId,'workerB');
+ assert.equal(choose(goal,{kind:'coding',actor:'deepseek'}).binding.providerId,'workerB');
  const legacy={providerPolicy:goal.providerPolicy,providerPolicyHash:goal.providerPolicyHash};
  assert.equal(choose(legacy).reasonCode,'routing_policy_missing');
  assert.equal(Object.hasOwn(legacy,'routingPolicy'),false);
@@ -131,7 +135,7 @@ test('unknown categories reject before selecting and corrupted approved policy h
 test('explicitly invalid routing metadata cannot use the absent-input default',()=>{
  const goal=fixture();
  for(const routing of [null,undefined,false,{},[]]){
-  const route=choose(goal,{kind:'coding',routing});
+  const route=choose(goal,{kind:'coding',actor:'deepseek',routing});
   assert.equal(route.status,'ineligible');assert.equal(route.reasonCode,'task_routing_invalid');
  }
 });
@@ -147,9 +151,81 @@ test('actual coding kind is mandatory even when requiredCapabilities is empty',(
 test('actual consult kind and all additional required capabilities are checked',()=>{
  const goal=fixture({workers:[profile('workerA',{capabilities:{workerProtocol:'mosaic-structured-v1',
   transports:['json'],modelDiscovery:'manual',taskKinds:['coding']}}),profile('workerB')]});
- assert.equal(choose(goal,{kind:'consult',routing:{version:1,requiredCapabilities:[]}}).reasonCode,'capability_unsupported');
+ assert.equal(choose(goal,{kind:'consult',actor:'deepseek',routing:{version:1,requiredCapabilities:[]}}).reasonCode,'capability_unsupported');
  assert.equal(choose(goal,task({requiredCapabilities:['consult']})).reasonCode,'capability_unsupported');
- assert.equal(choose(goal,{kind:'research',routing:{version:1}}).reasonCode,'task_kind_unsupported');
+ assert.equal(choose(goal,{kind:'research',actor:'deepseek',routing:{version:1}}).reasonCode,'task_kind_unsupported');
+});
+
+test('permitted worker tasks retain selected and waiting bindings under their canonical pinned modes',()=>{
+ for(const [modeId,modeVersion,kinds]of [['collaborative',1,['coding','consult']],
+  ['deepseek_only',1,['coding','consult']],['overnight_review',1,['coding']],['overnight_review',2,['coding']]]){
+  const goal=fixture({modeId,modeVersion});
+  for(const kind of kinds){
+   const assignment={...task(),kind};
+   assert.equal(choose(goal,assignment).status,'selected',modeId+' '+kind);
+   const waiting=selectRoute({task:assignment,goal});
+   assert.equal(waiting.status,'waiting');assert.equal(waiting.binding.providerId,'workerA');
+  }
+ }
+});
+
+test('host-only modes and host execution tasks reject API worker routing even before health is known',()=>{
+ for(const [modeId,actor,reasonCode]of [['codex_only','codex','mode_worker_prohibited'],
+  ['codex_only','deepseek','mode_worker_prohibited'],['collaborative','codex','task_actor_prohibited']]){
+  const goal=fixture({modeId}),assignment={...task({category:'backend'}),actor};
+  for(const snapshot of [availability(goal),undefined]){
+   const route=selectRoute({task:assignment,goal,availability:snapshot});
+   assert.equal(route.status,'ineligible');assert.equal(route.reasonCode,reasonCode);
+   assert.equal(route.binding,null);assert.equal(route.matchedRule.id,'backend-first');
+  }
+ }
+});
+
+test('coding-only overnight mode rejects consult without falling through or returning a probeable binding',()=>{
+ const goal=fixture({modeId:'overnight_review'}),assignment={...task({preferredProviderId:'workerB'}),kind:'consult'};
+ for(const snapshot of [availability(goal),undefined]){
+  const route=selectRoute({task:assignment,goal,availability:snapshot});
+  assert.equal(route.status,'ineligible');assert.equal(route.reasonCode,'mode_capability_prohibited');
+  assert.equal(route.binding,null);assert.equal(route.matchedRule,null);assert.match(route.explanation,/explicit/i);
+ }
+});
+
+test('approved registered custom mode snapshots preserve worker authority without using a built-in mode name',()=>{
+ registry.registerMode({id:'custom-worker-policy',version:7,planner:'codex',actors:['codex','deepseek'],
+  review:'operator',capabilities:['coding']});
+ const goal=fixture({modeId:'custom-worker-policy',modeVersion:7});
+ assert.equal(choose(goal).status,'selected');
+ assert.equal(choose(goal,{...task(),actor:'codex'}).reasonCode,'task_actor_prohibited');
+ assert.equal(choose(goal,{...task(),kind:'consult'}).reasonCode,'mode_capability_prohibited');
+});
+
+test('a pinned capability excluding the worker actor rejects a mode-permitted worker task',()=>{
+ const goal=fixture();goal.capabilities.find(capability=>capability.id==='coding').actors=['codex'];
+ const route=choose(goal);
+ assert.equal(route.status,'ineligible');assert.equal(route.reasonCode,'mode_capability_prohibited');
+ assert.equal(route.binding,null);
+});
+
+test('missing or untrusted pinned mode, actor and capability metadata cannot imply worker authority',()=>{
+ const cases=[
+  goal=>{delete goal.mode;},goal=>{goal.mode=null;},goal=>{goal.mode={id:'deepseek_only'};},
+  goal=>{goal.mode.id='invalid/id';},goal=>{goal.mode.version=0;},
+  goal=>{goal.mode.actors=['api-worker'];},goal=>{goal.mode.review='operator';},
+  goal=>{delete goal.capabilities;},goal=>{goal.capabilities=[];},
+  goal=>{goal.capabilities.find(capability=>capability.id==='coding').actors=[];},
+  goal=>{goal.capabilities.find(capability=>capability.id==='coding').version=0;}
+ ];
+ for(const change of cases){
+  const goal=fixture();change(goal);
+  const route=choose(goal);
+  assert.equal(route.status,'ineligible');assert.equal(route.reasonCode,'mode_eligibility_unknown');
+  assert.equal(route.binding,null);
+ }
+ for(const actor of [undefined,null,'api-worker']){
+  const goal=fixture(),route=choose(goal,{...task(),actor});
+  assert.equal(route.status,'ineligible');assert.equal(route.reasonCode,'mode_eligibility_unknown');
+  assert.equal(route.binding,null);
+ }
 });
 
 test('unknown context cannot satisfy an explicit minimum but does not invent a minimum for other tasks',()=>{

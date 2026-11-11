@@ -45,6 +45,14 @@ scoring. `requiredCapabilities` may add `coding` or `consult`; the actual
 `task.kind` is always required even when that list is empty. Routing supports
 only those two kinds. A design category does not enable image input.
 
+Mode eligibility is also mandatory. The task must use the worker execution
+actor and its approved pinned mode and task capability must permit that actor
+and kind. Host tasks retain host execution, and a host-only mode cannot acquire
+API-worker authority through routing. Coding-only overnight work cannot route
+a consult task. Existing protocol aliases `deepseek` and `codex` identify the
+worker and host execution channels respectively; they say nothing about the
+configured provider's actual model or brand.
+
 An unknown context ceiling cannot satisfy an explicit minimum. A configured
 context ceiling equal to the minimum is sufficient. An explicit output
 requirement cannot exceed the profile's configured output ceiling. Unknown
@@ -67,6 +75,16 @@ its canonical `providerPolicy` and matching `providerPolicyHash`. It must also
 supply `routingPolicy`; `routingPolicyHash`, when supplied, must match. A missing
 task routing field defaults only within that routing-enabled goal. Explicit
 null, undefined, or malformed task routing metadata rejects.
+
+`goal.mode` and `goal.capabilities` are trusted approved snapshots, and
+`task.actor` must be explicit after normal task normalization. Mode validation
+uses the same actors, planner, review, kinds, identifiers, and version bounds as
+`Registry.registerMode`; an approved registered custom mode remains supported.
+The matching pinned task capability must include its ID, positive version,
+matching handler, and permitted actors. Missing or malformed authority metadata
+is unknown eligibility and returns no binding. The selector does not infer
+actor defaults or authenticate approval provenance itself: the coordinator
+verifies the saved goal approval/hash and supplies those trusted snapshots.
 
 Availability is a caller-supplied observation snapshot:
 
@@ -154,6 +172,10 @@ their approved planner binding; host-planned modes keep host planning.
 | `provider_not_approved` | ineligible | Explicit chosen worker is outside the approved pool. |
 | `worker_role_unsupported` | ineligible | Selected profile cannot act as a supported worker. |
 | `task_kind_unsupported` | ineligible | Actual task kind is outside coding/consult. |
+| `mode_eligibility_unknown` | ineligible | Required pinned mode, actor, or task capability metadata is missing or malformed. |
+| `mode_worker_prohibited` | ineligible | Pinned mode permits no API-worker execution. |
+| `task_actor_prohibited` | ineligible | Task uses host execution rather than the permitted worker channel. |
+| `mode_capability_prohibited` | ineligible | Pinned mode or task capability prohibits the actual worker kind/actor. |
 | `capability_unsupported` | ineligible | Worker lacks the actual kind or an additional requirement. |
 | `context_limit_unknown` | ineligible | Unknown context capacity cannot satisfy an explicit minimum. |
 | `context_limit_insufficient` | ineligible | Known context capacity is below the minimum. |
