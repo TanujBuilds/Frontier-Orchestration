@@ -1,0 +1,52 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtemp,rm} from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {Coordinator} from '../src/harness/coordinator.mjs';
+import {Dispatcher} from '../src/harness/tools.mjs';
+
+for(const beta of [false,true])test(`host text revision resumes in the host after restart (${beta?'beta':'core'})`,async t=>{
+ const root=await mkdtemp(path.join(os.tmpdir(),'pb12-text-revision-'));
+ let c=new Coordinator({root,beta,selectedHost:'cursor'}),d=new Dispatcher({c,config:{beta}});
+ t.after(async()=>{c.close();await rm(root,{recursive:true,force:true});});
+ const call=(name,input,key)=>d.invoke(name,{...input,idempotencyKey:key});
+ const draft=await call('goal_prepare',{manifest:{submissionId:'goal',mode:'codex_only',environment:'fixture',objective:'Explain the calculation',acceptance:['Show the reasoning']}},'prepare');
+ const goal=await call('goal_activate',{goalId:draft.id,hash:draft.hash},'activate');
+ const task=await call('task_submit',{goalId:goal.id,task:{submissionId:'answer',kind:'consult',actor:'codex',objective:'Explain why the total is 42',acceptance:['Include units']}},'task');
+ await call('native_text_start',{taskId:task.id},'start');
+ const first=await call('native_text_finish',{taskId:task.id,content:'The answer is 42.'},'finish');
+ const {binding}=(await d.invoke('review_inbox',{goalId:goal.id})).items[0];
+ const ticket=await call('review_reserve',binding,'reserve');
+ const input={...binding,ticketId:ticket.ticketId,verdict:{decision:'revise',feedback:'Explain the units.',findings:[]}};
+ const revised=await call('review_submit',input,'revise');
+ assert.equal(revised.status,'codex_ready');
+ c.close();c=new Coordinator({root,beta,selectedHost:'cursor'});d=new Dispatcher({c,config:{beta}});
+ assert.deepEqual(await call('review_submit',input,'revise'),revised);
+ const resumed=await call('native_text_start',{taskId:task.id},'start-revision');
+ assert.equal(resumed.status,'codex_active');assert.equal(resumed.deadline,first.deadline);
+ assert.equal(resumed.reviews,1);assert.deepEqual(resumed.spent,first.spent);
+ await call('native_text_finish',{taskId:task.id,content:'The total is 42 meters, from adding 20 meters and 22 meters.'},'finish-revision');
+ const next=(await d.invoke('review_inbox',{goalId:goal.id})).items[0];
+ assert.notEqual(next.binding.candidateHash,binding.candidateHash);
+ const second=await call('review_reserve',next.binding,'reserve-revision');
+ const accepted=await call('review_submit',{...next.binding,ticketId:second.ticketId,verdict:{decision:'accept',feedback:'The explanation includes units.',findings:[]}},'accept');
+ assert.equal(accepted.status,'accepted');assert.equal(accepted.reviews,2);
+ assert.equal(accepted.deadline,first.deadline);assert.deepEqual(accepted.spent,first.spent);
+});
+
+test('text review evidence includes the goal and task criteria the reviewer must judge',async t=>{
+ const root=await mkdtemp(path.join(os.tmpdir(),'pb12-text-evidence-'));
+ const c=new Coordinator({root,selectedHost:'claude-code'});
+ t.after(async()=>{c.close();await rm(root,{recursive:true,force:true});});
+ const goal=c.preparePortableGoal({submissionId:'goal',mode:'codex_only',objective:'Compare two algorithms',acceptance:['Explain the tradeoffs']},'prepare');
+ c.activateGoal({goalId:goal.id,hash:goal.hash},'activate');
+ const task=c.submitTask({goalId:goal.id,submissionId:'task',kind:'consult',actor:'codex',objective:'Compare time complexity',acceptance:['State worst-case runtime']},'task');
+ c.startNativeText({taskId:task.id},'start');c.finishNativeText({taskId:task.id,content:'Algorithm A is faster.'},'finish');
+ const {binding}=(await c.reviewService.inbox({goalId:goal.id})).items[0];
+ const {evidence}=await c.reviewService.reserve(binding,'reserve');
+ assert.equal(evidence.objective,'Compare time complexity');
+ assert.deepEqual(evidence.acceptance,['State worst-case runtime']);
+ assert.deepEqual(evidence.goalAcceptance,['Explain the tradeoffs']);
+ assert.equal(evidence.summary,'Algorithm A is faster.');
+});

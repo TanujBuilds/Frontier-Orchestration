@@ -25,7 +25,13 @@ export class Agents {
   if(!g.manifest.mode.actors.includes(registration.actor))throw Error('Mode prohibits registered actor');
   // An identical historical correlation is a metadata replay, not a request to
   // apply newly configured model defaults or to rewrite its persisted identity.
-  if(historicalReplay&&previous.registrationHash===digest(caller))return previous;
+  if(historicalReplay){
+   // Reconstruct only the default originally applied to an omitted request.
+   // Changed role, task, explicit model or resolved identity still conflicts.
+   const historical=previous.modelSource==='role_default'&&!caller.model.requested
+    ?{...caller,model:{...caller.model,requested:previous.model.requested}}:caller;
+   if(previous.registrationHash===digest(historical))return previous;
+  }
   let modelSource=registration.model.requested?'explicit':'inherited';
   if(registration.actor==='codex'&&(!registration.hostId||registration.hostId==='codex')){
    const {models,roles}=nativeModelConfig(this.config);

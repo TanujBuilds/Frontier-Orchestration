@@ -207,3 +207,21 @@ test('persisted legacy no-host correlation reconnect survives trusted host infer
  assert.throws(()=>agents.register({...input,role:'implementer'},'explicit-new-role'),/correlation/);
  const fresh=agents.register({...input,hostAgentId:'fresh-host-correlation'},'fresh-host-inferred');assert.equal(fresh.hostId,'codex');
 });
+
+for(const hostId of ['cursor','codex'])test(`historical inherited model survives ${hostId} reconnect with changed defaults`,async t=>{
+ const root=await mkdtemp(path.join(os.tmpdir(),'mosaic-host-inherited-reconnect-'));
+ let c=new Coordinator({root});t.after(async()=>{c.close();await rm(root,{recursive:true,force:true});});
+ const goal=c.prepareLegacyGoal({submissionId:'goal',objective:'Preserve correlation',acceptance:['Preserve original model'],mode:'codex_only',environment:'fixture'},'goal');
+ c.activateGoal({goalId:goal.id,hash:goal.hash},'activate');
+ const task=c.submitTask({goalId:goal.id,submissionId:'task',kind:'consult',actor:'codex',objective:'Historical task',acceptance:['Keep identity']},'task');
+ const input={version:1,taskId:task.id,hostAgentId:'historical-default',actor:'codex',role:'reviewer'};
+ const previous=new Agents({c,config:{nativeModels:['old-model'],nativeRoleModels:{reviewer:'old-model'}}}).register(input,'old-register');
+ assert.equal(previous.modelSource,'role_default');assert.equal(previous.model.requested,'old-model');
+ c.close();c=new Coordinator({root,selectedHost:hostId});
+ const agents=new Agents({c,config:{nativeModels:['new-model'],nativeRoleModels:{reviewer:'new-model'}}});
+ assert.deepEqual(agents.register(input,'reconnect'),previous);
+ assert.deepEqual(c.store.get('agent',previous.id),previous);
+ assert.throws(()=>agents.register({...input,role:'implementer'},'changed-role'),/correlation|unsupported/);
+ assert.throws(()=>agents.register({...input,model:{requested:'new-model'}},'changed-model'),/correlation/);
+ assert.throws(()=>agents.register({...input,hostId},'changed-host'),/correlation/);
+});

@@ -90,7 +90,7 @@ export class ReviewService {
     t.status=t.spec.kind==='coding'?'ready_to_integrate':'accepted';
    }else{
     delete t.reviewAcceptance;const exhausted=t.reviews>=t.spec.limits.reviews||t.attempts>=t.spec.limits.attempts||(this.c.store.spent(t.id).model??0)>=t.spec.limits.modelCalls;
-    t.status=exhausted?'blocked':t.native?.layout==='candidate_v1'?'codex_ready':'queued';t.checkpoint={...t.checkpoint,phase:'attempt'};
+    t.status=exhausted?'blocked':t.native?.layout==='candidate_v1'||t.executionActor==='codex'||t.spec.actor==='codex'?'codex_ready':'queued';t.checkpoint={...t.checkpoint,phase:'attempt'};
     if(t.native?.layout==='candidate_v1')t.native.status='revision_requested';if(exhausted)t.reason='Original review, attempt or request budget exhausted';
    }
    if(t.reviewWait?.ticketId===ticket.id)delete t.reviewWait;
@@ -166,7 +166,17 @@ export class ReviewService {
   let result;
   try{
    if(combined.aborted){const error=Error('Cancelled before dispatch');error.requestOutcome='not_dispatched';throw error;}
-   result=await client.review({evidence:reservation.evidence,signal:combined,maxOutputTokens:profile.maxOutputTokens});
+   result=await client.review({evidence:reservation.evidence,signal:combined,maxOutputTokens:profile.maxOutputTokens,beforeDispatch:()=>{
+    const current=c.getTask(input.taskId),{g,policy}=policyFor(c,current);
+    const saved=c.store.request(input.taskId,requestKey),ticket=c.store.get('review_ticket',reservation.ticketId);
+    if(g.hash!==input.goalHash||g.version!==input.goalVersion||digest(policy)!==input.reviewPolicyHash||
+       digest(savedCandidateIdentity(current))!==digest(ticket.savedCandidateIdentity)||
+       digest(reviewRubric(g,current))!==input.rubricHash||c.now()>=ticket.expiresAt||
+       ticket.status!=='reserved'||saved?.status!=='reserved'||saved.id!==ticket.requestId||
+       digest(saved.reviewerBinding)!==digest(binding)||
+       digest((c.providerRegistry??this.providers).get(profile.id,profile.revision))!==digest(profile))throw Error('Review authority changed');
+    assertBinding(input,ticket.binding);
+   }});
    c.store.tx(()=>{const saved=c.store.request(input.taskId,requestKey);c.store.db.prepare("UPDATE requests SET status='completed',data=? WHERE id=?").run(JSON.stringify({runKey:key,inputHash:request.inputHash,ticketId:request.ticketId,reviewerBinding:binding,reservedAt:request.reservedAt,requestOutcome:'completed',savedAt:c.now(),result}),saved.id);const savedTicket=c.store.get('review_ticket',reservation.ticketId);savedTicket.reviewer={...savedTicket.reviewer,reportedModel:result.reportedModel??null,provenance:result.reportedModel?'reported':'unknown',usage:result.usage??null};c.store.put('review_ticket',savedTicket);});
   }catch(error){
    const outcome=['not_dispatched','completed'].includes(error.requestOutcome)?error.requestOutcome:'unknown';

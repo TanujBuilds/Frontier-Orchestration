@@ -22,6 +22,17 @@ function registry(p,credentialResolver=()=> 'fixture-secret'){return ProviderReg
 function bound(r,p){return {version:1,providerId:p.id,revision:p.revision,profileHash:digest(r.get(p.id,p.revision)),policyHash:'b'.repeat(64)};}
 async function failure(promise,outcome,pattern){await assert.rejects(promise,e=>{assert.equal(e.requestOutcome,outcome);if(pattern)assert.match(e.message,pattern);return true;});}
 
+for(const part of [{type:'thinking',thinking:'private-thinking-canary',signature:'fixture-signature'},{type:'redacted_thinking',data:'opaque-private-canary'}])test(`Anthropic ${part.type} is discarded while final text supplies the verdict`,async t=>{
+ let content=[part,{type:'text',text:verdictJson}];
+ const f=await server(t,(_q,res)=>reply(res,{...anthropic,content})),p=profile(f.baseUrl,'anthropic-messages'),r=registry(p),client=r.createReviewer(bound(r,p));
+ const got=await client.review({evidence});
+ assert.deepEqual(JSON.parse(got.content),verdict);
+ assert.equal(JSON.stringify(got).includes('private-'),false);
+ content=[part];await failure(client.review({evidence}),'completed');
+ content=[part,{type:'tool_use',id:'tool_fixture',name:'exec',input:{}},{type:'text',text:verdictJson}];
+ await failure(client.review({evidence}),'completed',/tools|unsupported/);
+});
+
 for(const protocol of Object.keys(examples))test(`${protocol} uses native nonstreaming envelope and keeps requested/reported usage separate`,async t=>{
  const f=await server(t,(_q,res)=>reply(res,examples[protocol])),p=profile(f.baseUrl,protocol),r=registry(p);let reads=0;
  const privateRegistry=registry(p,ref=>{reads++;assert.equal(ref,'dummy-review-key');return 'fixture-secret';});

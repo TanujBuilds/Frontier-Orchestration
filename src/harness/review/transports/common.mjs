@@ -60,7 +60,7 @@ export function reviewerTransport({profile:raw,apiKey,fetchImpl=globalThis.fetch
   if(apiKey&&[publicBytes,decoded].some(s=>s.includes(apiKey)||s.includes(JSON.stringify(apiKey).slice(1,-1))))throw Error();
   endpoint=new URL(protocol.path,profile.baseUrl.replace(/\/?$/,'/'));
  }catch{throw fail('Reviewer request configuration is invalid','not_dispatched');}
- const review=async({evidence,profile:requestedProfile,signal,maxOutputTokens=profile.maxOutputTokens}={})=>{
+ const review=async({evidence,profile:requestedProfile,signal,maxOutputTokens=profile.maxOutputTokens,beforeDispatch}={})=>{
   let payload;
   try{
    if(signal?.aborted)throw Error();
@@ -71,6 +71,10 @@ export function reviewerTransport({profile:raw,apiKey,fetchImpl=globalThis.fetch
   }catch{throw fail('Reviewer request could not be prepared or was interrupted','not_dispatched');}
   const timeout=AbortSignal.timeout(timeoutMs),combined=signal?AbortSignal.any([signal,timeout]):timeout;
   if(combined.aborted)throw fail('Reviewer call interrupted before dispatch','not_dispatched');
+  // Trusted coordinator fence: run after credential lookup and serialization,
+  // with no await between this authority check and the actual POST.
+  try{if(beforeDispatch!==undefined){if(typeof beforeDispatch!=='function')throw Error();beforeDispatch();}}
+  catch{throw fail('Reviewer authority changed before dispatch','not_dispatched');}
   let response,rawBody;
   try{
    response=await fetchImpl(endpoint,{method:'POST',redirect:'manual',headers:{'content-type':'application/json',...protocol.headers,...(apiKey?{authorization:'Bearer '+apiKey}:{})},body:payload,signal:combined});

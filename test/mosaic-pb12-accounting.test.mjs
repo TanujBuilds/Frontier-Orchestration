@@ -80,3 +80,22 @@ test('cancellation during private credential lookup preserves spent non-dispatch
  await assert.rejects(()=>run,/failed|spent/i);assert.equal(f.posts(),0);assert.equal(f.c.store.spent(f.task.id).apiReview,1);assert.equal(f.c.getTask(f.task.id).reviews,1);
  const row=f.c.store.db.prepare("SELECT status,data FROM requests WHERE kind='apiReview'").get();assert.equal(row.status,'failed');assert.equal(JSON.parse(row.data).requestOutcome,'not_dispatched');
 });
+
+for(const scope of ['goal','task'])for(const action of ['stop','pause'])test(`${scope} ${action} during credential lookup prevents automatic API review POST`,async t=>{
+ let release,entered;const pending=new Promise(resolve=>{release=resolve;}),lookup=new Promise(resolve=>{entered=resolve;});
+ const f=await fixture(t,{credentialResolver:()=>{entered();return pending;}});
+ const worker=new Worker({c:f.c,owner:'owner'}),run=worker.legacyReview.tick();
+ const rejected=assert.rejects(run);
+ await lookup;
+ assert.equal(f.posts(),0);
+ f.c.control(scope==='goal'?{goalId:f.goal.id,action}:{taskId:f.task.id,action},'control-before-post');
+ release('dummy-review-token');await rejected;
+ assert.equal(f.posts(),0);
+ assert.equal(f.c.getTask(f.task.id).reviewed,false);
+ assert.equal(f.c.getTask(f.task.id).reviews,1);
+ const row=f.c.store.db.prepare("SELECT status,data FROM requests WHERE kind='apiReview'").get();
+ assert.equal(row.status,'failed');assert.equal(JSON.parse(row.data).requestOutcome,'not_dispatched');
+ assert.equal(f.c.store.spent(f.task.id).apiReview,1);
+ await assert.rejects(f.c.reviewService.runApi(f.input,JSON.parse(row.data).runKey),/spent|retry/i);
+ assert.equal(f.posts(),0);
+});
