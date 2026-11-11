@@ -1,3 +1,4 @@
+// Fresh beta scope-only fixtures supply trusted host context; core approvals remain historical.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
@@ -23,7 +24,7 @@ async function cli(...args) {
 
 async function fixture(t, { beta = false } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'backlog-public-'));
-  const c = new Coordinator({ root, beta });
+  const c = new Coordinator({ root, beta, ...(beta ? {selectedHost: 'codex'} : {}) });
   const dispatcher = new Dispatcher({ c, config: { beta, environment: 'fixture' } });
   const token = 'backlog-fixture-operator-token-123456';
   const viewerToken = 'backlog-fixture-viewer-token-987654';

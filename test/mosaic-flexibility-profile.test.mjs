@@ -7,7 +7,7 @@ import path from 'node:path';
 import {PassThrough, Readable} from 'node:stream';
 import {locations, privateDirectories, saveJson} from '../src/beta/files.mjs';
 import {doctor, readSettings, setup} from '../src/beta/setup.mjs';
-import {canonical} from '../src/harness/contracts.mjs';
+import {canonical,digest} from '../src/harness/contracts.mjs';
 import {workerProfile} from '../src/harness/worker-profile.mjs';
 
 const legacyProfile={
@@ -190,4 +190,34 @@ test('doctor uses the dispatch model list validation for advertised profiles',as
  await doctor(paths,diagnostics.output);
  assert.match(diagnostics.text(),/CHECK  API worker.*could not confirm the required model/i);
  assert.deepEqual(provider.calls.map(call=>call.method),['GET','GET']);
+});
+
+test('brand-new Codex setup records its explicit trusted host selection',async t=>{
+ const {paths}=await settingsFixture(t);
+ await setupAnswers(paths,['1','y']);
+ assert.deepEqual((await readSettings(paths)).host,{id:'codex',options:{}});
+});
+test('unchanged explicit Codex host settings retain their exact saved bytes',async t=>{
+ const {paths,codexPath}=await settingsFixture(t);
+ await saveJson(paths.config,{schema:1,codexPath,worker:null,host:{id:'codex'}});
+ const bytes=await readFile(paths.config,'utf8');
+ await setupAnswers(paths,['1','y']);
+ assert.equal(await readFile(paths.config,'utf8'),bytes);
+});
+for(const id of ['claude-code','cursor','antigravity'])test(`Codex-only interactive setup preserves an existing ${id} host and refuses a silent switch`,async t=>{
+ const {paths,codexPath}=await settingsFixture(t);
+ await saveJson(paths.config,{schema:1,codexPath,worker:null,host:{id,options:{}}});
+ const bytes=await readFile(paths.config,'utf8'),diagnostic=transcript();
+ const result=await setup(paths,{input:Readable.from(['1\ny\n']),output:diagnostic.output});
+ assert.equal(result,false);assert.equal(await readFile(paths.config,'utf8'),bytes);assert.match(diagnostic.text(),/preserv|unchanged/i);assert.match(diagnostic.text(),/Codex.*setup|setup.*Codex/i);assert.match(diagnostic.text(),new RegExp(id));
+ await assert.rejects(readFile(paths.setupIntent),{code:'ENOENT'});await assert.rejects(readFile(paths.ownership),{code:'ENOENT'});await assert.rejects(readFile(paths.isolatedMcp),{code:'ENOENT'});
+});
+test('resuming a Codex setup intent also preserves an explicitly selected non-Codex host',async t=>{
+ const {paths,codexPath}=await settingsFixture(t);
+ const before={schema:1,codexPath,worker:null,host:{id:'cursor',options:{}}};await saveJson(paths.config,before);
+ const intent={schema:1,settings:{schema:1,codexPath,worker:null,host:{id:'codex',options:{}}},hadAgent:false,previousConfigHash:digest(before),previousMcpHash:null,previousSkillHash:null};
+ await saveJson(paths.setupIntent,intent);const bytes=await readFile(paths.config,'utf8'),pending=await readFile(paths.setupIntent,'utf8'),diagnostic=transcript();
+ assert.equal(await setup(paths,{input:Readable.from([]),output:diagnostic.output}),false);
+ assert.equal(await readFile(paths.config,'utf8'),bytes);assert.equal(await readFile(paths.setupIntent,'utf8'),pending);assert.match(diagnostic.text(),/cursor/);assert.match(diagnostic.text(),/preserved/);
+ await assert.rejects(readFile(paths.ownership),{code:'ENOENT'});await assert.rejects(readFile(paths.isolatedMcp),{code:'ENOENT'});
 });

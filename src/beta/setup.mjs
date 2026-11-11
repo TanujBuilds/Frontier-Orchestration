@@ -13,6 +13,7 @@ import {atomic,entry,fileBytes,hash,jsonFile,localDirectory,saveJson,shellQuote,
 import {client} from './client.mjs';
 import {assertMaintenanceIdle,launchAgent,startLaunchAgent,stopForMaintenance,verifyLaunchAgent} from './service.mjs';
 import {canonical} from '../harness/contracts.mjs';
+import {getHost,normalizeHostSettings} from './hosts/index.mjs';
 
 const exec=promisify(execFile);
 const mcpName='mosaic-beta';
@@ -124,7 +125,8 @@ export async function readSettings(paths){
  await localDirectory(paths,paths.configDir,{create:false});
  const value=await jsonFile(paths.config,{privateFile:true,max:16384});
  if(!value)return null;
- if(value.schema!==1||typeof value.codexPath!=='string'||!path.isAbsolute(value.codexPath))throw Error('Invalid Mosaic Beta configuration. Run mosaic setup.');
+ if(value.host!==undefined)value.host=normalizeHostSettings(value.host);
+ if(value.schema!==1||value.codexPath!==undefined&&(typeof value.codexPath!=='string'||!path.isAbsolute(value.codexPath))||!value.codexPath&&(!value.host||value.host.id==='codex'))throw Error('Invalid Mosaic Beta configuration. Run mosaic setup.');
  if(value.worker){
   value.worker.profile=workerProfile(value.worker.profile);
   if(value.worker.apiKey!==undefined&&(!/^[\x21-\x7e]{1,2048}$/.test(value.worker.apiKey)||typeof value.worker.apiKey!=='string'||
@@ -275,6 +277,11 @@ function printCompletion(paths,output,{resumed=false}={}){
 }
 
 export async function setup(paths,{explicitCodex,input=process.stdin,output=process.stdout,registrations=codexRegistrations(paths)}={}){
+ const old=await readSettings(paths);
+ if(old?.host&&old.host.id!=='codex'){
+  output.write(`The current host is ${old.host.id}. This interactive setup configures Codex only; existing settings and registrations are preserved. Use mosaic host-preview --host ${old.host.id} for that host's manual configuration path.\n`);
+  return false;
+ }
  if(await entry(paths.setupIntent)){
   await withLock(paths,async()=>{
    const intent=await readSetupIntent(paths);
@@ -283,7 +290,6 @@ export async function setup(paths,{explicitCodex,input=process.stdin,output=proc
   printCompletion(paths,output,{resumed:true});
   return true;
  }
- const old=await readSettings(paths);
  const codex=await findCodex(paths,explicitCodex??old?.codexPath);
  if(!codex){
   output.write('Codex CLI is required. Install it from https://developers.openai.com/codex/cli, run codex login, then run mosaic setup again.\n');
@@ -297,7 +303,9 @@ export async function setup(paths,{explicitCodex,input=process.stdin,output=proc
   const choice=await ask(`Mosaic Beta setup\n  1. Codex only\n  2. Codex + API worker\nChoose [${old?.worker?'2':'1'}]: `)||(old?.worker?'2':'1');
   if(!['1','2'].includes(choice))throw Error('Choose 1 or 2 and run mosaic setup again.');
   const worker=choice==='2'?await configureWorker(ask,output,old?.worker):null;
-  const settings={schema:1,codexPath:codex,worker};
+  // Reapplying legacy settings must not migrate their serialized shape. The
+  // service derives trusted Codex context from an existing validated codexPath.
+  const settings=old?{...old,codexPath:codex,worker}:{schema:1,host:{id:'codex',options:{}},codexPath:codex,worker};
   const {launcher,skill:skillFile,config,plist}=paths;
   const registrationPreview=paths.isolated?`Isolated MCP: ${paths.isolatedMcp} → ${shellQuote(launcher)} mcp`:
    `Codex MCP: ${shellQuote(codex)} mcp add mosaic-beta -- ${shellQuote(launcher)} mcp`;
@@ -392,4 +400,10 @@ export async function removeCodexBindings(paths,output=process.stdout,intent=nul
  }else if(saved.bytes)output.write('Preserved modified mosaic-beta skill.\n');
  else if(saved.info&&intent&&!intent.previousSkillHash)
   await rmdir(saved.directory).catch(error=>{if(error.code!=='ENOTEMPTY')throw error;});
+}
+
+// Read-only preparation. Actual host writes require an explicit injected adapter;
+// the legacy interactive setup remains its separately supported Codex path.
+export function previewHostRegistration(paths,hostId,{launcher=paths.launcher,existing}={}){
+ return getHost(hostId).previewRegistration({paths,launcher,existing});
 }

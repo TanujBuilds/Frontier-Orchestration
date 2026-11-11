@@ -1,3 +1,4 @@
+import {hostRegistry,normalizeHostSettings} from './hosts/index.mjs';
 import {lstatSync,readFileSync} from 'node:fs';
 import {canonical} from '../harness/contracts.mjs';
 import {DatabaseSync} from 'node:sqlite';
@@ -131,14 +132,17 @@ export async function serveBeta(paths,settings){
  await privateDirectories(paths);
  process.umask(0o077);
  const expectedWorker=canonical(settings.worker??null);
+ const selectedHost=value=>value.host?normalizeHostSettings(value.host).id:value.codexPath?'codex':null;
+ const expectedHost=selectedHost(settings);
  const verifyCurrentWorker=()=>{
   try{
    const info=lstatSync(paths.config);
    if(!info.isFile()||info.size>16384||info.mode&0o077)throw Error();
-   if(canonical(JSON.parse(readFileSync(paths.config,'utf8')).worker??null)===expectedWorker)return;
+   const current=JSON.parse(readFileSync(paths.config,'utf8'));
+   if(canonical(current.worker??null)===expectedWorker&&selectedHost(current)===expectedHost)return;
   }catch{}
-  throw Error('Configured API worker settings changed. Restart Mosaic Beta safely and obtain a new goal approval.');
+  throw Error('Configured API worker or host settings changed. Restart Mosaic Beta safely and obtain a new goal approval.');
  };
  return serve({root:paths.state,port:0,headless:true,canStop:c=>assertIdle(c.store.db),verifyCurrentWorker,
-  runtimeConfig:{beta:true,codexPath:settings.codexPath,workerProfile:settings.worker?.profile,workerApiKey:settings.worker?.apiKey}});
+  runtimeConfig:{beta:true,hostId:settings.host?.id??(settings.codexPath?'codex':undefined),hostRegistry,codexPath:settings.codexPath,workerProfile:settings.worker?.profile,workerApiKey:settings.worker?.apiKey}});
 }

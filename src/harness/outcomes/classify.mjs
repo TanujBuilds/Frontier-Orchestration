@@ -63,13 +63,14 @@ function mappedChecks(evidence, project, checks, checkIds, snapshot) {
 }
 
 function codingAcceptance(task, goal, events) {
-  const {project, mode, overnightPolicy} = goal.manifest;
+  const {project, mode, overnightPolicy, reviewPolicy} = goal.manifest;
   const integration = task.integration;
   if (!project || !Array.isArray(project.checks) || !integration || typeof integration.commit !== 'string' ||
       !commitPattern.test(integration.commit)) return {reason: 'integration_receipt_missing'};
   const directNative = integration.review === 'codex_native';
-  const expectedReview = {checks: 'none', operator: 'codex_operator', legacy: 'codex_legacy'}[mode.review];
-  if (directNative ? mode.review !== 'operator' || task.executionActor !== 'codex' || !task.native ||
+  const expectedReview = reviewPolicy ? {host:'host_review',api:'api_review'}[reviewPolicy.source]
+    : {checks: 'none', operator: 'codex_operator', legacy: 'codex_legacy'}[mode.review];
+  if (directNative ? reviewPolicy || mode.review !== 'operator' || task.executionActor !== 'codex' || !task.native ||
       task.native.layout === 'candidate_v1' : integration.review !== expectedReview ||
       typeof integration.candidateCommit !== 'string' || !commitPattern.test(integration.candidateCommit)) {
     return {reason: 'integration_review_policy_mismatch'};
@@ -133,13 +134,30 @@ function codingAcceptance(task, goal, events) {
   }
 
   if (mode.review !== 'checks') {
-    const reviewType = mode.review === 'legacy' ? 'task.legacy_reviewed' : 'task.reviewed';
+    const reviewType = !reviewPolicy && mode.review === 'legacy' ? 'task.legacy_reviewed' : 'task.reviewed';
     const review = events.findLast(event => event.type === reviewType);
     if (review?.data?.decision !== 'accept' || review.seq <= candidateEvent.seq || review.seq >= integrationEvent.seq ||
-        (mode.review === 'legacy' && task.legacyDecision?.decision !== 'accept')) {
+        (!reviewPolicy && mode.review === 'legacy' && task.legacyDecision?.decision !== 'accept')) {
       return {reason: 'candidate_review_missing_or_not_accepted'};
     }
-    if (mode.review === 'legacy' && project.behavioralChecks) {
+    if (reviewPolicy) {
+      const receipt=task.reviewAcceptance,binding=receipt?.binding;
+      if (!same(receipt,integration.reviewAcceptance) || receipt?.source!==reviewPolicy.source ||
+          receipt.ticketId!==review.data.ticketId || receipt.source!==review.data.source ||
+          binding?.goalId!==(goal.goalId??goal.id) || binding.goalVersion!==goal.version || binding.goalHash!==goal.hash ||
+          binding.taskId!==task.id || binding.checksHash!==digest(candidateChecks) ||
+          binding.reviewPolicyHash!==digest(reviewPolicy) || !hashPattern.test(binding.candidateHash) ||
+          !hashPattern.test(binding.rubricHash) || !hashPattern.test(receipt.verdictHash) ||
+          !positiveTime(receipt.acceptedAt) || receipt.acceptedAt>=binding.expiresAt ||
+          binding.expiresAt>Math.min(goal.deadline,task.deadline) ||
+          (reviewPolicy.source==='host' && receipt.reviewer?.hostId!==reviewPolicy.hostId) ||
+          (reviewPolicy.source==='api' && (receipt.reviewer?.providerId!==reviewPolicy.reviewer.id ||
+            receipt.reviewer.revision!==reviewPolicy.reviewer.revision ||
+            receipt.reviewer.profileHash!==digest(reviewPolicy.reviewer)))) {
+        return {reason:'common_review_binding_invalid'};
+      }
+    }
+    if (!reviewPolicy && mode.review === 'legacy' && project.behavioralChecks) {
       const binding = task.legacyBehavioralReview;
       const candidate = integration.candidateBehavioralEvidence;
       if (binding?.approvalHash !== goal.hash || binding.taskHash !== task.hash ||

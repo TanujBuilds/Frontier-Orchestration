@@ -165,7 +165,7 @@ export async function runFixtureMission(output) {
 
   async function submitFixture(scenario) {
     const acceptance = ['Preserve source conditions and cite exact passages'];
-    const goal = await call('goal_prepare', {
+    const goal = await call('legacy_goal_prepare', {
       manifest: {submissionId: scenario, objective: brief.question, acceptance, environment: 'fixture',
         mode: 'collaborative', scope: {includeDomains: ['fixture.invalid']}, researchPolicy: policy},
       idempotencyKey: scenario + '-goal',

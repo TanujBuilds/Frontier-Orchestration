@@ -15,7 +15,7 @@ for (const mode of ['codex_only', 'deepseek_only']) {
   test(`beta assignment ${mode} uses the coordinator's actual normalized approval`, async t => {
     const service = await coordinator(t), repo = await repository(service);
     const profile = {baseUrl: 'http://127.0.0.1:1/v1', model: 'fixture-model', displayName: 'Fixture', revision: 'r1', streaming: false};
-    const c = new Coordinator({root: path.join(service.root, 'beta-state'), beta: true, workerProfile: profile});
+    const c = new Coordinator({root: path.join(service.root, 'beta-state'), beta: true, selectedHost: 'codex', workerProfile: profile});
     t.after(() => c.close());
     const dispatcher = new Dispatcher({c, config: {beta: true, environment: 'fixture'}});
     const manifest = assignment(repo, {mode});
@@ -164,7 +164,7 @@ test('worker profile changes during discovery block completion before POST', {ti
   t.after(async () => { finish.resolve(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
   const profile = {baseUrl: `http://127.0.0.1:${server.address().port}/v1`, model: 'fixture-model', displayName: 'Fixture', revision: 'r1', streaming: false,
     capabilities: {protocol: 'mosaic-structured-v1', transports: ['json'], modelDiscovery: 'advertised'}};
-  const c = new Coordinator({root: path.join(f.root, 'profile-state'), beta: true, workerProfile: profile, now: () => startTime});
+  const c = new Coordinator({root: path.join(f.root, 'profile-state'), beta: true, selectedHost: 'codex', workerProfile: profile, now: () => startTime});
   t.after(() => c.close());
   const g = c.prepareGoal({submissionId: 'profile', objective: 'Profile guard', acceptance: ['No stale dispatch'], mode: 'collaborative', environment: 'fixture', project: f.goal.manifest.project}, 'prepare');
   c.activateGoal({goalId: g.id, hash: g.hash}, 'activate');

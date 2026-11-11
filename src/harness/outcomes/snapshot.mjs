@@ -237,7 +237,9 @@ function readSnapshot(db, { scope, start, end, cursorScope, after }) {
         reservedAt: data.reservedAt, savedAt: data.savedAt,
         startedAt: data.startedAt, requestOutcome: data.requestOutcome,
         error: typeof data.error === 'string' ? data.error.slice(0, 1000) : undefined,
-        result: data.result && { model: data.result.model, usage: data.result.usage },
+        result: data.result && { model: data.result.model, usage: data.result.usage,
+          ...(row.kind === 'apiReview' ? {requestedModel: data.result.requestedModel,
+            reportedModel: data.result.reportedModel} : {}) },
       } });
     }
     return true;

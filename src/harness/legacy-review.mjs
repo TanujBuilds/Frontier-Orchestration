@@ -2,7 +2,7 @@ import path from 'node:path';
 import {Journal} from '../project/journal.mjs';
 import {randomUUID} from 'node:crypto';
 import {ProjectFrontier} from '../project/providers.mjs';
-import {keys,text,digest} from './contracts.mjs';
+import {keys,text,digest,identifier} from './contracts.mjs';
 import {isOvernightV2} from './overnight.mjs';
 import {git} from '../project/process.mjs';
 import {matches,secretPath} from '../project/contracts.mjs';
@@ -34,7 +34,33 @@ export class LegacyReview {
  async tick(){
   if(this.inflight)return null;
   this.c.expireQuiescent();
-  const task=this.c.store.all('task').find(t=>['awaiting_legacy_review','legacy_reviewing'].includes(t.status)&&this.c.eligible(t));if(!task)return null;
+  const requests=[];
+  for(const row of this.c.store.db.prepare("SELECT id,task_id,status,data FROM requests WHERE kind='apiReview'").all()){
+   // Uncertain or unreadable remote ownership fences every background review,
+   // even if that request's goal is paused or no longer first in the inbox.
+   let data;try{data=JSON.parse(row.data);}catch{return null;}
+   if(!data||row.status==='reserved'||!['completed','failed'].includes(row.status)||
+    (row.status==='completed'?data.requestOutcome!=='completed':!['completed','not_dispatched'].includes(data.requestOutcome)))return null;
+   requests.push({...data,id:row.id,taskId:row.task_id,status:row.status});
+  }
+  const tickets=this.c.store.all('review_ticket');
+  for(const portable of this.c.store.all('task').filter(t=>t.status==='awaiting_review'&&this.c.store.get('goal',t.goalId).manifest.reviewPolicy?.source==='api'&&this.c.eligible(t))){
+   const ticket=tickets.find(r=>r.taskId===portable.id&&r.status==='reserved');let run;
+   if(ticket){
+    const saved=requests.find(r=>r.taskId===portable.id&&r.ticketId===ticket.id);
+    // A terminal failed/invalid response holds its own spent reservation, not
+    // another goal. Unprocessed/pre-category responses get one validation;
+    // thereafter only a supported control wait may retry submission. Invalid
+    // data becomes a durable operator wait inside ReviewService.
+    if(saved?.status!=='completed'||(portable.reviewWait?.reasonCode!==undefined&&portable.reviewWait.reasonCode!=='controls_active'))continue;
+    try{identifier(saved.runKey,'saved API run key');}catch{continue;}
+    run=this.c.reviewService.runApi(ticket.binding,saved.runKey);
+   }else{
+    run=(async()=>{const entry=(await this.c.reviewService.inbox({goalId:portable.goalId,limit:20})).items.find(x=>x.taskId===portable.id);if(!entry?.binding)return null;return this.c.reviewService.runApi(entry.binding,`auto-review-${portable.id}-${portable.reviews+1}`);})();
+   }
+   this.inflight=run;try{return await run;}finally{this.inflight=null;}
+  }
+  const task=this.c.store.all('task').find(t=>!this.c.store.get('goal',t.goalId).manifest.reviewPolicy&&['awaiting_legacy_review','legacy_reviewing'].includes(t.status)&&this.c.eligible(t));if(!task)return null;
   const run=this.run(task);this.inflight=run;try{return await run;}finally{this.inflight=null;}
  }
  async referenceFiles(source,task){
@@ -79,6 +105,7 @@ export class LegacyReview {
  });}
  async run(task){
   const {c}=this,g=c.store.get('goal',task.goalId);c.liveGoal(g);
+  if(g.manifest.reviewPolicy)throw Error('Use the common bound review service for this policy');
   if(g.manifest.mode.review!=='legacy')throw Error('Mode prohibits background Codex review');
   const {project}=g.manifest,v2=isOvernightV2(g.manifest),mapped=!!project.behavioralChecks;
   const source=await this.worker.integration.candidate(task),unlock=await source.journal.lock();

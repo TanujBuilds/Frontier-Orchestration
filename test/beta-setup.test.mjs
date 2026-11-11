@@ -67,7 +67,7 @@ test('still-applicable worker draft revisions block maintenance until the stoppe
  const initial=run(paths,['setup'],workerSetup);
  assert.equal(initial.status,0,initial.stderr);
  const before=await bytes(paths.config);
- const c=new Coordinator({root:paths.state,beta:true,workerProfile:before.worker.profile});
+ const c=new Coordinator({root:paths.state,beta:true,selectedHost:'codex',workerProfile:before.worker.profile});
  let goal,revision;
  const manifest={submissionId:'revision-probe',objective:'Original goal',acceptance:['Scope check']};
  try{
@@ -80,7 +80,7 @@ test('still-applicable worker draft revisions block maintenance until the stoppe
  assert.notEqual(rejected.status,0);
  assert.match(rejected.stderr,/prepared.*revision.*finalize/i);
  assert.deepEqual(await bytes(paths.config),before);
- const retired=new Coordinator({root:paths.state,beta:true,workerProfile:before.worker.profile});
+ const retired=new Coordinator({root:paths.state,beta:true,selectedHost:'codex',workerProfile:before.worker.profile});
  try{
   const goals=new Goals(retired);
   assert.equal(goals.finalize({goalId:goal.id,partial:true,summary:'Retire stopped goal and its draft'},'finalize').status,'partial');
@@ -179,7 +179,7 @@ test('a superseded worker revision does not block later setup',async t=>{
  const initial=run(paths,['setup'],workerSetup);
  assert.equal(initial.status,0,initial.stderr);
  const before=await bytes(paths.config);
- const c=new Coordinator({root:paths.state,beta:true,workerProfile:before.worker.profile}),goals=new Goals(c);
+ const c=new Coordinator({root:paths.state,beta:true,selectedHost:'codex',workerProfile:before.worker.profile}),goals=new Goals(c);
  const manifest={submissionId:'revision-probe',objective:'Original goal',acceptance:['Scope check']};
  try{
   const goal=c.prepareGoal(manifest,'prepare');

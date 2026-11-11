@@ -1,3 +1,4 @@
+// Fresh beta scope-only fixtures supply trusted host context; core approvals remain historical.
 import assert from 'node:assert/strict';
 import {mkdtempSync, rmSync} from 'node:fs';
 import os from 'node:os';
@@ -27,7 +28,7 @@ const profile = {baseUrl: 'http://127.0.0.1:1/v1', model: 'fixture', displayName
 function fixture(t, {manifest = {}, beta = false, activate = true} = {}) {
   const root = mkdtempSync(path.join(os.tmpdir(), 'workflow-recipes-'));
   let now = 1700000000000;
-  const c = new Coordinator({root, now: () => now, beta, workerProfile: beta ? profile : undefined});
+  const c = new Coordinator({root, now: () => now, beta, ...(beta ? {selectedHost: 'codex'} : {}), workerProfile: beta ? profile : undefined});
   t.after(() => {
     c.close();
     rmSync(root, {recursive: true, force: true});

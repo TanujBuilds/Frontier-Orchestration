@@ -1,3 +1,4 @@
+// Historical beta background review is seeded as persisted state, never selected by fresh omission.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {once} from 'node:events';
@@ -11,6 +12,7 @@ import {Dispatcher} from '../src/harness/tools.mjs';
 import {Worker} from '../src/harness/worker.mjs';
 import {command, git} from '../src/project/process.mjs';
 import {CheckRunner} from '../src/project/sandbox.mjs';
+import {savedBetaGoal} from './fixtures/mosaic-pb12/historical-beta.mjs';
 
 const requestedModel = 'fixture-coder';
 const reportedModel = 'fixture-coder-2026-01';
@@ -99,7 +101,7 @@ async function apiFixture(t, reply) {
   return {baseUrl: `http://127.0.0.1:${server.address().port}/v1`, calls, errors};
 }
 
-test('combined assignment, behavioral repair, restart and pinned API worker complete Overnight v2', {timeout: 45_000}, async t => {
+test('persisted historical beta approval, behavioral repair, restart and pinned API worker complete Overnight v2', {timeout: 45_000}, async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'mosaic-flexibility-overnight-'));
   let c;
   t.after(async () => {
@@ -152,17 +154,19 @@ test('combined assignment, behavioral repair, restart and pinned API worker comp
     mode: 'overnight_review', environment: 'fixture',
     limits: {hours: 1, maxTasks: 2, reviewAgentRuns: 0, taskLimits: {coding: {seconds: 600}}},
   };
-  const legacy = await mutate('goal_prepare', 'legacy-prepare', {manifest: {...manifest, submissionId: 'legacy'}});
+  const legacy = savedBetaGoal(c, {...manifest, submissionId: 'legacy'});
   assert.equal(legacy.manifest.mode.version, 1);
   assert.equal(Object.hasOwn(legacy.manifest, 'overnightPolicy'), false);
   assert.deepEqual(legacy.manifest.workerProfile, workerProfile);
-  const prepared = await mutate('assignment_prepare', 'v2-prepare', {manifest: {
+  // This background-Codex workflow represents an already persisted beta draft.
+  // Fresh public preparation now requires an explicit host/API review policy.
+  const saved = savedBetaGoal(c, {
     ...manifest, submissionId: 'v2', modeVersion: 2,
     overnightPolicy: {preflightCheckIds: ['starter'], finalOnlyCheckIds: ['final']},
-  }});
-  assert.equal(prepared.status, 'prepared', JSON.stringify(prepared));
-  const goal = await invoke('goal_get', {goalId: prepared.goalId});
-  assert.equal(goal.hash, prepared.hash);
+  });
+  const goal = await invoke('goal_get', {goalId: saved.id});
+  assert.equal(goal.hash, saved.hash);
+  assert.equal(Object.hasOwn(goal.manifest, 'reviewPolicy'), false);
   assert.equal(goal.manifest.mode.version, 2);
   assert.deepEqual(goal.manifest.workerProfile, workerProfile);
   assert.equal(goal.hash, digest(goal.manifest));

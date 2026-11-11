@@ -2,6 +2,7 @@ import {createHash} from 'node:crypto';
 import {canonical,digest,identifier} from '../contracts.mjs';
 import {LocalProvider} from '../provider.mjs';
 import {normalizeProfile,profileIdentity} from './contracts.mjs';
+import {createReviewTransport} from '../review/transports/factory.mjs';
 
 const clients=new WeakSet();
 const hashPattern=/^[a-f0-9]{64}$/;
@@ -58,7 +59,7 @@ export function isRegistryClient(value){return clients.has(value)&&value.complet
 export function ProviderRegistry({profiles,credentialResolver}={}){
  if(!Array.isArray(profiles)||!profiles.length||profiles.length>16||
     credentialResolver!==undefined&&typeof credentialResolver!=='function')throw Error('Invalid provider registry');
- const records=new Map(),endpoints=new Map(),cache=new Map(),active=new Map();
+ const records=new Map(),endpoints=new Map(),cache=new Map(),reviewers=new Map(),active=new Map();
  for(const input of Array.from(profiles)){
   const profile=normalizeProfile(input),identity=profileIdentity(profile),id=key(profile.id,profile.revision);
   if(records.has(id))throw Error(digest(records.get(id).identity)===digest(identity)?
@@ -83,6 +84,37 @@ export function ProviderRegistry({profiles,credentialResolver}={}){
     const id=key(ref.id,ref.revision);if(seen.has(id))throw Error('Duplicate provider snapshot reference');seen.add(id);
     return registry.get(ref.id,ref.revision);
    });
+  },
+  createReviewer(binding){
+   const fields=['version','providerId','revision','profileHash','policyHash'];
+   if(!binding||typeof binding!=='object'||Array.isArray(binding)||Reflect.ownKeys(binding).length!==fields.length||
+      !fields.every(field=>Object.hasOwn(binding,field))||binding.version!==1||
+      !hashPattern.test(binding.profileHash)||!hashPattern.test(binding.policyHash))throw Error('Invalid reviewer binding');
+   const {profile,identity}=record(binding.providerId,binding.revision);
+   if(binding.profileHash!==digest(identity))throw Error('Reviewer binding differs from configured identity');
+   if(!profile.roles.includes('reviewer')||!profile.capabilities.transports.includes('json'))throw Error('Reviewer client requires reviewer role and JSON transport');
+   const cacheKey=canonical(binding);if(reviewers.has(cacheKey))return reviewers.get(cacheKey);
+   const profileKey=key(profile.id,profile.revision);
+   const client=Object.freeze({review:async(input={})=>{
+    // Credential lookup is bounded even when the caller has no cancellation signal.
+    const timeout=AbortSignal.timeout(300000),signal=input.signal?AbortSignal.any([input.signal,timeout]):timeout;
+    let apiKey;
+    try{
+     if(signal.aborted)throw Error();
+     if(profile.credentialRef!==null){
+      if(!credentialResolver)throw Error();
+      apiKey=await resolveCredential(credentialResolver,profile.credentialRef,signal);
+      if(typeof apiKey!=='string'||!apiKey||apiKey.length>2048||/[^\x21-\x7e]/.test(apiKey))throw Error();
+     }
+     if(signal.aborted)throw Error();
+    }catch{throw failure('Reviewer credentials are unavailable, invalid or interrupted');}
+    const credentialHash=fingerprint(apiKey),prior=active.get(profileKey);
+    if(prior&&prior.credentialHash!==credentialHash)throw failure('Provider credential rotation is forbidden while a request is in flight');
+    const state=prior??{credentialHash,count:0};state.count++;active.set(profileKey,state);
+    try{return await createReviewTransport({profile,apiKey}).review({...input,signal});}
+    finally{if(--state.count===0)active.delete(profileKey);}
+   }});
+   reviewers.set(cacheKey,client);return client;
   },
   createClient(binding){
    const fields=['version','providerId','revision','profileHash','policyHash'];

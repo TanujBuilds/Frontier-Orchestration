@@ -1,3 +1,4 @@
+// Fresh worker-pinning goals select a trusted host; no legacy review acceptance is exercised.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -60,7 +61,7 @@ function state(t) {
   let coordinator;
   const open = profile => {
     coordinator?.close();
-    coordinator = new Coordinator({root, beta: true, workerProfile: profile, now: () => 10000});
+    coordinator = new Coordinator({root, beta: true, selectedHost: 'codex', workerProfile: profile, now: () => 10000});
     return coordinator;
   };
   t.after(() => {

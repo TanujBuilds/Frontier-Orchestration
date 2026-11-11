@@ -16,8 +16,9 @@ export function normalizeModelSelection(raw={}){
  return {requested:nullable(raw.requested,x=>text(x,'requested model',200)),resolved:nullable(raw.resolved,x=>text(x,'resolved model',200))};
 }
 export function normalizeAgentRegistration(raw){
- version(raw,['taskId','hostAgentId','role','actor','model'],'agent registration');
- return {version:1,taskId:identifier(raw.taskId,'taskId'),hostAgentId:nullable(raw.hostAgentId,x=>text(x,'hostAgentId',120)),role:choice(raw.role,['implementer','explorer','reviewer','supervisor'],'role'),actor:choice(raw.actor,['codex','deepseek'],'actor'),model:normalizeModelSelection(raw.model??{})};
+ version(raw,['taskId','hostAgentId','role','actor','model','hostId'],'agent registration');
+ const host=raw.hostId===undefined?{}:{hostId:choice(raw.hostId,['codex','claude-code','cursor','antigravity'],'host identity')};
+ return {version:1,...host,taskId:identifier(raw.taskId,'taskId'),hostAgentId:nullable(raw.hostAgentId,x=>text(x,'hostAgentId',120)),role:choice(raw.role,['implementer','explorer','reviewer','supervisor'],'role'),actor:choice(raw.actor,['codex','deepseek'],'actor'),model:normalizeModelSelection(raw.model??{})};
 }
 export function normalizeProgressReport(raw){
  version(raw,['agentId','status','summary','evidenceIds'],'progress report');

@@ -151,7 +151,7 @@ export class Integration {
   // Worker results expose only the approved readable portion of the snapshot.
   const scoped=Object.fromEntries([...modes.keys()].map(file=>[file,snapshot[file]]));
   if(!task.result?.snapshot||task.result.baseCommit!==candidate.manifest.baseCommit||digest(scoped)!==digest(task.result.snapshot))throw Error('Candidate snapshot changed after its saved checks');
-  if(goal.manifest.mode.review==='legacy'){
+  if(goal.manifest.mode.review==='legacy'&&!goal.manifest.reviewPolicy){
    const binding=task.legacyBehavioralReview;
    if(binding?.approvalHash!==goal.hash||binding.taskHash!==task.hash||binding.baseCommit!==candidate.manifest.baseCommit||binding.snapshotHash!==digest(scoped))throw Error('Legacy review does not match the approved candidate snapshot');
    if(binding.executableModesHash!==behavioralModeHash(modes))throw Error('Legacy review does not match the candidate executable bits');
@@ -164,12 +164,13 @@ export class Integration {
   this.c.liveGoal(g);
   this.c.liveTask(t);
   if(!['awaiting_review','ready_to_integrate'].includes(t.status))throw Error('Candidate is not ready for integration');
-  if(g.manifest.mode.review==='legacy'&&t.legacyDecision?.decision!=='accept')throw Error('Passing legacy review required');
+  if(!g.manifest.reviewPolicy&&g.manifest.mode.review==='legacy'&&t.legacyDecision?.decision!=='accept')throw Error('Passing legacy review required');
+  if(g.manifest.reviewPolicy)await this.c.reviewService.assertCandidate(t);
   if(g.integrationOwner&&g.integrationOwner!==t.id)throw Error('Native Codex task owns integration workspace');
   const candidate=await this.candidate(t),releaseCandidate=await candidate.journal.lock();
   try{
-   t=this.currentCandidate(t);await candidate.workspace.recover();
-   const project=g.manifest.project,candidateSnapshot=project.behavioralChecks?await candidate.workspace.snapshot():null;
+   t=this.currentCandidate(t);await candidate.workspace.recover();if(g.manifest.reviewPolicy)await this.c.reviewService.assertCandidate(t,{lock:false});
+   const project=g.manifest.project,candidateSnapshot=project.behavioralChecks||g.manifest.reviewPolicy?await candidate.workspace.snapshot():null;
    const candidateModes=candidateSnapshot?await checkedFileModes(candidate.workspace,candidateSnapshot):null;
    const checkedSnapshot=candidateSnapshot?await this.checkedCandidateSnapshot(candidate,t,g,candidateSnapshot,candidateModes):null;
    const checks=this.checks(candidate.workspace),candidateCheckSpecs=candidate.manifest.permissions.checks;
@@ -179,6 +180,7 @@ export class Integration {
     await assertCheckedModes(candidate.workspace,candidateSnapshot,candidateModes);
    }
    if(!candidateChecks.every(x=>x.passed))throw Error('Candidate checks no longer pass');
+   if(g.manifest.reviewPolicy)await this.c.reviewService.assertCandidate(t,{lock:false});
    const candidateBehavioralEvidence=behavioralEvidenceFor(project,candidateCheckSpecs,candidateChecks,checkedSnapshot,candidateModes);
    assertBehavioralChecks(candidateBehavioralEvidence);
    t=this.currentCandidate(t);const candidateStage=t.integrationFailures?.length?`candidate-repair-${t.integrationFailures.length}`:'candidate';
@@ -199,6 +201,7 @@ export class Integration {
     // target. The persisted reservation then prevents either change during import.
     const importKey=this.c.store.tx(()=>{
      t=this.currentCandidate(t);
+     if(g.manifest.reviewPolicy)this.c.reviewService.assertAccepted(t);
      if(t.status==='awaiting_review'){this.c.review({taskId:t.id,decision:'accept',feedback:text(input.feedback,'review feedback')},`review-${key}`);t=this.c.getTask(t.id);}
      const goal=this.c.store.get('goal',g.id),importKey=goal.integrationPending?.importKey??`import-${t.id}-${checkpoint.commit}`;
      if(goal.integrationPending&&goal.integrationPending.taskId!==t.id)throw Error('Another pending integration owns target');
@@ -228,7 +231,7 @@ export class Integration {
     const stage=`task-${t.id}-${checkpoint.commit}`,imported=await target.journal.memo(`${stage}/checkpoint`,()=>target.workspace.checkpoint({id:stage,writePaths:t.spec.permissions.writePaths}));
     if(behavioralEvidence)await assertCheckedCommit(target.workspace,imported,snapshot,combinedModes);
     if(!target.journal.events.some(e=>e.type==='stage.accepted'&&e.data.stageId===stage))await target.journal.append('stage.accepted',{stageId:stage,...imported});
-    this.c.store.tx(()=>{const current=this.currentCandidate(t);current.status='accepted';if(current.native?.layout==='candidate_v1')current.native.status='integrated';current.integration={commit:imported.commit,candidateCommit:checkpoint.commit,worktree:target.workspace.root,checks:results,review:g.manifest.mode.review==='checks'?'none':g.manifest.mode.review==='legacy'?'codex_legacy':'codex_operator',...(behavioralEvidence?{candidateBehavioralEvidence,behavioralEvidence}:{})};this.c.store.put('task',current);const goal=this.c.store.get('goal',g.id);goal.integrationPending=null;this.c.store.put('goal',goal);this.c.emit('task.integrated',g.id,t.id,current.integration);});
+    this.c.store.tx(()=>{const current=this.currentCandidate(t);current.status='accepted';if(current.native?.layout==='candidate_v1')current.native.status='integrated';current.integration={commit:imported.commit,candidateCommit:checkpoint.commit,worktree:target.workspace.root,checks:results,review:g.manifest.reviewPolicy?(g.manifest.reviewPolicy.source==='host'?'host_review':'api_review'):g.manifest.mode.review==='checks'?'none':g.manifest.mode.review==='legacy'?'codex_legacy':'codex_operator',...(g.manifest.reviewPolicy?{reviewAcceptance:current.reviewAcceptance}:{}),...(behavioralEvidence?{candidateBehavioralEvidence,behavioralEvidence}:{})};this.c.store.put('task',current);const goal=this.c.store.get('goal',g.id);goal.integrationPending=null;this.c.store.put('goal',goal);this.c.emit('task.integrated',g.id,t.id,current.integration);});
     return this.c.getTask(t.id);
    }finally{await release();}
   }finally{await releaseCandidate();}
@@ -239,6 +242,7 @@ export class Integration {
   const t=this.c.getTask(taskId),g=this.c.store.get('goal',t.goalId);this.c.liveGoal(g);
   this.c.liveTask(t,{allowStopped:!!extra.takeoverReason});
   if(!g.manifest.mode.actors.includes('codex')||t.spec.kind!=='coding')throw Error('Mode prohibits native Codex execution');
+  if(g.manifest.reviewPolicy)throw Error('Versioned review requires an isolated candidate_v1 native layout');
   if(t.native?.layout==='candidate_v1')throw Error('Existing native candidate requires explicit candidate_v1 layout');
   if(t.status==='codex_active')return t;
   if(!['codex_ready','blocked','stopped','awaiting_review','ready_to_integrate'].includes(t.status)||t.owner)throw Error('Worker must be quiescent before native execution');
@@ -264,6 +268,7 @@ export class Integration {
  async finishNative(input,key){return this.effect(key,{op:'native.finish',...input},async()=>{
   const t=this.c.getTask(input.taskId),g=this.c.store.get('goal',t.goalId);text(input.summary,'summary');
   if(t.native?.layout==='candidate_v1')return this.nativeCandidates.finish(input);
+  if(g.manifest.reviewPolicy)throw Error('Versioned review requires candidate_v1 finish and separate bound review');
   if(t.status==='accepted'&&t.integration?.review==='codex_native')return t;
   this.c.liveGoal(g);if(t.status!=='codex_active'||g.integrationOwner!==t.id)throw Error('Native task ownership mismatch');
   this.c.liveTask(t);

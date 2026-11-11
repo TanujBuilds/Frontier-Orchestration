@@ -90,6 +90,7 @@ function summarizeUsage({requests,events,tasks,evidence,diagnostics}){
   id,task_id,key,kind,status, malformed:!isObject(data),
   reservedAt:data?.reservedAt, savedAt:data?.savedAt, outcome:data?.requestOutcome,
   model:data?.result?.model, usage:data?.result?.usage,
+  requestedModel:data?.result?.requestedModel,reportedModel:data?.result?.reportedModel,
  });
  for(const [id,observations] of groupBy(requests,row=>row.id)){
   if(typeof id!=='string'||!id.length){
@@ -112,14 +113,15 @@ function summarizeUsage({requests,events,tasks,evidence,diagnostics}){
     nonnegative(e.data?.attempt)&&row.key==='plan-'+e.data.attempt));
   }
   const outcome = !conflict&&['not_dispatched','unknown','completed'].includes(row.data?.requestOutcome)?row.data.requestOutcome:null;
-  const uncertain = status==='unknown'||status==='failed'&&(outcome==='unknown'||outcome===null)||status==='reserved'&&(uncertainty.length>0||uncertaintyOwner!==null);
-  const eligible = status==='completed'&&row.kind==='model';
+  const uncertain = status==='unknown'||status==='failed'&&(outcome==='unknown'||outcome===null)||status==='reserved'&&(uncertainty.length>0||uncertaintyOwner!==null||row.kind==='apiReview'&&outcome==='unknown');
+  const providerRequest=['model','apiReview'].includes(row.kind);
+  const eligible = status==='completed'&&providerRequest;
   const raw = eligible?row.data?.result?.usage??null:null;
   const missing = eligible
    ?isObject(row.data)?null:'malformed_request_data'
-   :conflict?'conflicting_request_rows':row.kind!=='model'?'not_a_provider_model_request':'request_not_completed';
-  const [knownInputTokens,input] = missing?[null,missing]:readToken(raw,['prompt_tokens','input_tokens']);
-  const [knownOutputTokens,output] = missing?[null,missing]:readToken(raw,['completion_tokens','output_tokens']);
+   :conflict?'conflicting_request_rows':!providerRequest?'not_a_provider_model_request':'request_not_completed';
+  const [knownInputTokens,input] = missing?[null,missing]:readToken(raw,['prompt_tokens','input_tokens',...(row.kind==='apiReview'?['inputTokens']:[])]);
+  const [knownOutputTokens,output] = missing?[null,missing]:readToken(raw,['completion_tokens','output_tokens',...(row.kind==='apiReview'?['outputTokens']:[])]);
   rows.push({
    id,ownerId:conflict?null:row.task_id,kind:conflict?null:row.kind,status,
    providerOutcome:outcome,uncertain,
@@ -128,11 +130,14 @@ function summarizeUsage({requests,events,tasks,evidence,diagnostics}){
    reservedAt:!conflict&&nonnegative(row.data?.reservedAt)?row.data.reservedAt:null,
    savedAt:!conflict&&nonnegative(row.data?.savedAt)?row.data.savedAt:null,
    model:eligible&&typeof row.data?.result?.model==='string'?row.data.result.model.slice(0,200):null,
+   ...(row.kind==='apiReview'?{role:'reviewer',
+    requestedModel:!conflict&&typeof row.data?.result?.requestedModel==='string'?row.data.result.requestedModel.slice(0,200):null,
+    reportedModel:!conflict&&typeof row.data?.result?.reportedModel==='string'?row.data.result.reportedModel.slice(0,200):null}:{}),
    knownInputTokens,knownOutputTokens,missingReasons:{input,output},
    ...(missing?{providerRaw:null,providerRawReason:missing}:retainProviderRaw(raw)),
   });
  }
- const eligible = rows.filter(row=>row.kind==='model'&&row.status==='completed');
+ const eligible = rows.filter(row=>['model','apiReview'].includes(row.kind)&&row.status==='completed');
  return {
   reservations:rows.length,requestStates,byKind:countBy(rows,row=>row.kind),
   observedStarts:rows.filter(row=>row.observedStart).length,
@@ -142,7 +147,7 @@ function summarizeUsage({requests,events,tasks,evidence,diagnostics}){
   knownUsageRequests:eligible.filter(row=>row.knownInputTokens!==null&&row.knownOutputTokens!==null).length,
   input:tokenTotals(eligible,'knownInputTokens'),output:tokenTotals(eligible,'knownOutputTokens'),
   nativeHost:{tokens:null,reason:'Native host token totals are unavailable in the request ledger'},
-  definition:'One ledger row per request ID represents a spent reservation, even without dispatch. Starts are observed model invocation events. Uncertainty overlaps ledger states. Token coverage uses completed model requests. Totals sum only valid recorded fields from saved results.',
+  definition:'One ledger row per request ID represents a spent reservation, even without dispatch. Starts are observed model invocation events. Uncertainty overlaps ledger states. Token coverage uses completed worker and API-review requests. Totals sum only valid recorded fields from saved results.',
   requests:rows,
  };
 }
@@ -201,6 +206,7 @@ function summarizeInteractions(events){
  const reviewerRuns = events.filter(e=>e.type==='reviewer.finished');
  return {
   reviews:reviews.length,revisionRequests:revisions.length,reviewDecisions:countBy(reviews,e=>e.data.decision),
+  reviewSources:countBy(reviews,e=>['host','api'].includes(e.data?.source)?e.data.source:'unknown'),
   userAnswers:answers.filter(e=>e.data?.responder==='user').length,
   codexAnswers:answers.filter(e=>e.data?.responder==='codex').length,
   unknownAnswers:answers.filter(e=>!['user','codex'].includes(e.data?.responder)).length,

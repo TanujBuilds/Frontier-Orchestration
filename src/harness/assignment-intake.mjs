@@ -34,7 +34,7 @@ function validScope(scope) {
   catch { return false; }
 }
 
-function inspectInput(raw, registry) {
+function inspectInput(raw, registry, c) {
   const issues = [];
   const need = (value, field, valid, message) => {
     if (value == null || value === '' || Array.isArray(value) && !value.length) issues.push(issue('missing_input', field, message));
@@ -102,7 +102,7 @@ function inspectInput(raw, registry) {
   const limits = object(raw.limits) ? raw.limits : {};
   fields(raw.limits, ['hours', 'maxTasks', 'reviewAgentRuns', 'taskLimits'], 'limits');
   const maxTasks = isOvernightV2({ mode }) ? 10 : 100;
-  const maxReviewers = mode && mode.review !== 'operator' ? 0 : 10;
+  const maxReviewers = mode && mode.review !== 'operator' && !raw.reviewPolicy && !c?.selectedHost ? 0 : 10;
   for (const [name, min, max] of [['hours', 1, 24], ['maxTasks', 1, maxTasks], ['reviewAgentRuns', 0, maxReviewers]]) {
     need(limits[name], `limits.${name}`, value => Number.isInteger(value) && value >= min && value <= max, `Explicitly set ${name} to ${min === max ? min : `${min}–${max}`}.`);
   }
@@ -282,8 +282,8 @@ async function scopeProblem(repo, scope, tracked, write) {
   if (write && files.some(protectedPath)) return 'The selected editable directory includes a tracked protected path.';
 }
 
-async function resolveAssignment(raw, c) {
-  const { issues, mode } = inspectInput(raw, c.registry);
+async function resolveAssignment(raw, c, {legacy=false}={}) {
+  const { issues, mode } = inspectInput(raw, c.registry, c);
   const checkout = issues.some(item => ['project.repo', 'project.baseCommit'].includes(item.field))
     ? null : await inspectCheckout(raw.project);
   if (checkout?.issue) issues.push(checkout.issue);
@@ -291,7 +291,7 @@ async function resolveAssignment(raw, c) {
   const { repo, baseCommit } = checkout;
   const manifest = { ...raw, modeVersion: mode.version, project: { ...raw.project, repo, baseCommit } };
   let expectedHash;
-  try { expectedHash = digest(c.goalManifest(manifest)); }
+  try { expectedHash = digest(legacy?c.goalManifest(manifest,undefined,{historic:true}):c.goalManifest(c.reviewPreparation(manifest,{portable:true}))); }
   catch { return { issues: [issue('invalid_manifest', 'manifest', 'Check the remaining fields against the coding goal manifest contract.')] }; }
   for (const name of ['readPaths', 'writePaths']) {
     for (const [index, scope] of raw.project[name].entries()) {
@@ -302,7 +302,8 @@ async function resolveAssignment(raw, c) {
   return { issues, manifest, expectedHash };
 }
 
-export async function prepareAssignment(c, raw = {}, key) {
+export async function prepareAssignment(c, raw = {}, key, {legacy=false}={}) {
+  if(legacy&&(c.beta||raw.providerPolicy||raw.reviewPolicy))throw Error('Legacy assignment cannot select portable policy');
   const command = { op: 'assignment.prepare', manifest: raw };
   const unresolved = Symbol();
   try {
@@ -311,11 +312,11 @@ export async function prepareAssignment(c, raw = {}, key) {
   } catch (error) {
     if (error !== unresolved) throw error;
   }
-  const { issues, manifest, expectedHash } = await resolveAssignment(raw, c);
+  const { issues, manifest, expectedHash } = await resolveAssignment(raw, c, {legacy});
   try {
     return c.store.command(key, command, () => {
       if (issues.length) throw unresolved;
-      const goal = c.prepareGoal(manifest, `assignment-goal-${digest(key)}`);
+      const goal = (legacy?c.prepareLegacyGoal.bind(c):c.preparePortableGoal.bind(c))(manifest, `assignment-goal-${digest(key)}`);
       if (goal.status !== 'draft' || goal.hash !== expectedHash) {
         throw Error('Submission conflict: the existing goal is no longer the exact draft.');
       }

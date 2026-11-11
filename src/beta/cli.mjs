@@ -3,7 +3,7 @@ import {startMcp} from '../harness/mcp.mjs';
 import path from 'node:path';
 import {currentHome,locations} from './files.mjs';
 import {client} from './client.mjs';
-import {readSettings,setup,setupComplete,doctor} from './setup.mjs';
+import {readSettings,setup,setupComplete,doctor,previewHostRegistration} from './setup.mjs';
 import {serveBeta} from './service.mjs';
 import {runObserver} from './observer.mjs';
 import {observerClient} from './sources.mjs';
@@ -17,7 +17,8 @@ mosaic doctor            Check installation, Codex, MCP and provider discovery
 mosaic status --once     Print saved status and recent handoffs once
 mosaic --source core     Watch the existing frontier-harness installation
 mosaic --source beta     Watch only the separate beta installation
-mosaic mcp               Start the authenticated Codex MCP stdio bridge
+mosaic host-preview --host ID  Preview a manual host registration; writes nothing
+mosaic mcp               Start the authenticated host MCP stdio bridge
 mosaic serve             Run the coordinator in the foreground (fixture or troubleshooting)
 mosaic uninstall         Remove owned beta bindings and retain evidence
 mosaic --help            Show these commands
@@ -36,6 +37,10 @@ export async function main(args=process.argv.slice(2)){
  }
  const paths=locations(home??currentHome(),!!home),command=args.shift();
  if(sourceIndex!==-1&&command&&command!=='status')throw Error('--source is only supported by the terminal observer and status');
+ if(command==='host-preview'){
+  if(args.length!==2||args[0]!=='--host')throw Error('Use mosaic host-preview --host codex|claude-code|cursor|antigravity');
+  process.stdout.write(JSON.stringify(previewHostRegistration(paths,args[1]),null,2)+'\n');return;
+ }
  if(command==='setup'||!command&&sourceIndex===-1){
   let explicitCodex;
   if(args.length===2&&args[0]==='--codex'){args.shift();explicitCodex=args.shift();}

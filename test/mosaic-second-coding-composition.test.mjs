@@ -17,7 +17,7 @@ async function fixture(t, beta) {
   let now = Date.now(), sequence = 0, c, d;
   const config = {environment: 'fixture', beta};
   const connect = () => {
-    c = new Coordinator({root: state, beta, now: () => now});
+    c = new Coordinator({root: state, beta, selectedHost:'codex', now: () => now});
     const worker = new Worker({c, config, provider: {complete: async () => assert.fail('No model inference in native fixture')}});
     d = new Dispatcher({c, worker, config});
   };
@@ -46,7 +46,7 @@ async function fixture(t, beta) {
     const draft = await mutate('assignment_prepare', {manifest: {
       submissionId, objective: 'Correct parser in src/parser.mjs', acceptance: ['Parser checks pass'],
       environment: 'fixture', mode: 'codex_only', project,
-      limits: {hours: 1, maxTasks: 10, reviewAgentRuns: 0}, ...overrides,
+      limits: {hours: 1, maxTasks: 10, reviewAgentRuns: 2}, ...overrides,
     }});
     assert.equal(draft.status, 'prepared');
     return mutate('goal_activate', {goalId: draft.goalId, hash: draft.hash});
@@ -89,6 +89,9 @@ for (const beta of [false, true]) test(`recipes, backlog, outcomes and learned c
   await writeFile(path.join(started.native.worktree, 'src/parser.mjs'), 'export const parse = input => input.trim();\n');
   await f.operation('native_finish', {taskId: sourceId, summary: 'Scripted native fixture trims parser input'});
   assert.equal((await f.read('outcomes_report', {goalId: g.id})).counts.usefulAccepted, 0, 'Passing candidate checks alone are not useful acceptance');
+  const item=(await f.read('review_inbox',{goalId:g.id})).items.find(item=>item.taskId===sourceId);
+  const ticket=await f.mutate('review_reserve',item.binding);
+  await f.mutate('review_submit',{ticketId:ticket.ticketId,...item.binding,verdict:{decision:'accept',feedback:'Scripted host assessment of protected parser candidate',findings:[]}});
   const accepted = await f.operation('task_integrate', {taskId: sourceId, feedback: 'Scripted native fixture accepts checked change'});
   assert.equal(accepted.status, 'accepted');
   assert.ok(accepted.integration.checks.every(check => check.passed));

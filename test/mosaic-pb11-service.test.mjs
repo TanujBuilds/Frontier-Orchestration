@@ -1,3 +1,4 @@
+// Fresh service preparation receives trusted host selection through runtime configuration.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
@@ -14,7 +15,7 @@ test('service preparation uses the trusted injected provider catalog', {timeout:
   maxContextTokens:null,maxOutputTokens:8000,concurrency:1,capacityGroup:'fixture-group',credentialRef:null,streaming:false};
  const cli=new URL('../src/harness/cli.mjs',import.meta.url).href;
  const registry=new URL('../src/harness/providers/registry.mjs',import.meta.url).href;
- const script=`import {serve} from ${JSON.stringify(cli)};import {ProviderRegistry} from ${JSON.stringify(registry)};await serve({root:process.argv[1],port:0,headless:true,runtimeConfig:{environment:'fixture',providerRegistry:new ProviderRegistry({profiles:[${JSON.stringify(profile)}]})}});`;
+ const script=`import {serve} from ${JSON.stringify(cli)};import {ProviderRegistry} from ${JSON.stringify(registry)};await serve({root:process.argv[1],port:0,headless:true,runtimeConfig:{environment:'fixture',hostId:'codex',providerRegistry:new ProviderRegistry({profiles:[${JSON.stringify(profile)}]})}});`;
  const child=spawn(process.execPath,['--input-type=module','-e',script,root],{stdio:['ignore','pipe','pipe']});
  const closed=once(child,'close');let output='',errors='';
  child.stdout.setEncoding('utf8');child.stderr.setEncoding('utf8');

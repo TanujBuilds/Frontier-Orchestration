@@ -1,3 +1,4 @@
+// Fresh beta planner-only fixtures select a host; historical nonbeta preparation stays unchanged.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,rm,writeFile} from 'node:fs/promises';
@@ -19,7 +20,7 @@ const unavailable=()=>Object.assign(Error('Provider unavailable'),{requestOutcom
 async function fixture(t,{beta=false,workerProfile,verifyCurrentWorker}={}){
  const root=await mkdtemp(path.join(os.tmpdir(),'mosaic-integration-planning-')),repo=path.join(root,'repo');
  let now=Date.UTC(2026,10,10);
- const c=new Coordinator({root:path.join(root,'state'),now:()=>now,beta,workerProfile,verifyCurrentWorker});
+ const c=new Coordinator({root:path.join(root,'state'),now:()=>now,beta,...(beta?{selectedHost:'codex'}:{}),workerProfile,verifyCurrentWorker});
  t.after(async()=>{c.close();await rm(root,{recursive:true,force:true});});
  await mkdir(repo);await writeFile(path.join(repo,'gate.mjs'),'process.exit(0);\n');
  await git(repo,'init','-q');await git(repo,'add','.');

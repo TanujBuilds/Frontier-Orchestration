@@ -4,6 +4,7 @@ import {isOvernightV2,normalizeOvernightPolicy} from './overnight.mjs';
 import {behavioralChecksSchema,normalizeBehavioralChecks} from './behavioral-validation.mjs';
 import { matches, relativePath, validatePermissions } from '../project/contracts.mjs';
 import {normalizeProviderPolicy,profileIdentity} from './providers/contracts.mjs';
+import {normalizeReviewPolicy,assertReviewMode} from './review/contracts.mjs';
 
 export function canonical(value) {
  if (value===null||typeof value!=='object') {
@@ -44,7 +45,7 @@ export const taskInputSchema=objectSchema({submissionId:stringSchema,kind:{type:
 // Historical schema exports remain stable; public dispatch adds the explicit opt-in union.
 const [nullProject,projectInput]=goalInputSchema.properties.project.anyOf;
 const projectDispatchInputSchema={anyOf:[nullProject,{...projectInput,properties:{...projectInput.properties,behavioralChecks:behavioralChecksSchema}}]};
-const providerSnapshotSchema=objectSchema({
+export const providerSnapshotSchema=objectSchema({
  schema:{type:'integer',enum:[1]},id:stringSchema,revision:stringSchema,displayName:stringSchema,
  transport:{type:'string',enum:['openai-chat','openai-responses','anthropic-messages']},baseUrl:stringSchema,model:stringSchema,
  roles:{type:'array',items:{type:'string',enum:['worker','reviewer']}},
@@ -53,7 +54,8 @@ const providerSnapshotSchema=objectSchema({
  concurrency:{type:'integer',minimum:1,maximum:4},capacityGroup:stringSchema,streaming:{type:'boolean'},
 },['schema','id','revision','displayName','transport','baseUrl','model','roles','capabilities','maxContextTokens','maxOutputTokens','concurrency','capacityGroup','streaming']);
 export const providerPolicyInputSchema=objectSchema({version:{type:'integer',enum:[1]},workers:{type:'array',maxItems:16,items:providerSnapshotSchema},plannerWorkerId:stringSchema,defaultWorkerId:stringSchema,maxConcurrentTasks:{type:'integer',minimum:1,maximum:4},capacityGroups:{type:'array',maxItems:16,items:objectSchema({id:stringSchema,limit:{type:'integer',minimum:1,maximum:4}},['id','limit'])}},['version','workers','plannerWorkerId','defaultWorkerId','capacityGroups']);
-export const goalDispatchInputSchema={...goalInputSchema,properties:{...goalInputSchema.properties,project:projectDispatchInputSchema,researchPolicy:researchPolicyInputSchema,providerPolicy:providerPolicyInputSchema,overnightPolicy:objectSchema({preflightCheckIds:stringsSchema,finalOnlyCheckIds:stringsSchema,launchCheckIds:stringsSchema,maxBatches:{type:'integer',minimum:1,maximum:20},maxExchanges:{type:'integer',minimum:1,maximum:40},maxCorrections:{type:'integer',minimum:0,maximum:2},reconnectMs:{type:'integer',minimum:1,maximum:1800000}},['preflightCheckIds','finalOnlyCheckIds'])}};
+export const reviewPolicyInputSchema=objectSchema({version:{type:'integer',enum:[1]},source:{type:'string',enum:['host','api']},hostId:{type:'string',enum:['codex','claude-code','cursor','antigravity']},reviewer:providerSnapshotSchema,fallback:{type:'string',enum:['wait']}},['version','source','fallback']);
+export const goalDispatchInputSchema={...goalInputSchema,properties:{...goalInputSchema.properties,project:projectDispatchInputSchema,researchPolicy:researchPolicyInputSchema,providerPolicy:providerPolicyInputSchema,reviewPolicy:reviewPolicyInputSchema,overnightPolicy:objectSchema({preflightCheckIds:stringsSchema,finalOnlyCheckIds:stringsSchema,launchCheckIds:stringsSchema,maxBatches:{type:'integer',minimum:1,maximum:20},maxExchanges:{type:'integer',minimum:1,maximum:40},maxCorrections:{type:'integer',minimum:0,maximum:2},reconnectMs:{type:'integer',minimum:1,maximum:1800000}},['preflightCheckIds','finalOnlyCheckIds'])}};
 export const taskDispatchInputSchema={...taskInputSchema,properties:{...taskInputSchema.properties,researchPolicy:researchPolicyInputSchema,role:{type:'string',enum:['implementation','final']}}};
 const baseModes=[
  {id:'collaborative',version:1,planner:'codex',actors:['codex','deepseek'],review:'operator',capabilities:['coding','research','consult','learning']},
@@ -149,14 +151,17 @@ export function providerBinding(manifest,providerId){
  return {version:1,providerId:profile.id,revision:profile.revision,profileHash:digest(profileIdentity(profile)),policyHash:manifest.providerPolicyHash};
 }
 export function normalizeGoal(raw,registry=new Registry(),providerRegistry){
- keys(raw,['submissionId','objective','acceptance','project','mode','modeVersion','scope','limits','environment','researchPolicy','overnightPolicy','providerPolicy'],'goal');
+ keys(raw,['submissionId','objective','acceptance','project','mode','modeVersion','scope','limits','environment','researchPolicy','overnightPolicy','providerPolicy','reviewPolicy'],'goal');
  if(raw.providerPolicy!==undefined&&!providerRegistry)throw Error('Configured provider registry required for a provider policy');
  const providerPolicy=normalizeProviderPolicy(raw.providerPolicy,providerRegistry);
  const environment=raw.environment??'live';if(!['live','fixture'].includes(environment))throw Error('Invalid execution environment');
+ const reviewPolicy=normalizeReviewPolicy(raw.reviewPolicy);
  const mode=registry.mode(raw.mode,raw.modeVersion),policy=Object.hasOwn(raw,'researchPolicy')?normalizeResearchPolicy(raw.researchPolicy):undefined;
+ assertReviewMode(mode,reviewPolicy);
+ if(reviewPolicy?.source==='api'){if(!providerRegistry||digest(providerRegistry.get(reviewPolicy.reviewer.id,reviewPolicy.reviewer.revision))!==digest(reviewPolicy.reviewer))throw Error('Reviewer identity differs from configured registry');}
  if(policy?.version===3&&mode.id!=='collaborative')throw Error('Reviewed research requires collaborative mode');
  if(policy&&(!mode.capabilities.includes('research')||!mode.actors.includes('deepseek')))throw Error('Research policy requires autonomous research capability');
- const limits={hours:8,maxTasks:10,reviewAgentRuns:mode.review==='operator'?2:0,...raw.limits};
+ const limits={hours:8,maxTasks:10,reviewAgentRuns:reviewPolicy?2:mode.review==='operator'?2:0,...raw.limits};
  if(raw.limits)keys(raw.limits,['hours','maxTasks','reviewAgentRuns','taskLimits'],'goal limits');
  if(Object.hasOwn(limits,'taskLimits')){
   keys(limits.taskLimits,Object.keys(TASK_LIMITS),'goal task limits');const ceilings={};
@@ -169,7 +174,7 @@ export function normalizeGoal(raw,registry=new Registry(),providerRegistry){
  }
  if(isOvernightV2({mode})){limits.taskLimits={...limits.taskLimits,coding:{seconds:7200,...limits.taskLimits?.coding}};if(limits.maxTasks>10)throw Error('Overnight v2 stage cap is ten');}
  integer(limits.hours,'hours',1,24);integer(limits.maxTasks,'maxTasks',1,100);integer(limits.reviewAgentRuns,'reviewAgentRuns',0,10);
- if(mode.review!=='operator'&&limits.reviewAgentRuns)throw Error('Mode prohibits Codex review agents');
+ if(!reviewPolicy&&mode.review!=='operator'&&limits.reviewAgentRuns)throw Error('Mode prohibits Codex review agents');
  let project=null;
  if(raw.project){
   keys(raw.project,['repo','baseCommit','readPaths','writePaths','checks','behavioralChecks'],'project');
@@ -182,7 +187,7 @@ export function normalizeGoal(raw,registry=new Registry(),providerRegistry){
  }
  const overnightPolicy=isOvernightV2({mode})?normalizeOvernightPolicy(raw.overnightPolicy,project):undefined;
  if(!overnightPolicy&&Object.hasOwn(raw,'overnightPolicy'))throw Error('Overnight policy requires pinned v2');
- const manifest={schema:1,environment,submissionId:identifier(raw.submissionId,'submissionId'),objective:text(raw.objective,'objective'),acceptance:strings(raw.acceptance,'acceptance'),project,mode,capabilities:registry.snapshot().capabilities.filter(c=>mode.capabilities.includes(c.id)&&c.version===(policy&&c.id==='research'?(policy.correctionStrategy==='targeted_v1'?6:policy.repairContextVersion===1?5:policy.version+1):1)),scope:sourceScope(raw.scope),limits,...(overnightPolicy?{overnightPolicy}:{}),...(policy?{researchPolicy:policy}:{})};
+ const manifest={schema:1,environment,submissionId:identifier(raw.submissionId,'submissionId'),objective:text(raw.objective,'objective'),acceptance:strings(raw.acceptance,'acceptance'),project,mode,capabilities:registry.snapshot().capabilities.filter(c=>mode.capabilities.includes(c.id)&&c.version===(policy&&c.id==='research'?(policy.correctionStrategy==='targeted_v1'?6:policy.repairContextVersion===1?5:policy.version+1):1)),scope:sourceScope(raw.scope),limits,...(overnightPolicy?{overnightPolicy}:{}),...(policy?{researchPolicy:policy}:{}),...(reviewPolicy?{reviewPolicy,reviewPolicyHash:digest(reviewPolicy)}:{})};
  if(providerPolicy){
   manifest.providerPolicy=providerPolicy;manifest.providerPolicyHash=digest(providerPolicy);
   if(mode.planner==='deepseek')manifest.plannerBinding=providerBinding(manifest,providerPolicy.plannerWorkerId);

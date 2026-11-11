@@ -1,3 +1,4 @@
+// Fresh portable provider fixtures select their host; literal historical approval fixtures stay unchanged.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtempSync,rmSync} from 'node:fs';
@@ -28,7 +29,7 @@ const project={repo:'/tmp/pb11-binding-project',baseCommit:'a'.repeat(40),readPa
 async function fixture(t,{profiles=[privateProfile()],beta=false}={}){
  const {ProviderRegistry}=await import('../src/harness/providers/registry.mjs');
  const root=mkdtempSync(path.join(os.tmpdir(),'pb11-bindings-'));
- const options={root,now:()=>1700000000000,beta,providerRegistry:new ProviderRegistry({profiles,credentialResolver:()=> 'dummy-private-auth'})};
+ const options={root,now:()=>1700000000000,beta,selectedHost:'codex',providerRegistry:new ProviderRegistry({profiles,credentialResolver:()=> 'dummy-private-auth'})};
  let c=new Coordinator(options),d=new Dispatcher({c,config:{beta}});
  t.after(()=>{c.close();rmSync(root,{recursive:true,force:true});});
  return {get c(){return c;},get d(){return d;},root,options,profiles,
