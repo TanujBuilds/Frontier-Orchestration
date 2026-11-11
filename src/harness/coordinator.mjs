@@ -5,7 +5,8 @@ import {readFileSync} from 'node:fs';
 import {isOvernightV2,effectiveIntegrationChecks} from './overnight.mjs';
 import {assertOvernightPreflight} from './overnight-preflight.mjs';
 import { Store } from './store.mjs';
-import { Registry, normalizeGoal, normalizeTask, digest, text, identifier } from './contracts.mjs';
+import { Registry, normalizeGoal, normalizeTask, providerBinding as manifestProviderBinding, digest, text, identifier, keys } from './contracts.mjs';
+import {normalizeProviderPolicy} from './providers/contracts.mjs';
 import {verifyLocalAcceptance} from './research-review.mjs';
 import { Learning } from './learning.mjs';
 import {workerProfile as normalizeWorkerProfile} from './worker-profile.mjs';
@@ -63,7 +64,9 @@ function savedFailedGate(c,t,g){
  return verified.candidateId===gate.candidateId&&verified.failureId===gate.failureId&&verified.signature===gate.signature;
 }
 export class Coordinator {
- constructor({root,now=Date.now,registry=new Registry(),beta=false,workerProfile,verifyCurrentWorker}={}){
+ constructor({root,now=Date.now,registry=new Registry(),beta=false,workerProfile,verifyCurrentWorker,providerRegistry}={}){
+  if(providerRegistry&&!['get','snapshot','createClient'].every(method=>typeof providerRegistry[method]==='function'))throw Error('A normalized provider registry is required');
+  this.providerRegistry=providerRegistry??null;
   this.beta=beta;this.verifyCurrentWorker=verifyCurrentWorker;this.workerProfile=workerProfile?normalizeWorkerProfile(workerProfile):null;
   this.store=new Store(root);this.now=now;this.registry=registry;
   for(const record of this.store.all('mode')){const m=record.definition??record;if(!this.registry.modes.has(`${m.id}@${m.version}`))this.registry.registerMode(m);}
@@ -162,21 +165,40 @@ export class Coordinator {
  });}
  notifications({goalId}={}){return this.store.all('notification').filter(n=>!n.acknowledged&&!n.resolved&&(!goalId||n.goalId===goalId)).sort((a,b)=>b.sequence-a.sequence).slice(0,50);}
  ackNotification(input,key){return this.store.command(key,{op:'notification.ack',...input},()=>{const n=this.store.get('notification',input.notificationId);n.acknowledged=true;n.acknowledgedAt=this.now();this.store.put('notification',n);return n;});}
- goalManifest(raw){
-  if(!this.beta)return normalizeGoal(raw,this.registry);
+ goalManifest(raw,providerRegistry=this.providerRegistry){
+  if(!this.beta)return normalizeGoal(raw,this.registry,providerRegistry);
   if(raw.researchPolicy)throw Error('Research is parked in Mosaic Beta');
-  const manifest=normalizeGoal({...raw,mode:raw.mode??(this.workerProfile?'collaborative':'codex_only'),modeVersion:raw.modeVersion??1},this.registry);
+  const manifest=normalizeGoal({...raw,mode:raw.mode??(this.workerProfile||raw.providerPolicy?'collaborative':'codex_only'),modeVersion:raw.modeVersion??1},this.registry,providerRegistry);
   if(!['collaborative','deepseek_only','codex_only','overnight_review'].includes(manifest.mode.id)||(manifest.mode.version!==1&&!isOvernightV2(manifest)))throw Error('Select a built-in Mosaic Beta workflow');
   manifest.mode={...manifest.mode,capabilities:manifest.mode.capabilities.filter(id=>id!=='research')};
   manifest.capabilities=manifest.capabilities.filter(capability=>capability.id!=='research');
-  if(manifest.mode.actors.includes('deepseek')){
+  if(manifest.mode.actors.includes('deepseek')&&!manifest.providerPolicy){
    this.verifyCurrentWorker?.();
    if(!this.workerProfile)throw Error('Configure an API worker in mosaic setup or use codex_only');
    manifest.workerProfile=this.workerProfile;
   }
   return manifest;
  }
- verifyWorkerBinding(goal){
+ providerBinding(goal,providerId){return manifestProviderBinding(goal.manifest,providerId);}
+ verifyWorkerBinding(goal,taskOrBinding){
+  if(goal.manifest.providerPolicy){
+   const manifest=goal.manifest,policy=manifest.providerPolicy;
+   if(!manifest.mode.actors.includes('deepseek'))throw Error('Mode prohibits API worker dispatch');
+   if(!this.providerRegistry)throw Error('Approved provider registry is unavailable');
+   if(digest(policy)!==manifest.providerPolicyHash)throw Error('Approved provider policy hash differs');
+   // Validate the entire approved pool, including members not selected for this
+   // request. A changed catalog never silently narrows the original approval.
+   if(digest(normalizeProviderPolicy(policy,this.providerRegistry))!==manifest.providerPolicyHash)throw Error('Approved provider policy changed');
+   const task=taskOrBinding&&Object.hasOwn(taskOrBinding,'spec')?taskOrBinding:null;
+   if(task&&(task.goalId!==goal.id||task.goalVersion!==goal.version||task.spec.actor!=='deepseek'))throw Error('Task provider binding has stale goal version or prohibited actor');
+   const binding=task?task.providerBinding:taskOrBinding??this.providerBinding(goal,policy.defaultWorkerId);
+   keys(binding,['version','providerId','revision','profileHash','policyHash'],'provider binding');
+   const expected=this.providerBinding(goal,binding.providerId);
+   if(binding.version!==1||digest(binding)!==digest(expected)||task&&binding.providerId!==policy.defaultWorkerId)throw Error('Task or planner provider binding differs from approved identity');
+   const profile=policy.workers.find(worker=>worker.id===binding.providerId);
+   if(task&&!profile.capabilities.taskKinds.includes(task.spec.kind))throw Error('Approved provider lacks task kind capability');
+   return structuredClone(profile);
+  }
   const approved=goal.manifest.workerProfile;
   if(!approved&&!this.beta)return;
   this.verifyCurrentWorker?.();
@@ -186,7 +208,23 @@ export class Coordinator {
  verifyGoalBinding(goal){
   if(goal.manifest.mode.actors.includes('deepseek'))this.verifyWorkerBinding(goal);
  }
- prepareGoal(raw,key){const manifest=this.goalManifest(raw);return this.store.command(key,{op:'goal.prepare',manifest},()=>{
+ prepareGoal(raw,key){
+  const saved=typeof key==='string'?this.store.db.prepare('SELECT hash,result FROM commands WHERE key=?').get(key):null;
+  const previous=saved?JSON.parse(saved.result):null;
+  if(saved&&(raw?.providerPolicy!==undefined||previous?.manifest?.providerPolicy)){
+   const approved=previous?.manifest;
+   if(!raw?.providerPolicy||!approved?.providerPolicy||previous.hash!==digest(approved)||saved.hash!==digest({op:'goal.prepare',manifest:approved}))throw Error('Idempotency key conflict');
+   // An existing portable preparation receipt binds its original public pool.
+   // Replay canonicalizes against that saved identity, never mutable settings.
+   const catalog=Object.freeze({get(id,revision){
+    const profile=approved.providerPolicy.workers.find(worker=>worker.id===id&&worker.revision===revision);
+    if(!profile)throw Error('Saved provider revision differs');
+    return structuredClone(profile);
+   }});
+   let manifest;try{manifest=this.goalManifest(raw,catalog);}catch{throw Error('Idempotency key conflict');}
+   return this.store.command(key,{op:'goal.prepare',manifest},()=>{throw Error('Saved portable preparation command is unavailable');});
+  }
+  const manifest=this.goalManifest(raw);return this.store.command(key,{op:'goal.prepare',manifest},()=>{
   const g=this.store.submission('goal','',manifest.submissionId,digest(manifest),id=>({id,manifest,hash:digest(manifest),version:1,status:'draft',createdAt:this.now(),activatedAt:null,deadline:null}));
   this.emit('goal.prepared',g.id,null,{hash:g.hash});return g;
  });}
@@ -227,7 +265,9 @@ export class Coordinator {
   if(existing.length>=g.manifest.limits.maxTasks)throw Error('Goal task cap reached');
   if(spec.kind==='learning'&&existing.some(t=>t.spec.kind==='learning'))throw Error('Learning assignment limit reached');
   for(const id of spec.dependsOn){const dep=this.store.get('task',id);if(dep.goalId!==goalId)throw Error('Dependency outside goal');}
-  const t=this.store.submission('task',goalId,spec.submissionId,hash,id=>({id,goalId,goalVersion:g.version,spec,hash,status:spec.actor==='codex'?'codex_ready':'queued',sequence:this.store.all('task').length+1,createdAt:this.now(),startedAt:null,deadline:null,owner:null,checkpoint:{},attempts:0,reviews:0,questions:[],answers:[],feedback:[],yieldRequested:false,pauseRequested:false,stopRequested:false,reviewed:false,result:null}));
+  const providerBinding=spec.actor==='deepseek'?this.providerBinding(g,g.manifest.providerPolicy?.defaultWorkerId):undefined;
+  if(providerBinding)this.verifyWorkerBinding(g,{goalId,goalVersion:g.version,spec,providerBinding});
+  const t=this.store.submission('task',goalId,spec.submissionId,hash,id=>({id,goalId,goalVersion:g.version,spec,hash,...(providerBinding?{providerBinding}:{}),status:spec.actor==='codex'?'codex_ready':'queued',sequence:this.store.all('task').length+1,createdAt:this.now(),startedAt:null,deadline:null,owner:null,checkpoint:{},attempts:0,reviews:0,questions:[],answers:[],feedback:[],yieldRequested:false,pauseRequested:false,stopRequested:false,reviewed:false,result:null}));
   this.emit('task.submitted',goalId,t.id,{actor:spec.actor,kind:spec.kind,hash});this.requestUrgentYield();return this.getTask(t.id);
  });}
  submitWorkflow(input,key){return this.store.command(key,{op:'workflow.submit',...input},()=>{
@@ -276,11 +316,20 @@ export class Coordinator {
   if(this.store.all('planning').some(p=>['running','uncertain'].includes(p.status)))return null;
   const tasks=this.store.all('task');if(tasks.some(t=>SLOT.has(t.status)&&t.spec.actor==='deepseek'))return null;
   const priorities=this.effectivePriorities();const candidates=tasks.filter(t=>['queued','suspended'].includes(t.status)&&t.spec.actor==='deepseek'&&t.executionActor!=='codex'&&this.eligible(t)).sort((a,b)=>priorities.get(b.id)-priorities.get(a.id)||a.sequence-b.sequence);
-  if(!candidates.length)return null;const t=candidates[0],g=this.store.get('goal',t.goalId);
-  t.startedAt??=this.now();t.deadline??=Math.min(g.deadline,t.startedAt+t.spec.limits.seconds*1000);t.owner=owner;t.status='running';t.yieldRequested=false;
-  delete t.interruptedOwner;
-  if(lease)t.ownerLease=lease.generation;else delete t.ownerLease;
-  this.store.put('task',t);this.learning.pin(t.id);this.emit('task.claimed',t.goalId,t.id,{owner});return this.getTask(t.id);
+  for(const t of candidates){
+   const g=this.store.get('goal',t.goalId);
+   if(g.manifest.providerPolicy){
+    try{this.verifyWorkerBinding(g,t);}catch(error){
+     this.settleTask(t,'blocked','Approved API worker binding cannot be used: '+String(error?.message??error).slice(0,500)+'. Restore the approved provider configuration, or prepare and approve a new goal with the current catalog.');
+     continue;
+    }
+   }
+   t.startedAt??=this.now();t.deadline??=Math.min(g.deadline,t.startedAt+t.spec.limits.seconds*1000);t.owner=owner;t.status='running';t.yieldRequested=false;
+   delete t.interruptedOwner;
+   if(lease)t.ownerLease=lease.generation;else delete t.ownerLease;
+   this.store.put('task',t);this.learning.pin(t.id);this.emit('task.claimed',t.goalId,t.id,{owner});return this.getTask(t.id);
+  }
+  return null;
  });}
  owned(id,owner){
   const t=this.store.get('task',id);
@@ -298,6 +347,10 @@ export class Coordinator {
   if(saved&&saved.status!=='completed')throw Error('Request is ambiguous and remains spent');
   const t=this.owned(taskId,owner),g=this.store.get('goal',t.goalId);this.liveGoal(g);if(t.status!=='running'||this.now()>=t.deadline||t.stopRequested||t.pauseRequested)throw Error('Task deadline/control prevents request');
   if(t.spec.actor!=='deepseek'||!g.manifest.mode.actors.includes('deepseek'))throw Error('Mode prohibits model actor');
+  if(kind==='model'&&g.manifest.providerPolicy){
+   this.verifyWorkerBinding(g,t);
+   if(saved&&digest(saved.providerBinding??null)!==digest(t.providerBinding))throw Error('Saved request provider binding differs from the task');
+  }
   if(saved)return {...saved,cached:true};
   const wait=kind==='model'?t.providerWait:null;
   if(wait){
@@ -306,10 +359,10 @@ export class Coordinator {
   }
   const budget={model:'modelCalls',search:'searches',download:'downloads'}[kind];if(!budget||!t.spec.limits[budget])throw Error('Unsupported request kind');
   if((this.store.spent(taskId)[kind]??0)>=t.spec.limits[budget])throw Error('Request budget limit reached');
-  if(kind==='model')this.verifyWorkerBinding(g);
+  if(kind==='model'&&!g.manifest.providerPolicy)this.verifyWorkerBinding(g);
   const profile=kind==='model'?g.manifest.workerProfile:null;
   if(profile&&!t.workerProfile){t.workerProfile=profile;this.store.put('task',t);}
-  const id=randomUUID(),data={owner,reservedAt:this.now(),...(profile?{workerProfile:profile}:{}),...(wait?{reconnectUntil:wait.until}:{})};this.store.db.prepare('INSERT INTO requests VALUES(?,?,?,?,?,?)').run(id,taskId,key,kind,'reserved',JSON.stringify(data));
+  const id=randomUUID(),data={owner,reservedAt:this.now(),...(profile?{workerProfile:profile}:{}),...(kind==='model'&&t.providerBinding?{providerBinding:t.providerBinding}:{}),...(wait?{reconnectUntil:wait.until}:{})};this.store.db.prepare('INSERT INTO requests VALUES(?,?,?,?,?,?)').run(id,taskId,key,kind,'reserved',JSON.stringify(data));
   this.emit('request.reserved',t.goalId,taskId,{id,key,kind});return {id,task_id:taskId,key,kind,status:'reserved',...data,cached:false};
  });}
  ownedRequest(id,owner){

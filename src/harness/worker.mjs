@@ -7,6 +7,7 @@ import { MaintenanceAdapter } from './maintenance.mjs';
 import { Planner } from './planning.mjs';
 import {OvernightLifecycle} from './overnight-lifecycle.mjs';
 import { LegacyReview } from './legacy-review.mjs';
+import {isRegistryClient} from './providers/registry.mjs';
 
 export class Worker {
  constructor({c,coordinator=c,provider,reviewer,checksFactory,owner=randomUUID(),config={},adapters={}}){
@@ -54,34 +55,46 @@ export class Worker {
      error.dispatchStopped=true;
      throw error;
     }
-    try{this.c.verifyWorkerBinding(this.c.store.get('goal',current.goalId));}
+    try{this.c.verifyWorkerBinding(this.c.store.get('goal',current.goalId),current);}
     catch(error){error.requestOutcome='not_dispatched';error.bindingChanged=true;throw error;}
    }
    if(current.providerModel&&current.providerModel!==model){const e=Error('DeepSeek model differs from pinned task model');e.requestOutcome='completed';throw e;}
    if(!current.providerModel){current.providerModel=model;this.c.store.put('task',current);}
   });
  }
- getProvider({planning=false}={}){
+ getProvider(taskOrBinding={}){
+  if(taskOrBinding.goalId){
+   const goal=this.c.store.get('goal',taskOrBinding.goalId);
+   if(goal.manifest.providerPolicy){
+    this.c.verifyWorkerBinding(goal,taskOrBinding);
+    return this.c.providerRegistry.createClient(taskOrBinding.providerBinding);
+   }
+  }else if(Object.hasOwn(taskOrBinding,'providerId')){
+   // Planner verifies this exact pin against its approved goal before calling.
+   // Cache ownership stays with the current registry, including private auth.
+   return this.c.providerRegistry.createClient(taskOrBinding);
+  }
+  const {planning=false}=taskOrBinding;
   const profile=this.c.workerProfile;
   this.provider??=new LocalProvider(profile?{...profile,apiKey:this.config.workerApiKey,openAICompatible:true}:{baseUrl:this.config.deepseekBaseUrl,model:this.config.deepseekModelId,streaming:planning?false:this.config.deepseekStreaming??false});
   return this.provider;
  }
  async model(task,owner,key,messages,{maxTokens=12000}={}){
-  this.c.verifyWorkerBinding(this.c.store.get('goal',task.goalId));
+  const goal=this.c.store.get('goal',task.goalId);
+  const profile=this.c.verifyWorkerBinding(goal,task);
   const reservation=this.c.reserve(task.id,{key,kind:'model'},owner);
   if(reservation.cached){this.pinModel(task,owner,reservation.result.requestedModel??reservation.result.model);this.activity(task,'model.request.completed',{operationId:reservation.id,requestId:reservation.id,model:reservation.result.model??null,finishReason:reservation.result.finishReason??null});return reservation.result;}
-  const goal=this.c.store.get('goal',task.goalId);
   const remaining=Math.max(1,Math.min(600000,task.deadline-this.c.now(),goal.deadline-this.c.now()));
-  let captured=0,chunkIndex=0,result,invoked=false,expectedModel;
+  let captured=0,chunkIndex=0,result,invoked=false,expectedModel,provider;
   let builtInCompletion=false,reachedDispatch=false,dispatchFailure;
   try{
    if(goal.manifest.environment!==(this.config.environment??'live'))throw Error('Approved environment differs from configured providers');
-   const provider=this.getProvider();
-   builtInCompletion=provider instanceof LocalProvider&&provider.complete===LocalProvider.prototype.complete;
-   expectedModel=this.c.getTask(task.id).providerModel;
+   provider=this.getProvider(task);
+   builtInCompletion=provider instanceof LocalProvider&&provider.complete===LocalProvider.prototype.complete||isRegistryClient(provider);
+   expectedModel=this.c.getTask(task.id).providerModel??profile?.model;
    this.activity(task,'model.request.started',{requestId:reservation.id,key});
    invoked=true;
-   result=await provider.complete(messages,{maxTokens,streaming:this.c.workerProfile?.streaming??this.config.deepseekStreaming??false,signal:AbortSignal.timeout(remaining),expectedModel,onModel:model=>{
+   result=await provider.complete(messages,{maxTokens:profile?Math.min(maxTokens,profile.maxOutputTokens):maxTokens,streaming:profile?.streaming??this.c.workerProfile?.streaming??this.config.deepseekStreaming??false,signal:AbortSignal.timeout(remaining),expectedModel,onModel:model=>{
     try{this.pinModel(task,owner,model,reservation.reconnectUntil,true);}
     catch(error){dispatchFailure=error;throw error;}
     this.activity(task,'model.request.resolved',{operationId:reservation.id,requestId:reservation.id,model});
@@ -102,7 +115,8 @@ export class Worker {
    const beforeBuiltInDispatch=builtInCompletion&&!reachedDispatch;
    const certified=beforeBuiltInDispatch||(error?.requestOutcome==='not_dispatched'&&httpStatus!==408);
    const outcome=!invoked||certified?'not_dispatched':'unknown';
-   const pinnedMismatch=expectedModel&&this.provider?.resolvedModel&&expectedModel!==this.provider.resolvedModel;
+   const resolvedModel=provider?.resolvedModel??profile?.model;
+   const pinnedMismatch=expectedModel&&resolvedModel&&expectedModel!==resolvedModel;
    // A discovery timeout is safe. A completion gateway timeout cannot prove
    // whether upstream inference started, even when it arrives as a 4xx.
    const transientStatus=httpStatus===undefined||[429,502,503,504].includes(httpStatus)||(beforeBuiltInDispatch&&httpStatus===408);
@@ -152,7 +166,7 @@ export class Worker {
   try{
    if(task.spec.kind!=='research'){task=this.c.boundary(task.id,task.checkpoint,this.owner);if(task.status!=='running')return task;}
    if(this.c.store.get('goal',task.goalId).manifest.environment!==(this.config.environment??'live'))throw Error('Approved environment differs from configured providers');
-   this.c.verifyWorkerBinding(this.c.store.get('goal',task.goalId));
+   this.c.verifyWorkerBinding(this.c.store.get('goal',task.goalId),task);
    if(task.spec.kind==='coding'&&!task.checkpoint.executionBase){const executionBase=await this.integration.executionBase(task.goalId);if(typeof executionBase!=='string'||!/^[a-f0-9]{40}$/.test(executionBase))throw Error('Integration execution base must be a committed SHA');task=this.c.boundary(task.id,{...task.checkpoint,executionBase},this.owner);if(task.status!=='running')return task;}
    if(task.spec.kind==='consult'){
     if(!task.attempts)this.c.beginAttempt(task.id,this.owner);
@@ -163,12 +177,13 @@ export class Worker {
    if(task.providerWait&&task.providerWait.readyOwner!==this.owner){
     let available=false;
     try{
-     this.getProvider();
+     const provider=this.getProvider(task);
      const remaining=Math.min(10000,task.providerWait.until-this.c.now());
-     if(remaining>0&&typeof this.provider.availability==='function'){
-      available=await this.provider.availability(AbortSignal.timeout(remaining))===true;
+     if(remaining>0&&typeof provider.availability==='function'){
+      available=await provider.availability(AbortSignal.timeout(remaining))===true;
      }
     }catch{/* A failed availability probe cannot authorize a new reservation. */}
+    this.c.verifyWorkerBinding(this.c.store.get('goal',task.goalId),this.c.getTask(task.id));
     task=this.c.finishProviderProbe(task.id,this.owner,available);
     if(task.status!=='running')return task;
    }

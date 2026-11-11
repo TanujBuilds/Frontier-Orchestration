@@ -3,6 +3,7 @@ import path from 'node:path';
 import {isOvernightV2,normalizeOvernightPolicy} from './overnight.mjs';
 import {behavioralChecksSchema,normalizeBehavioralChecks} from './behavioral-validation.mjs';
 import { matches, relativePath, validatePermissions } from '../project/contracts.mjs';
+import {normalizeProviderPolicy,profileIdentity} from './providers/contracts.mjs';
 
 export function canonical(value) {
  if (value===null||typeof value!=='object') {
@@ -43,7 +44,16 @@ export const taskInputSchema=objectSchema({submissionId:stringSchema,kind:{type:
 // Historical schema exports remain stable; public dispatch adds the explicit opt-in union.
 const [nullProject,projectInput]=goalInputSchema.properties.project.anyOf;
 const projectDispatchInputSchema={anyOf:[nullProject,{...projectInput,properties:{...projectInput.properties,behavioralChecks:behavioralChecksSchema}}]};
-export const goalDispatchInputSchema={...goalInputSchema,properties:{...goalInputSchema.properties,project:projectDispatchInputSchema,researchPolicy:researchPolicyInputSchema,overnightPolicy:objectSchema({preflightCheckIds:stringsSchema,finalOnlyCheckIds:stringsSchema,launchCheckIds:stringsSchema,maxBatches:{type:'integer',minimum:1,maximum:20},maxExchanges:{type:'integer',minimum:1,maximum:40},maxCorrections:{type:'integer',minimum:0,maximum:2},reconnectMs:{type:'integer',minimum:1,maximum:1800000}},['preflightCheckIds','finalOnlyCheckIds'])}};
+const providerSnapshotSchema=objectSchema({
+ schema:{type:'integer',enum:[1]},id:stringSchema,revision:stringSchema,displayName:stringSchema,
+ transport:{type:'string',enum:['openai-chat','openai-responses','anthropic-messages']},baseUrl:stringSchema,model:stringSchema,
+ roles:{type:'array',items:{type:'string',enum:['worker','reviewer']}},
+ capabilities:objectSchema({workerProtocol:{anyOf:[{type:'null'},stringSchema]},transports:{type:'array',items:{type:'string',enum:['json','sse']}},modelDiscovery:{type:'string',enum:['manual','advertised']},taskKinds:{type:'array',items:{type:'string',enum:['coding','consult']}}},['workerProtocol','transports','modelDiscovery','taskKinds']),
+ maxContextTokens:{anyOf:[{type:'null'},{type:'integer',minimum:1}]},maxOutputTokens:{type:'integer',minimum:1},
+ concurrency:{type:'integer',minimum:1,maximum:4},capacityGroup:stringSchema,streaming:{type:'boolean'},
+},['schema','id','revision','displayName','transport','baseUrl','model','roles','capabilities','maxContextTokens','maxOutputTokens','concurrency','capacityGroup','streaming']);
+export const providerPolicyInputSchema=objectSchema({version:{type:'integer',enum:[1]},workers:{type:'array',maxItems:16,items:providerSnapshotSchema},plannerWorkerId:stringSchema,defaultWorkerId:stringSchema,maxConcurrentTasks:{type:'integer',minimum:1,maximum:4},capacityGroups:{type:'array',maxItems:16,items:objectSchema({id:stringSchema,limit:{type:'integer',minimum:1,maximum:4}},['id','limit'])}},['version','workers','plannerWorkerId','defaultWorkerId','capacityGroups']);
+export const goalDispatchInputSchema={...goalInputSchema,properties:{...goalInputSchema.properties,project:projectDispatchInputSchema,researchPolicy:researchPolicyInputSchema,providerPolicy:providerPolicyInputSchema,overnightPolicy:objectSchema({preflightCheckIds:stringsSchema,finalOnlyCheckIds:stringsSchema,launchCheckIds:stringsSchema,maxBatches:{type:'integer',minimum:1,maximum:20},maxExchanges:{type:'integer',minimum:1,maximum:40},maxCorrections:{type:'integer',minimum:0,maximum:2},reconnectMs:{type:'integer',minimum:1,maximum:1800000}},['preflightCheckIds','finalOnlyCheckIds'])}};
 export const taskDispatchInputSchema={...taskInputSchema,properties:{...taskInputSchema.properties,researchPolicy:researchPolicyInputSchema,role:{type:'string',enum:['implementation','final']}}};
 const baseModes=[
  {id:'collaborative',version:1,planner:'codex',actors:['codex','deepseek'],review:'operator',capabilities:['coding','research','consult','learning']},
@@ -130,8 +140,18 @@ export function normalizeResearchPolicy(raw){
  if(![1,2].includes(raw.version)||raw.finish!=='selectors_only'||raw.discovery!=='search_required')throw Error('Unsupported research policy');
  return clone(raw);
 }
-export function normalizeGoal(raw,registry=new Registry()){
- keys(raw,['submissionId','objective','acceptance','project','mode','modeVersion','scope','limits','environment','researchPolicy','overnightPolicy'],'goal');
+export function providerBinding(manifest,providerId){
+ const policy=manifest.providerPolicy;
+ if(!policy)return undefined;
+ if(digest(policy)!==manifest.providerPolicyHash)throw Error('Approved provider policy hash differs');
+ const profile=policy.workers.find(worker=>worker.id===providerId);
+ if(!profile||!profile.roles.includes('worker'))throw Error('Provider does not belong to the approved worker pool');
+ return {version:1,providerId:profile.id,revision:profile.revision,profileHash:digest(profileIdentity(profile)),policyHash:manifest.providerPolicyHash};
+}
+export function normalizeGoal(raw,registry=new Registry(),providerRegistry){
+ keys(raw,['submissionId','objective','acceptance','project','mode','modeVersion','scope','limits','environment','researchPolicy','overnightPolicy','providerPolicy'],'goal');
+ if(raw.providerPolicy!==undefined&&!providerRegistry)throw Error('Configured provider registry required for a provider policy');
+ const providerPolicy=normalizeProviderPolicy(raw.providerPolicy,providerRegistry);
  const environment=raw.environment??'live';if(!['live','fixture'].includes(environment))throw Error('Invalid execution environment');
  const mode=registry.mode(raw.mode,raw.modeVersion),policy=Object.hasOwn(raw,'researchPolicy')?normalizeResearchPolicy(raw.researchPolicy):undefined;
  if(policy?.version===3&&mode.id!=='collaborative')throw Error('Reviewed research requires collaborative mode');
@@ -162,12 +182,21 @@ export function normalizeGoal(raw,registry=new Registry()){
  }
  const overnightPolicy=isOvernightV2({mode})?normalizeOvernightPolicy(raw.overnightPolicy,project):undefined;
  if(!overnightPolicy&&Object.hasOwn(raw,'overnightPolicy'))throw Error('Overnight policy requires pinned v2');
- return {schema:1,environment,submissionId:identifier(raw.submissionId,'submissionId'),objective:text(raw.objective,'objective'),acceptance:strings(raw.acceptance,'acceptance'),project,mode,capabilities:registry.snapshot().capabilities.filter(c=>mode.capabilities.includes(c.id)&&c.version===(policy&&c.id==='research'?(policy.correctionStrategy==='targeted_v1'?6:policy.repairContextVersion===1?5:policy.version+1):1)),scope:sourceScope(raw.scope),limits,...(overnightPolicy?{overnightPolicy}:{}),...(policy?{researchPolicy:policy}:{})};
+ const manifest={schema:1,environment,submissionId:identifier(raw.submissionId,'submissionId'),objective:text(raw.objective,'objective'),acceptance:strings(raw.acceptance,'acceptance'),project,mode,capabilities:registry.snapshot().capabilities.filter(c=>mode.capabilities.includes(c.id)&&c.version===(policy&&c.id==='research'?(policy.correctionStrategy==='targeted_v1'?6:policy.repairContextVersion===1?5:policy.version+1):1)),scope:sourceScope(raw.scope),limits,...(overnightPolicy?{overnightPolicy}:{}),...(policy?{researchPolicy:policy}:{})};
+ if(providerPolicy){
+  manifest.providerPolicy=providerPolicy;manifest.providerPolicyHash=digest(providerPolicy);
+  if(mode.planner==='deepseek')manifest.plannerBinding=providerBinding(manifest,providerPolicy.plannerWorkerId);
+ }
+ return manifest;
 }
 export function normalizeTask(raw,goal,registry=new Registry()) {
  keys(raw,['submissionId','kind','actor','objective','context','acceptance','dependsOn','priority','permissions','scope','limits','researchPolicy','role'],'task');
  if(!goal.mode.capabilities.includes(raw.kind)||!TASK_LIMITS[raw.kind])throw Error('Mode prohibits capability');
  const actor=raw.actor??(goal.mode.actors.includes('deepseek')?'deepseek':'codex');if(!goal.mode.actors.includes(actor))throw Error('Mode prohibits actor');
+ if(actor==='deepseek'&&goal.providerPolicy){
+  const worker=goal.providerPolicy.workers.find(profile=>profile.id===goal.providerPolicy.defaultWorkerId);
+  if(!worker?.capabilities.taskKinds.includes(raw.kind))throw Error('Approved default provider lacks task kind capability');
+ }
  const policy=Object.hasOwn(goal,'researchPolicy')&&raw.kind==='research'?normalizeResearchPolicy(goal.researchPolicy):undefined;
  if(Object.hasOwn(raw,'researchPolicy')){
   const explicit=normalizeResearchPolicy(raw.researchPolicy);
