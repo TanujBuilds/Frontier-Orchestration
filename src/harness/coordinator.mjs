@@ -165,10 +165,10 @@ export class Coordinator {
  });}
  notifications({goalId}={}){return this.store.all('notification').filter(n=>!n.acknowledged&&!n.resolved&&(!goalId||n.goalId===goalId)).sort((a,b)=>b.sequence-a.sequence).slice(0,50);}
  ackNotification(input,key){return this.store.command(key,{op:'notification.ack',...input},()=>{const n=this.store.get('notification',input.notificationId);n.acknowledged=true;n.acknowledgedAt=this.now();this.store.put('notification',n);return n;});}
- goalManifest(raw){
-  if(!this.beta)return normalizeGoal(raw,this.registry,this.providerRegistry);
+ goalManifest(raw,providerRegistry=this.providerRegistry){
+  if(!this.beta)return normalizeGoal(raw,this.registry,providerRegistry);
   if(raw.researchPolicy)throw Error('Research is parked in Mosaic Beta');
-  const manifest=normalizeGoal({...raw,mode:raw.mode??(this.workerProfile||raw.providerPolicy?'collaborative':'codex_only'),modeVersion:raw.modeVersion??1},this.registry,this.providerRegistry);
+  const manifest=normalizeGoal({...raw,mode:raw.mode??(this.workerProfile||raw.providerPolicy?'collaborative':'codex_only'),modeVersion:raw.modeVersion??1},this.registry,providerRegistry);
   if(!['collaborative','deepseek_only','codex_only','overnight_review'].includes(manifest.mode.id)||(manifest.mode.version!==1&&!isOvernightV2(manifest)))throw Error('Select a built-in Mosaic Beta workflow');
   manifest.mode={...manifest.mode,capabilities:manifest.mode.capabilities.filter(id=>id!=='research')};
   manifest.capabilities=manifest.capabilities.filter(capability=>capability.id!=='research');
@@ -208,7 +208,23 @@ export class Coordinator {
  verifyGoalBinding(goal){
   if(goal.manifest.mode.actors.includes('deepseek'))this.verifyWorkerBinding(goal);
  }
- prepareGoal(raw,key){const manifest=this.goalManifest(raw);return this.store.command(key,{op:'goal.prepare',manifest},()=>{
+ prepareGoal(raw,key){
+  const saved=typeof key==='string'?this.store.db.prepare('SELECT hash,result FROM commands WHERE key=?').get(key):null;
+  const previous=saved?JSON.parse(saved.result):null;
+  if(saved&&(raw?.providerPolicy!==undefined||previous?.manifest?.providerPolicy)){
+   const approved=previous?.manifest;
+   if(!raw?.providerPolicy||!approved?.providerPolicy||previous.hash!==digest(approved)||saved.hash!==digest({op:'goal.prepare',manifest:approved}))throw Error('Idempotency key conflict');
+   // An existing portable preparation receipt binds its original public pool.
+   // Replay canonicalizes against that saved identity, never mutable settings.
+   const catalog=Object.freeze({get(id,revision){
+    const profile=approved.providerPolicy.workers.find(worker=>worker.id===id&&worker.revision===revision);
+    if(!profile)throw Error('Saved provider revision differs');
+    return structuredClone(profile);
+   }});
+   let manifest;try{manifest=this.goalManifest(raw,catalog);}catch{throw Error('Idempotency key conflict');}
+   return this.store.command(key,{op:'goal.prepare',manifest},()=>{throw Error('Saved portable preparation command is unavailable');});
+  }
+  const manifest=this.goalManifest(raw);return this.store.command(key,{op:'goal.prepare',manifest},()=>{
   const g=this.store.submission('goal','',manifest.submissionId,digest(manifest),id=>({id,manifest,hash:digest(manifest),version:1,status:'draft',createdAt:this.now(),activatedAt:null,deadline:null}));
   this.emit('goal.prepared',g.id,null,{hash:g.hash});return g;
  });}

@@ -32,7 +32,7 @@ async function fixture(t,{profiles=[privateProfile()],beta=false}={}){
  let c=new Coordinator(options),d=new Dispatcher({c,config:{beta}});
  t.after(()=>{c.close();rmSync(root,{recursive:true,force:true});});
  return {get c(){return c;},get d(){return d;},root,options,profiles,
-  reopen(nextProfiles=profiles){c.close();c=new Coordinator({...options,providerRegistry:new ProviderRegistry({profiles:nextProfiles,credentialResolver:()=> 'rotated-dummy-private-auth'})});d=new Dispatcher({c,config:{beta}});return c;},
+  reopen(nextProfiles=profiles){c.close();c=new Coordinator({...options,providerRegistry:nextProfiles===null?undefined:new ProviderRegistry({profiles:nextProfiles,credentialResolver:()=> 'rotated-dummy-private-auth'})});d=new Dispatcher({c,config:{beta}});return c;},
   async prepare(raw=rawGoal({providerPolicy:policy(profiles)})){return d.invoke('goal_prepare',{manifest:raw,idempotencyKey:'prepare'});},
   async activate(g){return d.invoke('goal_activate',{goalId:g.id,hash:g.hash,idempotencyKey:'activate'});},
   async submit(g,spec=task,key='submit'){return d.invoke('task_submit',{goalId:g.id,task:spec,idempotencyKey:key});},
@@ -184,4 +184,37 @@ test('an unstarted task can explicitly rebind after exact revised policy approva
  assert.deepEqual(rebound.providerBinding,expectedBinding(approved,changed));assert.notDeepEqual(rebound.providerBinding,submitted.providerBinding);
  assert.deepEqual(rebound.spec.limits,submitted.spec.limits);assert.equal(rebound.startedAt,null);assert.equal(rebound.deadline,null);assert.equal(rebound.spent.model,0);assert.equal(rebound.goalVersion,2);
  assert.equal(f.c.claimNext('owner').id,submitted.id);
+});
+
+for(const [catalog,nextProfiles] of [
+ ['replaced revision',[privateProfile('worker-a','r2',{model:'replacement-model'})]],
+ ['removed worker',[privateProfile('other-worker')]],
+ ['changed identity',[privateProfile('worker-a','r1',{model:'replacement-model'})]],
+ ['unavailable registry',null],
+])test('saved portable preparation replays with '+catalog+' and grants no fresh authority',async t=>{
+ const f=await fixture(t,{beta:true}),raw=rawGoal({providerPolicy:policy()}),g=await f.prepare(raw);
+ // A different operation can return a goal-shaped result; its command hash must
+ // still prevent goal_prepare from treating that result as preparation authority.
+ f.c.store.command('other-operation',{op:'fixture.other'},()=>g);
+ const command=()=>f.c.store.db.prepare('SELECT hash,result FROM commands WHERE key=?').get('prepare');
+ const goalBytes=()=>f.c.store.db.prepare('SELECT data FROM records WHERE kind=? AND id=?').get('goal',g.id).data;
+ const originalCommand=command(),originalGoal=goalBytes();
+ f.reopen(nextProfiles);const before=counts(f.c),revision=f.c.store.revision();
+ assert.deepEqual(await f.prepare(raw),g);
+ assert.deepEqual(command(),originalCommand);assert.equal(goalBytes(),originalGoal);
+ const {providerPolicy,...withoutPolicy}=raw;
+ const changedPolicy=structuredClone(providerPolicy);changedPolicy.workers[0].model='changed-input-model';
+ for(const manifest of [{...raw,objective:'A changed objective'},{...raw,providerPolicy:changedPolicy},withoutPolicy]){
+  await assert.rejects(f.d.invoke('goal_prepare',{manifest,idempotencyKey:'prepare'}),/idempotency key conflict/i);
+  assert.deepEqual(counts(f.c),before);assert.equal(f.c.store.revision(),revision);
+ }
+ await assert.rejects(f.d.invoke('goal_prepare',{manifest:raw,idempotencyKey:'other-operation'}),/idempotency key conflict/i);
+ // A fresh command, even for the original submission, still validates the
+ // current catalog. Replaying the receipt does not re-approve stale settings.
+ for(const submissionId of [raw.submissionId,'fresh-stale-goal']){
+  await assert.rejects(f.d.invoke('goal_prepare',{manifest:{...raw,submissionId},idempotencyKey:'fresh-prepare'}),/provider|profile|registry|catalog/i);
+ }
+ await assert.rejects(f.d.invoke('goal_activate',{goalId:g.id,hash:g.hash,idempotencyKey:'activate-stale'}),/provider|profile|registry|catalog/i);
+ assert.deepEqual(command(),originalCommand);assert.equal(goalBytes(),originalGoal);assert.deepEqual(counts(f.c),before);assert.equal(f.c.store.revision(),revision);
+ assert.equal(f.c.getGoal(g.id).status,'draft');assert.equal(counts(f.c).requests,0);
 });

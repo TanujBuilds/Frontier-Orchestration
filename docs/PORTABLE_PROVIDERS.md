@@ -103,6 +103,16 @@ reservation copies it into the existing request receipt. Exact command replay
 returns its saved result, and exact submission replay retains the original task
 and binding. No additional binding ledger or read-time migration is created.
 
+An exact portable `goal_prepare` retry with the original idempotency key returns
+its saved preparation receipt even if the registry is unavailable or a configured
+revision changed after restart. The saved command hash and public pool determine
+that retry's identity; changed input or a key belonging to another operation
+conflicts without writes. A different idempotency key is a fresh preparation
+operation, including when it names the same submission. Fresh preparation and
+activation still validate the current catalog, so replay grants no new authority
+to run a stale profile. Historical no-policy preparation keeps its prior
+normalization and replay behavior.
+
 Before claim and model reservation the coordinator checks the current identities
 of all pool members, including members other than the selected default. A changed
 endpoint, model, capability, revision or missing catalog entry blocks progress
