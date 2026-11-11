@@ -12,7 +12,7 @@ export async function endpoint(t,id){
  const server=http.createServer(async(req,res)=>{
   let raw='';for await(const chunk of req)raw+=chunk;
   const body=raw?JSON.parse(raw):null;calls.push({url:req.url,body,auth:req.headers.authorization});
-  if(!body){entered.resolve();if(state.hold)await state.hold.promise;
+  if(!body){state.onGet?.();entered.resolve();if(state.hold)await state.hold.promise;
    if(!state.online)return res.writeHead(503).end('offline');
    return res.end(JSON.stringify({data:[{id:'alias-'+id}]}));}
   posted.resolve();if(state.holdPost)await state.holdPost.promise;

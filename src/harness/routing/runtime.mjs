@@ -28,6 +28,18 @@ function busy(c,goal,binding){
   return profile&&(profile.capacityGroup===selected.capacityGroup||profile.baseUrl===selected.baseUrl);
  });
 }
+/** Occupancy of an established pin is independent of current routing preferences.
+ * Exact completed model replies need no inference resource, even at zero budget. */
+export function pinnedResourceWait(c,goal,task){
+ if(!task.route||!task.providerBinding)return null;
+ const cp=task.checkpoint,key=task.spec.kind==='consult'?'consult-1':cp.phase==='model'?`code-${cp.attempt}-${cp.exchange}`:null;
+ const saved=key&&c.store.request(task.id,key);
+ if(saved?.kind==='model'&&saved.status==='completed'&&saved.routeHash===task.routeHash&&saved.providerBinding&&digest(saved.providerBinding)===digest(task.providerBinding))return null;
+ if(!busy(c,goal,task.providerBinding))return null;
+ return {status:'waiting',binding:structuredClone(task.providerBinding),reasonCode:'provider_busy',
+  explanation:'Pinned worker '+task.providerBinding.providerId+' has an existing reserved or uncertain request on its selected profile/group; wait without fallback. Original selection: '+task.route.decision.explanation,
+  matchedRule:structuredClone(task.route.decision.matchedRule)};
+}
 export function routeDecision(c,goal,task,observation){
  assertRoutingApproval(goal);
  const availability={providers:[],budget:{remainingModelCalls:remainingCalls(c,task)}};
@@ -63,9 +75,22 @@ function same(c,snapshot){
  return task.hash===snapshot.taskHash&&digest(task.spec)===snapshot.taskHash&&task.goalVersion===snapshot.goalVersion&&goal.version===snapshot.goalVersion&&goal.hash===snapshot.goalHash&&c.eligible(task)&&!task.providerBinding;
 }
 export function recordRoutingWait(c,task,goal,decision){
- const retryAt=Math.min(goal.deadline,task.deadline??goal.deadline,c.now()+15000);
+ const retryAt=Math.min(goal.deadline,task.deadline??goal.deadline,task.providerWait?.until??Infinity,c.now()+15000);
  task.routingWait={retryAt,goalHash:goal.hash,goalVersion:goal.version,taskHash:task.hash,decision};
  c.store.put('task',task);c.emit('task.routing_wait',goal.id,task.id,{reasonCode:decision.reasonCode,explanation:decision.explanation,binding:decision.binding,retryAt});
+}
+/** A cached reply may advance a running task to a new exchange. Check again at
+ * that safe boundary before fresh work, without releasing unknown own requests. */
+export function holdPinnedResource(worker,task){
+ const c=worker.c;if(!task.route)return null;
+ return c.store.tx(()=>{
+  const current=c.owned(task.id,worker.owner),goal=c.store.get('goal',current.goalId),decision=pinnedResourceWait(c,goal,current);
+  if(!decision)return null;
+  if(c.store.db.prepare("SELECT 1 FROM requests WHERE task_id=? AND kind='model' AND (status='reserved' OR (status='failed' AND json_extract(data,'$.requestOutcome')='unknown'))").get(current.id))return {waiting:true,taskId:current.id};
+  current.status='suspended';current.owner=null;
+  if(current.providerWait)delete current.providerWait.readyOwner;
+  recordRoutingWait(c,current,goal,decision);return c.getTask(current.id);
+ });
 }
 /** Selected-endpoint readiness is bounded, outside every Store transaction. */
 export async function claimAvailable(worker){

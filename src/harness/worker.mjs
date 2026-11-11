@@ -1,4 +1,4 @@
-import {claimAvailable} from './routing/runtime.mjs';
+import {claimAvailable,holdPinnedResource} from './routing/runtime.mjs';
 import {digest} from './contracts.mjs';
 import { randomUUID } from 'node:crypto';
 import { CodingAdapter } from './coding.mjs';
@@ -176,6 +176,7 @@ export class Worker {
    if(task.spec.kind!=='research'){task=this.c.boundary(task.id,task.checkpoint,this.owner);if(task.status!=='running')return task;}
    if(this.c.store.get('goal',task.goalId).manifest.environment!==(this.config.environment??'live'))throw Error('Approved environment differs from configured providers');
    this.c.verifyWorkerBinding(this.c.store.get('goal',task.goalId),task);
+   const resourceHold=holdPinnedResource(this,task);if(resourceHold)return resourceHold;
    if(task.spec.kind==='coding'&&!task.checkpoint.executionBase){const executionBase=await this.integration.executionBase(task.goalId);if(typeof executionBase!=='string'||!/^[a-f0-9]{40}$/.test(executionBase))throw Error('Integration execution base must be a committed SHA');task=this.c.boundary(task.id,{...task.checkpoint,executionBase},this.owner);if(task.status!=='running')return task;}
    if(task.spec.kind==='consult'){
     if(!task.attempts)this.c.beginAttempt(task.id,this.owner);
@@ -195,6 +196,7 @@ export class Worker {
     this.c.verifyWorkerBinding(this.c.store.get('goal',task.goalId),this.c.getTask(task.id));
     task=this.c.finishProviderProbe(task.id,this.owner,available);
     if(task.status!=='running')return task;
+    const resourceHold=holdPinnedResource(this,task);if(resourceHold)return resourceHold;
    }
    const adapter=this.adapters[task.spec.kind];if(!adapter)throw Error(`Capability ${task.spec.kind} is not configured`);
    return await adapter.step(task,this.owner);

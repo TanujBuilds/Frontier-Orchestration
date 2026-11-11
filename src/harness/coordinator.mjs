@@ -14,7 +14,7 @@ import { Learning } from './learning.mjs';
 import {workerProfile as normalizeWorkerProfile} from './worker-profile.mjs';
 import {recordFailedGate} from './repair-progress.mjs';
 import {matches} from '../project/contracts.mjs';
-import {assertRoutingApproval,assertRoutePin,isRoutedTask,routeDecision,recordRoutingWait} from './routing/runtime.mjs';
+import {assertRoutingApproval,assertRoutePin,isRoutedTask,routeDecision,recordRoutingWait,pinnedResourceWait} from './routing/runtime.mjs';
 
 const TERMINAL=new Set(['accepted','failed','partial','cancelled']);
 const SLOT=new Set(['running','uncertain','taking_over']);
@@ -358,6 +358,9 @@ export class Coordinator {
      continue;
     }
    }
+   const wait=pinnedResourceWait(this,g,t);
+   if(wait){recordRoutingWait(this,t,g,wait);return null;}
+   delete t.routingWait;
    t.startedAt??=this.now();t.deadline??=Math.min(g.deadline,t.startedAt+t.spec.limits.seconds*1000);t.owner=owner;t.status='running';t.yieldRequested=false;
    delete t.interruptedOwner;
    if(lease)t.ownerLease=lease.generation;else delete t.ownerLease;
