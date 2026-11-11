@@ -100,6 +100,56 @@ test('explicit schema1 adapter preserves legacy bytes and rejects implicit legac
   assert.throws(()=>normalizeLegacyWorkerProfile(legacy,{id:'worker-a',capacityGroup:'fixture-service',...fields}));
 });
 
+test('legacy adapter rejects malformed optional bearer values without returning private details',()=>{
+ const legacy={schema:1,worker:{profile:{baseUrl:'https://fixture.invalid/v1',model:'fixture-model',
+  displayName:'Legacy fixture',revision:'old revision',streaming:false}}};
+ const options={id:'worker-a',capacityGroup:'fixture-service'};
+ for(const apiKey of ['',null,42,{},'dummy secret','dummy\nsecret','dummy\u007fsecret','x'.repeat(2049)]){
+  const raw={...legacy,worker:{...legacy.worker,apiKey}},before=structuredClone(raw);
+  assert.throws(()=>normalizeLegacyWorkerProfile(raw,options),error=>
+   typeof error.message==='string'&&(!apiKey||!error.message.includes(String(apiKey))),`credential ${typeof apiKey} must reject`);
+  assert.deepEqual(raw,before);
+ }
+ const before=canonical(legacy),adapted=normalizeLegacyWorkerProfile(legacy,options);
+ assert.equal(canonical(legacy),before);assert.equal(adapted.credentialRef,null);assert.equal(adapted.maxOutputTokens,12000);
+});
+
+test('legacy adapter rejects known bearer duplicated into profile fields or supplied identifiers before snapshots',()=>{
+ const secret='dummy-legacy-secret',old={baseUrl:'https://fixture.invalid/v1',model:'fixture-model',
+  displayName:'Legacy fixture',revision:'old revision',streaming:false};
+ const options={id:'worker-a',capacityGroup:'fixture-service',credentialRef:'legacy-key'};
+ const cases=[
+  {profile:{displayName:'Fixture '+secret}},{profile:{model:'model-'+secret}},
+  {profile:{revision:'revision-'+secret}},{profile:{baseUrl:'https://fixture.invalid/v1/'+secret}},
+  {options:{id:'worker-'+secret}},{options:{capacityGroup:'service-'+secret}},
+  {options:{credentialRef:secret}}
+ ];
+ let resolutions=0;
+ for(const row of cases){
+  const raw={schema:1,worker:{profile:{...old,...row.profile},apiKey:secret}},before=canonical(raw);
+  assert.throws(()=>{
+   const adapted=normalizeLegacyWorkerProfile(raw,{...options,...row.options});
+   return ProviderRegistry({profiles:[adapted],credentialResolver:()=>{resolutions++;return secret;}})
+    .snapshot([{id:adapted.id,revision:adapted.revision}]);
+  },error=>!error.message.includes(secret));
+  assert.equal(canonical(raw),before);
+ }
+ assert.equal(resolutions,0);
+});
+
+test('legacy adapter rejects encoded URL and JSON-escaped bearer copies before publication',()=>{
+ for(const secret of ['dummy-legacy-secret','dummy"\\secret']){
+  const encoded=[...secret].map(character=>'%'+character.charCodeAt(0).toString(16).padStart(2,'0')).join('');
+  const old={baseUrl:'https://fixture.invalid/v1',model:'fixture-model',displayName:'Legacy fixture',revision:'old revision',streaming:false};
+  for(const fields of [{baseUrl:'https://fixture.invalid/v1/'+encoded},{displayName:'Fixture '+secret}]){
+   const raw={schema:1,worker:{profile:{...old,...fields},apiKey:secret}},before=canonical(raw);
+   assert.throws(()=>normalizeLegacyWorkerProfile(raw,{id:'worker-a',capacityGroup:'fixture-service'}),error=>
+    !error.message.includes(secret)&&!error.message.includes(encoded));
+   assert.equal(canonical(raw),before);
+  }
+ }
+});
+
 test('approved policy uses trusted credential-free snapshots and preserves absent legacy policy',()=>{
  const catalog=ProviderRegistry({profiles:[profile({credentialRef:'private-a'})]});
  const snapshots=catalog.snapshot([{id:'worker-a',revision:'revision-1'}]);

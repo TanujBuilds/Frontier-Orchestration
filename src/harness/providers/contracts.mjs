@@ -1,4 +1,4 @@
-import {digest,identifier} from '../contracts.mjs';
+import {canonical,digest,identifier} from '../contracts.mjs';
 import {workerProfile} from '../worker-profile.mjs';
 import {STRUCTURED_WORKER_PROTOCOL} from '../provider-capabilities.mjs';
 
@@ -71,8 +71,11 @@ export function normalizeLegacyWorkerProfile(raw,options={}){
   throw Error('Expected legacy schema1 worker settings');
  object(options,['id','capacityGroup','credentialRef','maxContextTokens','maxOutputTokens','concurrency'],
   'legacy provider adapter options',['id','capacityGroup']);
+ const apiKey=raw.worker.apiKey;
+ if(apiKey!==undefined&&(typeof apiKey!=='string'||!apiKey||apiKey.length>2048||/[^\x21-\x7e]/.test(apiKey)))
+  throw Error('Invalid legacy worker credential');
  const old=workerProfile(raw.worker.profile);
- return normalizeProfile({schema:1,id:options.id,...old,transport:'openai-chat',roles:['worker'],
+ const profile=normalizeProfile({schema:1,id:options.id,...old,transport:'openai-chat',roles:['worker'],
   capabilities:{workerProtocol:STRUCTURED_WORKER_PROTOCOL,
    transports:old.capabilities?.transports??[old.streaming?'sse':'json'],
    modelDiscovery:old.capabilities?.modelDiscovery??'manual',taskKinds:['coding','consult']},
@@ -80,6 +83,15 @@ export function normalizeLegacyWorkerProfile(raw,options={}){
   maxOutputTokens:Object.hasOwn(options,'maxOutputTokens')?options.maxOutputTokens:12000,
   concurrency:Object.hasOwn(options,'concurrency')?options.concurrency:1,capacityGroup:options.capacityGroup,
   credentialRef:Object.hasOwn(options,'credentialRef')?options.credentialRef:null});
+ if(apiKey){
+  // Validate before returning a profile or publishing a snapshot. Include new
+  // identifiers, JSON-escaped copies and URL path bytes that URL preserves encoded.
+  const encoded=canonical(profile),jsonKey=JSON.stringify(apiKey).slice(1,-1);
+  const decoded=encoded.replace(/%([a-f0-9]{2})/gi,(_match,hex)=>String.fromCharCode(Number.parseInt(hex,16)));
+  if([encoded,decoded].some(value=>value.includes(apiKey)||value.includes(jsonKey)))
+   throw Error('Legacy worker credential must appear only in its private credential field');
+ }
+ return profile;
 }
 
 /** Public approval policy. Omission deliberately remains omission for legacy goals. */
