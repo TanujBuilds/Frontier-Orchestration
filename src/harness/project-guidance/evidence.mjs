@@ -7,6 +7,23 @@ const commitId = /^[0-9a-f]{40}$/;
 const sha256 = /^[0-9a-f]{64}$/;
 const reviewKind = { checks: 'none', legacy: 'codex_legacy', operator: 'codex_operator' };
 
+function approvedReview(c, task, goal, receipt) {
+  const policy=goal.manifest.reviewPolicy;
+  if(!policy)return reviewKind[goal.manifest.mode.review];
+  const acceptance=task.reviewAcceptance,ticket=acceptance&&c.store.maybe('review_ticket',acceptance.ticketId);
+  const binding=ticket?.binding;
+  if(!ticket||ticket.status!=='completed'||ticket.verdict?.decision!=='accept'||
+      ticket.verdictHash!==acceptance.verdictHash||digest(ticket.verdict)!==acceptance.verdictHash||
+      digest(acceptance)!==digest(receipt.reviewAcceptance)||digest(binding)!==digest(acceptance.binding)||
+      binding.goalId!==task.goalId||binding.goalVersion!==task.goalVersion||binding.goalHash!==goal.hash||
+      binding.taskId!==task.id||binding.checksHash!==digest(task.result?.checks)||
+      binding.reviewPolicyHash!==digest(policy)||acceptance.source!==policy.source||
+      !Number.isSafeInteger(acceptance.acceptedAt)||acceptance.acceptedAt>=binding.expiresAt){
+    throw Error('Integrated source lacks its exact accepted review ticket');
+  }
+  return policy.source==='host'?'host_review':'api_review';
+}
+
 function approvedSource(c, task, event) {
   const current = c.store.get('goal', task.goalId);
   const goal = current.version === task.goalVersion ? current :
@@ -124,7 +141,7 @@ export function resolveGuidanceEvidence({ c, maintenanceTaskId, outcomeIds }) {
     const environment = sourceGoal.manifest.environment;
     if (sourceGoal.manifest.project.repo !== targetRepo || environment !== target.manifest.environment ||
         environment !== outcome.environment || sourceVersion !== outcome.capabilityVersion || sourceVersion !== 1 || sourceVersion !== targetVersion ||
-        receipt.review !== (native ? 'codex_native' : reviewKind[sourceGoal.manifest.mode.review])) {
+        receipt.review !== (native ? 'codex_native' : approvedReview(c,task,sourceGoal,receipt))) {
       throw Error('Incompatible source project, environment, capability or integration review');
     }
     return {

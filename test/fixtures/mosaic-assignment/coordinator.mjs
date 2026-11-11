@@ -63,6 +63,7 @@ export async function coordinator(t) {
     deepseekBaseUrl: `http://127.0.0.1:${provider.address().port}/v1`,
     deepseekModelId: 'assignment-fixture-model',
     codexPath,
+    hostId: 'codex', // Trusted host context for fresh portable preparation.
   }), { mode: 0o600 });
   child = spawn(process.execPath, [cli, 'serve', '--root', state, '--config', config, '--port', '0'], {
     cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'],

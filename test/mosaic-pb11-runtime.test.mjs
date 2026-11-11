@@ -1,3 +1,4 @@
+// Fresh portable beta work selects a host; explicit nonportable legacy reconnect fixtures omit it.
 import nodeTest from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -73,7 +74,7 @@ async function fixture(t, profiles, {beta = true} = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'mosaic-pb11-runtime-'));
   const registry = registryFor(profiles), opened = [], children = [];
   let now = clock, sequence = 0;
-  const open = (providerRegistry = registry) => { const c = new Coordinator({root: path.join(root, 'state'), now: () => now, beta, providerRegistry}); opened.push(c); return c; };
+  const open = (providerRegistry = registry) => { const c = new Coordinator({root: path.join(root, 'state'), now: () => now, beta, ...(beta ? {selectedHost: 'codex'} : {}), providerRegistry}); opened.push(c); return c; };
   t.after(async () => {
     for (const {child, closed} of children) { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); await closed; }
     for (const c of opened) c.close(); await rm(root, {recursive: true, force: true});

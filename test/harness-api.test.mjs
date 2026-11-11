@@ -1,3 +1,4 @@
+// Historical no-policy workflows explicitly select the legacy preparation tool.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtempSync,rmSync} from 'node:fs';
@@ -17,11 +18,11 @@ test('saved long operations recover under the verified current lease and reuse t
 });
 test('authenticated tools prepare, activate and control actual durable goals with strict idempotency',async t=>{
  const f=await fixture(t),input={idempotencyKey:'prepare',manifest:{submissionId:'g',objective:'Research a queue',acceptance:['Cited answer'],environment:'fixture'}};
- const response=await f.call('goal_prepare',input);assert.equal(response.status,200);const g=await response.json();assert.equal((await (await f.call('goal_prepare',input)).json()).id,g.id);
+ const response=await f.call('legacy_goal_prepare',input);assert.equal(response.status,200);const g=await response.json();assert.equal((await (await f.call('legacy_goal_prepare',input)).json()).id,g.id);
  assert.equal((await f.call('goal_activate',{idempotencyKey:'activate',goalId:g.id,hash:g.hash})).status,200);
  const task=await (await f.call('task_submit',{idempotencyKey:'task',goalId:g.id,task:{submissionId:'r',kind:'research',objective:'Read evidence',acceptance:['Report']}})).json();
  await f.call('work_control',{idempotencyKey:'pause',taskId:task.id,action:'pause'});assert.equal(f.c.getTask(task.id).status,'paused');
- assert.equal((await f.call('goal_prepare',{...input,manifest:{...input.manifest,objective:'Changed'}})).status,400);
+ assert.equal((await f.call('legacy_goal_prepare',{...input,manifest:{...input.manifest,objective:'Changed'}})).status,400);
  assert.equal((await f.call('task_get',{taskId:task.id,shell:'not allowed'})).status,400);
 });
 test('Host, Origin, authentication and browser CSRF guards precede mutations',async t=>{
@@ -46,6 +47,6 @@ test('a fifth registered research-only preset survives restart and cannot dispat
  const f=await fixture(t),preset={id:'research-brief',version:1,planner:'deepseek',actors:['deepseek'],review:'checks',capabilities:['research']};
  const registered=await f.call('mode_register',{idempotencyKey:'mode',definition:preset});assert.equal(registered.status,200);
  const reopened=new Coordinator({root:f.c.store.root});try{assert.equal(reopened.registry.mode('research-brief').id,'research-brief');}finally{reopened.close();}
- const g=await (await f.call('goal_prepare',{idempotencyKey:'p',manifest:{submissionId:'narrow',objective:'Research only',acceptance:['Cited answer'],mode:'research-brief',environment:'fixture'}})).json();await f.call('goal_activate',{idempotencyKey:'a',goalId:g.id,hash:g.hash});
+ const g=await (await f.call('legacy_goal_prepare',{idempotencyKey:'p',manifest:{submissionId:'narrow',objective:'Research only',acceptance:['Cited answer'],mode:'research-brief',environment:'fixture'}})).json();await f.call('goal_activate',{idempotencyKey:'a',goalId:g.id,hash:g.hash});
  assert.equal((await f.call('task_submit',{idempotencyKey:'bad',goalId:g.id,task:{submissionId:'code',kind:'coding',objective:'Write code',acceptance:['Pass']}})).status,400);
 });

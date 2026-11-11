@@ -34,7 +34,14 @@ export class LegacyReview {
  async tick(){
   if(this.inflight)return null;
   this.c.expireQuiescent();
-  const task=this.c.store.all('task').find(t=>['awaiting_legacy_review','legacy_reviewing'].includes(t.status)&&this.c.eligible(t));if(!task)return null;
+  const portable=this.c.store.all('task').find(t=>t.status==='awaiting_review'&&this.c.store.get('goal',t.goalId).manifest.reviewPolicy?.source==='api'&&this.c.eligible(t));
+  if(portable){const ticket=this.c.store.all('review_ticket').find(r=>r.taskId===portable.id&&r.status==='reserved');if(ticket){
+   const rows=this.c.store.db.prepare("SELECT data,status FROM requests WHERE task_id=? AND kind='apiReview'").all(portable.id),saved=rows.map(r=>({...JSON.parse(r.data),status:r.status})).find(r=>r.ticketId===ticket.id);
+   if(saved?.status==='completed'&&saved.runKey&&!portable.reviewWait){const replay=this.c.reviewService.runApi(ticket.binding,saved.runKey);this.inflight=replay;try{return await replay;}finally{this.inflight=null;}}
+   return null;
+  }}
+  if(portable){const run=(async()=>{const entry=(await this.c.reviewService.inbox({goalId:portable.goalId,limit:20})).items.find(x=>x.taskId===portable.id);if(!entry?.binding)return null;return this.c.reviewService.runApi(entry.binding,`auto-review-${portable.id}-${portable.reviews+1}`);})();this.inflight=run;try{return await run;}finally{this.inflight=null;}}
+  const task=this.c.store.all('task').find(t=>!this.c.store.get('goal',t.goalId).manifest.reviewPolicy&&['awaiting_legacy_review','legacy_reviewing'].includes(t.status)&&this.c.eligible(t));if(!task)return null;
   const run=this.run(task);this.inflight=run;try{return await run;}finally{this.inflight=null;}
  }
  async referenceFiles(source,task){
@@ -79,6 +86,7 @@ export class LegacyReview {
  });}
  async run(task){
   const {c}=this,g=c.store.get('goal',task.goalId);c.liveGoal(g);
+  if(g.manifest.reviewPolicy)throw Error('Use the common bound review service for this policy');
   if(g.manifest.mode.review!=='legacy')throw Error('Mode prohibits background Codex review');
   const {project}=g.manifest,v2=isOvernightV2(g.manifest),mapped=!!project.behavioralChecks;
   const source=await this.worker.integration.candidate(task),unlock=await source.journal.lock();

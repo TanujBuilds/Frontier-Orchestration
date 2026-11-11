@@ -5,6 +5,7 @@ import { Journal } from '../project/journal.mjs';
 import { Workspace } from '../project/workspace.mjs';
 import { git } from '../project/process.mjs';
 import { digest, text } from './contracts.mjs';
+import {readBehavioralFileModes,behavioralModeHash} from './behavioral-validation.mjs';
 import { normalizeNativeCandidate } from './collaboration-contracts.mjs';
 
 // The host confirms finish/release. Reported progress never proves quiescence.
@@ -98,7 +99,7 @@ export class NativeCandidates {
   return current;
  }
  async finish(input){
-  let t=this.c.getTask(input.taskId);text(input.summary,'summary');
+  let t=this.c.getTask(input.taskId);const g=this.c.store.get('goal',t.goalId);text(input.summary,'summary');
   if(['awaiting_review','ready_to_integrate','accepted'].includes(t.status)&&!t.native.writerActive)return t;
   this.c.liveTask(t);if(t.status!=='codex_active'||!t.native.writerActive)throw Error('Native task ownership mismatch');
   const target=await this.open(t),release=await target.journal.lock();
@@ -114,9 +115,11 @@ export class NativeCandidates {
     const pending=journal.events.some(e=>e.type==='operation.started'&&e.data.key===`${stage}/checkpoint`);
     if(!pending||await git(workspace.root,'log','-1','--format=%s')!==`Orchestrator ${journal.id} stage ${stage}`||await git(workspace.root,'rev-parse','HEAD^')!==expected)throw Error('Native candidate HEAD changed outside recorded checkpoints');
    }
-   const snapshot=await workspace.snapshot();await journal.append('native.adopted',{taskId:t.id,snapshot,round:t.native.round});
+   const snapshot=await workspace.snapshot(),reviewModes=g.manifest.reviewPolicy?await readBehavioralFileModes(workspace,Object.keys(snapshot)):null;await journal.append('native.adopted',{taskId:t.id,snapshot,round:t.native.round});
+   if(reviewModes){const pinned=await journal.memo(`${stage}/review-input`,async()=>({snapshotHash:digest(snapshot),executableModesHash:behavioralModeHash(reviewModes)}));if(pinned.snapshotHash!==digest(snapshot)||pinned.executableModesHash!==behavioralModeHash(reviewModes))throw Error('Candidate changed since the protected-check reservation');}
    const runner=this.i.checks(workspace),sandbox=await runner.verify(),results=await runner.run(target.manifest.permissions.checks,stage);
    await workspace.assertSnapshot(snapshot);
+   if(reviewModes&&behavioralModeHash(await readBehavioralFileModes(workspace,Object.keys(snapshot)))!==behavioralModeHash(reviewModes))throw Error('Candidate executable mode changed during checks');
    await journal.append('native.checks',{round:t.native.round,checks:results,sandbox});
    if(!results.every(r=>r.passed))throw Error('Native checks failed');
    this.assertWriter(t);
@@ -126,7 +129,7 @@ export class NativeCandidates {
     const current=this.assertWriter(t);
     const candidate=normalizeNativeCandidate({version:1,taskId:t.id,baseCommit:t.native.baseCommit,worktree:workspace.root,commit:checkpoint.commit,status:'awaiting_review',checks:results});
     current.native={...current.native,...candidate,writerActive:false};current.status='awaiting_review';
-    current.result={summary:input.summary,changes,checks:results,sandbox,baseCommit:t.native.baseCommit,worktree:workspace.root,journalRoot:journal.root,accounting:'Native host usage unavailable'};
+    current.result={summary:input.summary,changes,checks:results,...(reviewModes?{reviewCheckBinding:{snapshotHash:digest(snapshot),executableModesHash:behavioralModeHash(reviewModes),checksHash:digest(results)}}:{}),sandbox,baseCommit:t.native.baseCommit,worktree:workspace.root,journalRoot:journal.root,accounting:'Native host usage unavailable'};
     this.c.store.put('task',current);this.c.emit('task.native_finished',t.goalId,t.id,{status:current.status,commit:checkpoint.commit});return this.c.getTask(t.id);
    });
   }finally{await release();}

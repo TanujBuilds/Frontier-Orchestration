@@ -4,6 +4,7 @@ import {EventEmitter} from 'node:events';
 import {stripVTControlCharacters} from 'node:util';
 import {spawnSync} from 'node:child_process';
 import {Coordinator} from '../src/harness/coordinator.mjs';
+import {savedBetaGoal} from './fixtures/mosaic-pb12/historical-beta.mjs';
 import {Observer} from '../src/harness/observer.mjs';
 import {mkdtempSync,rmSync} from 'node:fs';
 import os from 'node:os';
@@ -59,7 +60,7 @@ test('observer snapshot exposes real reviewer reservations and provider attribut
  const workerProfile={displayName:'Fixture Model',baseUrl:'https://provider.example/v1',model:'custom',revision:'revision-a',streaming:false};
  const c=new Coordinator({root,beta:true,workerProfile});
  t.after(()=>{c.close();rmSync(root,{force:true,recursive:true});});
- const g=c.prepareGoal({submissionId:'g',objective:'Build',acceptance:['Evidence']},'prepare');
+ const g=savedBetaGoal(c,{submissionId:'g',objective:'Build',acceptance:['Evidence']});
  c.activateGoal({goalId:g.id,hash:g.hash},'activate');
  const assignment=c.submitTask({goalId:g.id,submissionId:'a',kind:'consult',objective:'Answer',acceptance:['Evidence']},'submit');
  const reservation=c.reserveReviewer({taskId:assignment.id},'reserve');
@@ -178,7 +179,7 @@ test('saved check outcomes survive later checkpoints and an accepted task retire
  const workerProfile={displayName:'Fixture Model',baseUrl:'https://provider.example/v1',model:'custom',revision:'revision-a',streaming:false};
  const c=new Coordinator({root,beta:true,workerProfile});
  t.after(()=>{c.close();rmSync(root,{force:true,recursive:true});});
- const g=c.prepareGoal({submissionId:'g',objective:'Build',acceptance:['Evidence'],project:{repo:root,baseCommit:'a'.repeat(40),readPaths:['src/'],writePaths:['src/'],checks:[{id:'verify',argv:['/bin/true']}]}},'prepare');
+ const g=savedBetaGoal(c,{submissionId:'g',objective:'Build',acceptance:['Evidence'],project:{repo:root,baseCommit:'a'.repeat(40),readPaths:['src/'],writePaths:['src/'],checks:[{id:'verify',argv:['/bin/true']}]}});
  c.activateGoal({goalId:g.id,hash:g.hash},'activate');
  const assignment=c.submitTask({goalId:g.id,submissionId:'a',kind:'coding',objective:'Implement',acceptance:['Evidence']},'submit');
  c.claimNext('owner');
@@ -291,7 +292,7 @@ test('passing native candidate checks take precedence over a historical worker c
  const workerProfile={displayName:'Fixture Model',baseUrl:'https://provider.example/v1',model:'custom',revision:'revision-a',streaming:false};
  const c=new Coordinator({root,beta:true,workerProfile,now:()=>at});
  t.after(()=>{c.close();rmSync(root,{force:true,recursive:true});});
- const g=c.prepareGoal({submissionId:'g',objective:'Build',acceptance:['Evidence'],project:{repo:root,baseCommit:'a'.repeat(40),readPaths:['src/'],writePaths:['src/'],checks:[{id:'verify',argv:['/bin/true']}]}},'prepare');
+ const g=savedBetaGoal(c,{submissionId:'g',objective:'Build',acceptance:['Evidence'],project:{repo:root,baseCommit:'a'.repeat(40),readPaths:['src/'],writePaths:['src/'],checks:[{id:'verify',argv:['/bin/true']}]}});
  c.activateGoal({goalId:g.id,hash:g.hash},'activate');
  const assignment=c.submitTask({goalId:g.id,submissionId:'a',kind:'coding',objective:'Implement',acceptance:['Evidence']},'submit');
  c.claimNext('owner');

@@ -1,0 +1,148 @@
+import {randomUUID} from 'node:crypto';
+import {digest,keys,identifier,integer} from '../contracts.mjs';
+import {normalizeReviewPolicy,normalizeVerdict,assertReviewMode,assertBinding,bindingFields,reviewerIdentity} from './contracts.mjs';
+import {candidateEvidence,reviewRubric,savedCandidateIdentity} from './evidence.mjs';
+
+const apiAuthority=Symbol('API review submission');
+const commandReplay=(c,key,input)=>{
+ identifier(key,'idempotencyKey');const saved=c.store.db.prepare('SELECT hash,result FROM commands WHERE key=?').get(key);
+ if(!saved)return null;if(saved.hash!==digest(input))throw Error('Idempotency key conflict');return {result:JSON.parse(saved.result)};
+};
+function policyFor(c,t){
+ const g=c.store.get('goal',t.goalId);c.liveGoal(g);c.liveTask(t);
+ if(!g.manifest.reviewPolicy)throw Error('A versioned review policy is required');
+ if(g.hash!==digest(g.manifest)||t.hash!==digest(t.spec))throw Error('Approved goal or task hash changed');
+ const policy=normalizeReviewPolicy(g.manifest.reviewPolicy);assertReviewMode(g.manifest.mode,policy);
+ if(digest(policy)!==g.manifest.reviewPolicyHash)throw Error('Approved review policy hash changed');
+ if(policy.source==='host'&&c.selectedHost!==policy.hostId)throw Error('Selected host differs from approved reviewer host');
+ if(t.owner||t.native?.writerActive||!['awaiting_review','ready_to_integrate'].includes(t.status))throw Error('Candidate is not awaiting bound review');
+ if(t.goalVersion!==g.version)throw Error('Review candidate has stale goal version');
+ return {g,policy};
+}
+export class ReviewService {
+ #runs=new Map();
+ constructor({c,providers,hostRegistry}={}){this.c=c;this.providers=providers??c.providerRegistry;this.hostRegistry=hostRegistry??null;}
+ async context(taskId,options={}){
+  const t=this.c.getTask(taskId),{g,policy}=policyFor(this.c,t),candidate=await candidateEvidence(this.c,t,options);
+  // Filesystem/network awaits never extend an approval or a task generation.
+  const current=this.c.getTask(taskId),fresh=policyFor(this.c,current);
+  if(g.hash!==fresh.g.hash||g.version!==fresh.g.version||digest(savedCandidateIdentity(current))!==digest(savedCandidateIdentity(t)))throw Error('Candidate or approval changed while collecting evidence');
+  const binding={goalId:g.id,goalVersion:g.version,goalHash:g.hash,taskId:t.id,candidateHash:candidate.candidateHash,checksHash:candidate.checksHash,rubricHash:digest(reviewRubric(g,t)),reviewPolicyHash:g.manifest.reviewPolicyHash,generation:t.native?.generation??t.checkpoint?.attempt??1,expiresAt:Math.min(g.deadline,t.deadline??g.deadline)};
+  return {t,g,policy,binding,candidate};
+ }
+ async inbox({goalId,cursor,limit=20}={}){
+  if(goalId!==undefined)identifier(goalId,'goalId');integer(limit,'review inbox limit',1,20);
+  if(cursor!==undefined&&(typeof cursor!=='string'||!/^\d{1,10}$/.test(cursor)))throw Error('Invalid review inbox cursor');
+  const after=Number(cursor??0),tasks=this.c.store.all('task').filter(t=>t.sequence>after&&(!goalId||t.goalId===goalId)&&t.status==='awaiting_review'&&this.c.store.get('goal',t.goalId).manifest.reviewPolicy).sort((a,b)=>a.sequence-b.sequence);
+  const items=[];let scanned=after;
+  for(const task of tasks){
+   if(items.length>=limit)break;scanned=task.sequence;
+   try{const context=await this.context(task.id,{includeFiles:false});items.push({taskId:task.id,binding:context.binding,reviewer:reviewerIdentity(context.policy),delivery:context.policy.source==='host'?'pull':'api',waitingForHost:context.policy.source==='host',ticketId:this.c.store.all('review_ticket').findLast(r=>r.taskId===task.id&&r.status==='reserved')?.id??null});}
+   catch(error){items.push({taskId:task.id,status:'unavailable',reason:String(error.message).slice(0,500)});}
+  }
+  return {items,cursor:tasks.some(t=>t.sequence>scanned)?String(scanned):null};
+ }
+ async reserve(input,key){
+  keys(input,[...bindingFields],'review reservation');
+  const command={op:'review.reserve',...input},old=commandReplay(this.c,key,command);if(old)return old.result;
+  const context=await this.context(input.taskId),{binding,policy}=context;assertBinding(input,binding);
+  if(policy.source==='host'&&this.c.selectedHost&&this.c.selectedHost!==policy.hostId)throw Error('Selected host differs from approved reviewer host');
+  if(policy.source==='host'&&this.hostRegistry)this.hostRegistry.get(policy.hostId);
+  return this.c.store.command(key,command,()=>{
+   const t=this.c.getTask(input.taskId),{g}=policyFor(this.c,t);
+   if(digest(savedCandidateIdentity(t))!==digest(savedCandidateIdentity(context.t))||g.hash!==context.g.hash)throw Error('Candidate changed before review reservation');
+   const existing=this.c.store.all('review_ticket').find(r=>r.taskId===t.id&&r.status==='reserved');
+   if(existing)throw Error('Review ticket already reserved; reconnect to the saved ticket');
+   const originalBudget=Math.min(g.manifest.limits.reviewAgentRuns,...this.c.store.all('goal_history').filter(h=>h.goalId===g.id).map(h=>h.manifest.limits.reviewAgentRuns));
+   const spent=this.c.store.all('review_ticket').filter(r=>r.goalId===g.id).length+this.c.store.all('reviewer').filter(r=>r.goalId===g.id).length;
+   if(t.reviews>=t.spec.limits.reviews||spent>=originalBudget)throw Error('Original review budget exhausted');
+   const ticket={id:randomUUID(),goalId:g.id,taskId:t.id,binding,reviewer:reviewerIdentity(policy),requestId:randomUUID(),savedCandidateIdentity:savedCandidateIdentity(t),snapshotHash:context.candidate.snapshotHash,executableModesHash:context.candidate.executableModesHash,status:'reserved',createdAt:this.c.now(),expiresAt:binding.expiresAt,verdictHash:null,result:null};
+   t.reviews++;this.c.store.put('task',t);this.c.store.put('review_ticket',ticket);this.c.emit('review.reserved',g.id,t.id,{ticketId:ticket.id,source:policy.source});
+   return {ticketId:ticket.id,binding,evidence:context.candidate.evidence,reviewer:ticket.reviewer,expiresAt:ticket.expiresAt};
+  });
+ }
+ async submit(input,key,authority){
+  keys(input,['ticketId','verdict',...bindingFields],'review submission');
+  const ticket=this.c.store.get('review_ticket',input.ticketId),task=this.c.getTask(ticket.taskId),verdict=normalizeVerdict(input.verdict,task.spec.permissions),verdictHash=digest(verdict);
+  const command={op:'review.submit',...input,verdict},old=commandReplay(this.c,key,command);if(old)return old.result;
+  if(ticket.reviewer.source==='api'&&authority!==apiAuthority)throw Error('API review verdict requires its persisted provider response');
+  assertBinding(input,ticket.binding);
+  if(ticket.status==='completed'){if(ticket.verdictHash!==verdictHash)throw Error('Conflicting review submission replay');return ticket.result;}
+  if(ticket.status!=='reserved')throw Error('Review ticket is not available; original reservation remains spent');
+  if(this.c.now()>=ticket.expiresAt)throw Error('Original review ticket expiry reached');
+  const context=await this.context(ticket.taskId,{includeFiles:false});assertBinding(context.binding,ticket.binding);
+  return this.c.store.command(key,command,()=>{
+   const current=this.c.store.get('review_ticket',ticket.id);if(current.status==='completed'){if(current.verdictHash!==verdictHash)throw Error('Conflicting review submission replay');return current.result;}
+   const t=this.c.getTask(ticket.taskId),{g,policy}=policyFor(this.c,t);
+   if(g.hash!==ticket.binding.goalHash||g.version!==ticket.binding.goalVersion||digest(savedCandidateIdentity(t))!==digest(ticket.savedCandidateIdentity))throw Error('Candidate or approval changed before verdict');
+   if(this.c.now()>=ticket.expiresAt)throw Error('Original review ticket expiry reached');
+   t.reviewed=true;t.feedback.push({kind:'review',decision:verdict.decision,text:verdict.feedback,findings:verdict.findings,ticketId:ticket.id,source:policy.source,at:this.c.now()});
+   if(verdict.decision==='accept'){
+    t.reviewAcceptance={ticketId:ticket.id,binding:ticket.binding,source:policy.source,reviewer:current.reviewer,verdictHash,acceptedAt:this.c.now()};
+    t.status=t.spec.kind==='coding'?'ready_to_integrate':'accepted';
+   }else{
+    delete t.reviewAcceptance;const exhausted=t.reviews>=t.spec.limits.reviews||t.attempts>=t.spec.limits.attempts||(this.c.store.spent(t.id).model??0)>=t.spec.limits.modelCalls;
+    t.status=exhausted?'blocked':t.native?.layout==='candidate_v1'?'codex_ready':'queued';t.checkpoint={...t.checkpoint,phase:'attempt'};
+    if(t.native?.layout==='candidate_v1')t.native.status='revision_requested';if(exhausted)t.reason='Original review, attempt or request budget exhausted';
+   }
+   this.c.store.put('task',t);current.status='completed';current.verdictHash=verdictHash;current.verdict=verdict;current.completedAt=this.c.now();current.result=this.c.getTask(t.id);this.c.store.put('review_ticket',current);
+   this.c.emit('task.reviewed',g.id,t.id,{decision:verdict.decision,source:policy.source,ticketId:ticket.id});this.c.requestUrgentYield();return current.result;
+  });
+ }
+ assertAccepted(task){
+  const current=this.c.getTask(task.id),{g}=policyFor(this.c,current),accept=current.reviewAcceptance;
+  if(current.status!=='ready_to_integrate'||!accept)throw Error('Passing bound review is required before integration');
+  const ticket=this.c.store.get('review_ticket',accept.ticketId);
+  if(ticket.status!=='completed'||ticket.verdict?.decision!=='accept'||ticket.verdictHash!==accept.verdictHash||digest(ticket.binding)!==digest(accept.binding)||ticket.binding.goalHash!==g.hash||ticket.binding.goalVersion!==g.version||digest(savedCandidateIdentity(current))!==digest(ticket.savedCandidateIdentity))throw Error('Accepted review binding changed before integration');
+  return accept;
+ }
+ async assertCandidate(task,options={}){
+  const accept=this.assertAccepted(task),context=await this.context(task.id,{includeFiles:false,...options});assertBinding(context.binding,accept.binding);return accept;
+ }
+ async runApi(input,key){
+  const {signal,...data}=input;identifier(key,'idempotencyKey');
+  if(!this.#runs.has(key)&&this.#runs.size)throw Error('Another API review is active; wait without spending');
+  if(this.#runs.has(key)){const running=this.#runs.get(key);if(running.hash!==digest(data))throw Error('Idempotency key conflict');return running.promise;}
+  const promise=this.#runApi(data,key,signal);this.#runs.set(key,{hash:digest(data),promise});try{return await promise;}catch(error){const request=this.c.store.request(data.taskId,`api-review-${digest(key)}`);if(request){const t=this.c.getTask(data.taskId);t.reviewWait={source:'api',ticketId:request.ticketId,requestId:request.id,requestOutcome:request.requestOutcome,reason:'API review needs operator attention; saved requests remain spent and no fallback is dispatched'};this.c.store.put('task',t);this.c.emit('review.waiting',t.goalId,t.id,t.reviewWait);}throw error;}finally{this.#runs.delete(key);}
+ }
+ async #runApi(input,key,signal){
+  keys(input,bindingFields,'API review');
+  const c=this.c,requestKey=`api-review-${digest(key)}`,old=c.store.request(input.taskId,requestKey);
+  if(old&&old.inputHash!==digest(input))throw Error('API review idempotency key conflict');
+  if(old?.status==='completed')return this.submit({...input,ticketId:old.ticketId,verdict:JSON.parse(old.result.content)},`api-submit-${digest(key)}`,apiAuthority);
+  if(old)throw Error('Interrupted or failed API review remains spent; no blind retry');
+  if(signal?.aborted)throw Error('API review cancelled before dispatch');
+  const context=await this.context(input.taskId);assertBinding(input,context.binding);
+  if(context.policy.source!=='api')throw Error('Approved review source is host; API fallback is prohibited');
+  const profile=context.policy.reviewer,binding={version:1,providerId:profile.id,revision:profile.revision,profileHash:digest(profile),policyHash:context.g.manifest.reviewPolicyHash};
+  if(!this.providers||digest(this.providers.get(profile.id,profile.revision))!==digest(profile)||typeof this.providers.createReviewer!=='function')throw Error('Configured reviewer identity unavailable');
+  const client=this.providers.createReviewer(binding);
+  if(c.store.db.prepare("SELECT 1 FROM requests WHERE kind='apiReview' AND status='reserved'").get())throw Error('An API review has uncertain ownership; no fallback dispatch');
+  const reservation=await this.reserve(input,`api-ticket-${digest(key)}`);
+  const request=c.store.tx(()=>{
+   const t=c.getTask(input.taskId),{g,policy}=policyFor(c,t);
+   if(policy.source!=='api'||g.hash!==context.g.hash)throw Error('API review approval changed');
+   if(c.store.db.prepare("SELECT 1 FROM requests WHERE kind='apiReview' AND status='reserved'").get())throw Error('An API review has uncertain ownership; no fallback dispatch');
+   const row={id:c.store.get('review_ticket',reservation.ticketId).requestId,taskId:t.id,key:requestKey,kind:'apiReview',status:'reserved',inputHash:digest(input),ticketId:reservation.ticketId,reviewerBinding:binding,reservedAt:c.now(),requestOutcome:'unknown'};
+   c.store.db.prepare('INSERT INTO requests VALUES(?,?,?,?,?,?)').run(row.id,t.id,row.key,row.kind,row.status,JSON.stringify({runKey:key,inputHash:row.inputHash,ticketId:row.ticketId,reviewerBinding:binding,reservedAt:row.reservedAt,requestOutcome:'unknown'}));return row;
+  });
+  c.emit('model.request.started',context.g.id,input.taskId,{requestId:request.id,kind:'apiReview',role:'reviewer',providerBinding:binding});
+  const timeout=AbortSignal.timeout(Math.max(1,Math.min(300000,input.expiresAt-c.now()))),combined=signal?AbortSignal.any([signal,timeout]):timeout;
+  let result;
+  try{
+   if(combined.aborted){const error=Error('Cancelled before dispatch');error.requestOutcome='not_dispatched';throw error;}
+   result=await client.review({evidence:reservation.evidence,signal:combined,maxOutputTokens:profile.maxOutputTokens});
+   c.store.tx(()=>{const saved=c.store.request(input.taskId,requestKey);c.store.db.prepare("UPDATE requests SET status='completed',data=? WHERE id=?").run(JSON.stringify({runKey:key,inputHash:request.inputHash,ticketId:request.ticketId,reviewerBinding:binding,reservedAt:request.reservedAt,requestOutcome:'completed',savedAt:c.now(),result}),saved.id);const savedTicket=c.store.get('review_ticket',reservation.ticketId);savedTicket.reviewer={...savedTicket.reviewer,reportedModel:result.reportedModel??null,provenance:result.reportedModel?'reported':'unknown',usage:result.usage??null};c.store.put('review_ticket',savedTicket);});
+  }catch(error){
+   const outcome=['not_dispatched','completed'].includes(error.requestOutcome)?error.requestOutcome:'unknown';
+   c.store.tx(()=>{const saved=c.store.request(input.taskId,requestKey);c.store.db.prepare('UPDATE requests SET status=?,data=? WHERE id=?').run(outcome==='unknown'?'reserved':'failed',JSON.stringify({runKey:key,inputHash:request.inputHash,ticketId:request.ticketId,reviewerBinding:binding,reservedAt:request.reservedAt,requestOutcome:outcome==='unknown'?'unknown':outcome,error:'API review failed; explicit operator recovery required'}),saved.id);});
+   throw Error(outcome==='unknown'?'API review outcome uncertain and may be billed; request remains spent, no retry':'API review failed; reservation remains spent, no fallback');
+  }
+  c.emit('model.request.completed',context.g.id,input.taskId,{requestId:request.id,kind:'apiReview',role:'reviewer',providerBinding:binding,requestedModel:result.requestedModel,reportedModel:result.reportedModel??null,usage:result.usage??null});
+  // Preserve the response before validating it or checking whether approval was
+  // revoked during the await. A late result never revives a stale candidate.
+
+  let verdict;try{verdict=JSON.parse(result.content);}catch{throw Error('Invalid API review JSON; completed request remains spent');}
+  return this.submit({...input,ticketId:reservation.ticketId,verdict},`api-submit-${digest(key)}`,apiAuthority);
+ }
+}

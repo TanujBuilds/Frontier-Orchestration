@@ -37,13 +37,15 @@ export function deriveOvernightState(g,tasks,planning,now){
  if(g.integrationPending){
   const integrating=first(t=>t.id===g.integrationPending.taskId);
   if(g.status==='active'&&integrating?.status==='ready_to_integrate'&&integrating.goalVersion===g.version&&
-   integrating.legacyDecision?.decision==='accept'&&!integrating.owner&&!g.integrationOwner&&!g.integrationSealed){
+   (g.manifest.reviewPolicy?!!integrating.reviewAcceptance:integrating.legacyDecision?.decision==='accept')&&!integrating.owner&&!g.integrationOwner&&!g.integrationSealed){
    return state('integration',integrating,'Reviewed candidate import is pending protected verification');
   }
   return state('blocked',integrating,integrating?.reason??'Pending integration requires verified recovery','integration_pending');
  }
  const blocked=first(t=>['blocked','partial','failed'].includes(t.status));
  if(blocked||planning?.status==='blocked')return state('blocked',blocked,blocked?.reason??blocked?.legacyDecision?.feedback??(planning?.status==='blocked'?planning.reason:undefined)??'Saved execution needs attention');
+ const portableReview=g.manifest.reviewPolicy?first(t=>t.status==='awaiting_review'):null;
+ if(portableReview)return state('review',portableReview,g.manifest.reviewPolicy.source==='host'?'Waiting for the selected host to return and pull the saved review inbox':'Waiting for the approved API reviewer; failed requests remain spent',g.manifest.reviewPolicy.source==='host'?'waiting_host_review':'waiting_api_review');
  const review=first(t=>['awaiting_legacy_review','legacy_reviewing'].includes(t.status));
  if(review)return state('review',review);
  const integrating=first(t=>t.status==='ready_to_integrate');
@@ -117,7 +119,7 @@ export class OvernightLifecycle{
      return {
       id:t.id,status:t.status,objective:t.spec.objective,role:t.spec.role,attempts:t.attempts,reviews:t.reviews,
       spent:c.getTask(t.id).spent,limits:t.spec.limits,deadline:t.deadline,checks:t.integration?.checks??t.result?.checks??checkpoint?.checks??[],
-      integration:t.integration??null,review:t.legacyDecision??null,
+      integration:t.integration??null,review:t.reviewAcceptance??t.legacyDecision??null,
       evidence:{
        journalRoot:t.result?.journalRoot??checkpoint?.journalRoot??null,resultHash:digest(t.result),
        candidateWorktree:t.result?.worktree??checkpoint?.candidateWorktree??null,lastVerifiedCheckpoint:checkpoint,

@@ -1,3 +1,4 @@
+// Fresh beta observer fixtures supply selected host context without changing historical core goals.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises';
@@ -20,7 +21,7 @@ async function fixture(t){
  for(const name of ['Mosaic Beta','Mosaic']){
   const root=path.join(home,'Library','Application Support',name,'state');
   await mkdir(root,{recursive:true,mode:0o700});
-  const c=new Coordinator({root,beta:name==='Mosaic Beta',workerProfile:name==='Mosaic Beta'?{baseUrl:'http://127.0.0.1:1/v1',model:'fixture',displayName:'Fixture',revision:'fixture',streaming:false}:undefined});
+  const c=new Coordinator({root,beta:name==='Mosaic Beta',...(name==='Mosaic Beta'?{selectedHost:'codex'}:{}),workerProfile:name==='Mosaic Beta'?{baseUrl:'http://127.0.0.1:1/v1',model:'fixture',displayName:'Fixture',revision:'fixture',streaming:false}:undefined});
   const dispatcher=new Dispatcher({c});
   if(name==='Mosaic')delete dispatcher.definitions.get('observer_timeline').inputSchema.properties.recent;
   const api=await startApi({dispatcher,token:'a'.repeat(64),viewerToken:'b'.repeat(64),headless:true});

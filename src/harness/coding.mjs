@@ -6,6 +6,7 @@ import { Workspace } from '../project/workspace.mjs';
 import { CheckRunner } from '../project/sandbox.mjs';
 import { validateReply, AttemptError, matches, secretPath } from '../project/contracts.mjs';
 import { keys,digest } from './contracts.mjs';
+import {readBehavioralFileModes,behavioralModeHash} from './behavioral-validation.mjs';
 import { selectContext } from './context.mjs';
 import { focusRepair, summarizeChecks, summarizeCorrection } from './repair-feedback.mjs';
 import { recordFailedGate } from './repair-progress.mjs';
@@ -85,7 +86,7 @@ export class CodingAdapter {
   });
  }
  async step(task,owner){
-  const {c}=this.worker,v2=isOvernightV2(c.store.get('goal',task.goalId).manifest),policy=c.store.get('goal',task.goalId).manifest.overnightPolicy,{journal,workspace,manifest}=await this.open(task),release=await journal.lock();
+  const {c}=this.worker,g=c.store.get('goal',task.goalId),v2=isOvernightV2(g.manifest),policy=c.store.get('goal',task.goalId).manifest.overnightPolicy,{journal,workspace,manifest}=await this.open(task),release=await journal.lock();
   let cp={...task.checkpoint},phase=cp.phase??'attempt',modelDispatch=false;
   try{
    const permissionsHash=digest(manifest.permissions);
@@ -196,6 +197,9 @@ export class CodingAdapter {
    if(phase==='checks'){
     this.worker.activity(task,'coding.checks.started',{operationId:`checks-start-${cp.attempt}`,requestId:cp.requestId??null,attempt:cp.attempt});
     const evidenceKey=checkKey(cp);
+    const reviewSnapshot=g.manifest.reviewPolicy?await workspace.snapshot():null;
+    const reviewModes=reviewSnapshot?await readBehavioralFileModes(workspace,Object.keys(reviewSnapshot)):null;
+    if(reviewSnapshot){const pinned=await journal.memo(`${evidenceKey}/review-input`,async()=>({snapshotHash:digest(reviewSnapshot),executableModesHash:behavioralModeHash(reviewModes)}));if(pinned.snapshotHash!==digest(reviewSnapshot)||pinned.executableModesHash!==behavioralModeHash(reviewModes))throw Error('Candidate changed since the protected-check reservation');}
     let results;try{results=await journal.memo(evidenceKey,()=>checks.run(manifest.permissions.checks,`attempt-${cp.attempt}`));}catch(error){this.worker.activity(task,'coding.checks.failed',{operationId:`checks-end-${cp.attempt}`,requestId:cp.requestId??null,attempt:cp.attempt,outcome:'error'});throw error;}
     this.worker.activity(task,results.every(r=>r.passed)?'coding.checks.passed':'coding.checks.failed',{operationId:`checks-end-${cp.attempt}`,requestId:cp.requestId??null,attempt:cp.attempt,checks:results.map(r=>({id:r.id,passed:r.passed}))});
     if(infrastructureCheckFailure(results))throw Error('Protected-check infrastructure failure; inspect saved check evidence and approved inputs before continuation');
@@ -218,13 +222,15 @@ export class CodingAdapter {
      },repair,'check',reason,owner);
     }
     const evidence=await workspace.evidence();
+    let reviewCheckBinding;
+    if(reviewSnapshot){await workspace.assertSnapshot(reviewSnapshot);if(behavioralModeHash(await readBehavioralFileModes(workspace,Object.keys(reviewSnapshot)))!==behavioralModeHash(reviewModes))throw Error('Candidate executable mode changed during checks');reviewCheckBinding={snapshotHash:digest(reviewSnapshot),executableModesHash:behavioralModeHash(reviewModes),checksHash:digest(results)};}
     const state=c.store.tx(()=>{
      const current=c.owned(task.id,owner);
      delete current.checkpoint.repairFailure;
      delete current.checkpoint.failedGate;
      delete current.checkpoint.repairEvidence;
      c.store.put('task',current);
-     return c.completeTask(task.id,{...evidence,checks:results,sandbox:journal.last('harness.sandbox'),worktree:workspace.root,journalRoot:journal.root,workerSummary:cp.reply.summary,baseCommit:manifest.baseCommit},owner,{reviewRequired:true});
+     return c.completeTask(task.id,{...evidence,...(reviewCheckBinding?{reviewCheckBinding}:{}),checks:results,sandbox:journal.last('harness.sandbox'),worktree:workspace.root,journalRoot:journal.root,workerSummary:cp.reply.summary,baseCommit:manifest.baseCommit},owner,{reviewRequired:true});
     });
     this.worker.activity(task,'coding.candidate.saved',{operationId:`candidate-${cp.attempt}`,requestId:cp.requestId??null,attempt:cp.attempt});return state;
    }

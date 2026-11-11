@@ -37,7 +37,7 @@ export async function backlogDemo(output) {
 
   try {
     open();
-    const goal = await dispatcher.invoke('goal_prepare', {
+    const goal = await dispatcher.invoke('legacy_goal_prepare', {
       idempotencyKey: 'demo-prepare',
       manifest: {
         submissionId: 'demo-goal', objective: 'Inspect an example and then check its follow-up',

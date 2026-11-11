@@ -98,7 +98,7 @@ async function demo(output) {
         ...(key ? ['--idempotency-key', key] : [])
       ]);
     };
-    const goal = await call('goal_prepare', {idempotencyKey: 'fixture-prepare', manifest: {
+    const goal = await call('legacy_goal_prepare', {idempotencyKey: 'fixture-prepare', manifest: {
       submissionId: 'fixture-goal',
       objective: 'Verify a scoped recipe in a disposable repository',
       acceptance: ['Protected behavior check passes'],

@@ -27,9 +27,13 @@ export function effectiveIntegrationChecks(c,task,manifest){
 }
 export const preflightIdentity=(g,runtimeIdentity,inventory,dependencies)=>digest({goalId:g.id,hash:g.hash,manifest:g.manifest,runtimeIdentity,inventory,dependencies});
 
+function commonReviewAccepted(c,g,t){
+ const acceptance=t.reviewAcceptance,ticket=acceptance?c.store.maybe('review_ticket',acceptance.ticketId):null;
+ return !!(acceptance&&ticket?.status==='completed'&&ticket.verdict?.decision==='accept'&&ticket.verdictHash===acceptance.verdictHash&&ticket.binding.goalHash===g.hash&&ticket.binding.goalVersion===g.version&&ticket.binding.taskId===t.id&&ticket.binding.checksHash===digest(t.result.checks)&&digest(ticket.binding)===digest(acceptance.binding)&&digest(t.integration.reviewAcceptance)===digest(acceptance)&&t.integration.review===(acceptance.source==='host'?'host_review':'api_review'));
+}
 export function overnightCompletionReady(c,g,tasks){
  const plan=c.store.maybe('overnight_plan',g.id),final=tasks.find(t=>t.spec.role==='final');
- return !!(plan&&plan.approvalHash===g.hash&&plan.tasks.length===tasks.length&&plan.tasks.every((id,n)=>tasks.some(t=>t.id===id&&t.hash===plan.specHashes[n]))&&final&&tasks.every(t=>t.status==='accepted'&&t.integration?.review==='codex_legacy'&&t.legacyDecision?.decision==='accept')&&g.manifest.project.checks.every(check=>final.integration.checks.some(r=>r.id===check.id&&r.passed))&&!g.integrationPending);
+ return !!(plan&&plan.approvalHash===g.hash&&plan.tasks.length===tasks.length&&plan.tasks.every((id,n)=>tasks.some(t=>t.id===id&&t.hash===plan.specHashes[n]))&&final&&tasks.every(t=>t.status==='accepted'&&(g.manifest.reviewPolicy?commonReviewAccepted(c,g,t):t.integration?.review==='codex_legacy'&&t.legacyDecision?.decision==='accept'))&&g.manifest.project.checks.every(check=>final.integration.checks.some(r=>r.id===check.id&&r.passed))&&!g.integrationPending);
 }
 
 export function infrastructureCheckFailure(results){return results.find(r=>!r.passed&&(r.stopped||r.code===null||/EACCES|EPERM|Operation not permitted|permission denied|spawn.*ENOENT|Cannot find package/i.test(r.stderr??'')));}

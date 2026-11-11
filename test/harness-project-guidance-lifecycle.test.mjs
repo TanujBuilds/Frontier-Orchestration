@@ -1,3 +1,4 @@
+// Historical core approvals use explicit legacy preparation; beta exercises current bound host review.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp, mkdir, writeFile, rm} from 'node:fs/promises';
@@ -7,6 +8,7 @@ import {Coordinator} from '../src/harness/coordinator.mjs';
 import {Dispatcher} from '../src/harness/tools.mjs';
 import {Worker} from '../src/harness/worker.mjs';
 import {digest} from '../src/harness/contracts.mjs';
+import {resolveGuidanceEvidence} from '../src/harness/project-guidance/evidence.mjs';
 import {git} from '../src/project/process.mjs';
 
 const relatedPath = 'src/parser.mjs';
@@ -16,7 +18,7 @@ const sourceContext = 'The parser token handling in src/parser.mjs is changing.'
 async function fixture(t, {beta = false} = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'mosaic-project-guidance-'));
   const repo = path.join(root, 'repo');
-  const c = new Coordinator({root: path.join(root, 'state'), beta});
+  const c = new Coordinator({root: path.join(root, 'state'), beta, ...(beta?{selectedHost:'codex'}:{})});
   const config = {environment: 'fixture', beta};
   const provider = {complete: async () => assert.fail('Fixture must not call a model provider')};
   const dispatcher = new Dispatcher({c, worker: new Worker({c, config, provider}), config});
@@ -70,7 +72,7 @@ assert.equal(parse('   '), '');
     return finished.result;
   }
   function prepareGoal(submissionId, overrides = {}) {
-    return mutate('goal_prepare', {manifest: {
+    return mutate(beta ? 'goal_prepare' : 'legacy_goal_prepare', {manifest: {
       submissionId,
       mode: 'codex_only',
       environment: 'fixture',
@@ -108,6 +110,12 @@ assert.equal(parse('   '), '');
     const started = await operation('native_start', {taskId: source.id, ...(layout && {layout})});
     await writeFile(path.join(started.native.worktree, relatedPath), 'export const parse = input => input.trim();\n');
     const finished = await operation('native_finish', {taskId: source.id, summary: 'Fixture trims parser input'});
+    const currentGoal=await read('goal_get',{goalId});
+    if(currentGoal.manifest.reviewPolicy){
+      const item=(await read('review_inbox',{goalId})).items.find(item=>item.taskId===source.id);
+      const ticket=await mutate('review_reserve',item.binding);
+      await mutate('review_submit',{ticketId:ticket.ticketId,...item.binding,verdict:{decision:'accept',feedback:'Fixture host assesses the exact checked parser candidate',findings:[]}});
+    }
     const accepted = layout === 'candidate_v1'
       ? await operation('task_integrate', {taskId: source.id, feedback: 'Fixture review accepts checked parser change'})
       : finished;
@@ -295,10 +303,10 @@ test('project guidance public lifecycle demo', async t => {
 test('promotion requires unchanged candidate and source evidence under the original deadline', async t => {
   const f = await fixture(t, {beta: true});
   const goal = await f.makeGoal('native-source');
-  const {outcome} = await f.acceptedSource(goal.id, null);
+  const {outcome} = await f.acceptedSource(goal.id);
   // Advance the source approval, so evidence must still bind to the old,
   // accepted task version even when today's goal registers another definition.
-  const {schema, capabilities, ...manifest} = goal.manifest;
+  const {schema, capabilities, reviewPolicyHash, ...manifest} = goal.manifest;
   const revision = await f.mutate('goal_revision_prepare', {
     goalId: goal.id,
     expectedHash: goal.hash,
@@ -318,6 +326,10 @@ test('promotion requires unchanged candidate and source evidence under the origi
     proposal: proposalFor(f.project, outcome, {scope: 'general'}),
   }), /project-only/i);
   assert.equal((await f.read('task_get', {taskId: maintenance.id})).attempts, 1);
+  const sourceTask=f.c.store.get('task',outcome.taskId),sourceTicket=f.c.store.get('review_ticket',sourceTask.reviewAcceptance.ticketId);
+  f.c.store.put('review_ticket',{...sourceTicket,verdictHash:'0'.repeat(64)});
+  assert.throws(()=>resolveGuidanceEvidence({c:f.c,maintenanceTaskId:maintenance.id,outcomeIds:[outcome.id]}),/review ticket/i);
+  f.c.store.put('review_ticket',sourceTicket);
   const candidate = await f.mutate('learning_propose', {taskId: maintenance.id, proposal: proposalFor(f.project, outcome)});
   assert.equal((await f.mutate('learning_evaluate', {lessonId: candidate.id})).passed, true);
 

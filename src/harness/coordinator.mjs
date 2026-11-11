@@ -6,6 +6,8 @@ import {isOvernightV2,effectiveIntegrationChecks} from './overnight.mjs';
 import {assertOvernightPreflight} from './overnight-preflight.mjs';
 import { Store } from './store.mjs';
 import { Registry, normalizeGoal, normalizeTask, providerBinding as manifestProviderBinding, digest, text, identifier, keys } from './contracts.mjs';
+import {ReviewService} from './review/service.mjs';
+import {HOST_IDS,normalizeReviewPolicy} from './review/contracts.mjs';
 import {normalizeProviderPolicy} from './providers/contracts.mjs';
 import {verifyLocalAcceptance} from './research-review.mjs';
 import { Learning } from './learning.mjs';
@@ -64,14 +66,15 @@ function savedFailedGate(c,t,g){
  return verified.candidateId===gate.candidateId&&verified.failureId===gate.failureId&&verified.signature===gate.signature;
 }
 export class Coordinator {
- constructor({root,now=Date.now,registry=new Registry(),beta=false,workerProfile,verifyCurrentWorker,providerRegistry}={}){
+ constructor({root,now=Date.now,registry=new Registry(),beta=false,workerProfile,verifyCurrentWorker,providerRegistry,selectedHost,hostRegistry}={}){
   if(providerRegistry&&!['get','snapshot','createClient'].every(method=>typeof providerRegistry[method]==='function'))throw Error('A normalized provider registry is required');
   this.providerRegistry=providerRegistry??null;
+  this.selectedHost=typeof selectedHost==='string'?selectedHost:selectedHost?.id??null;if(this.selectedHost&&!HOST_IDS.includes(this.selectedHost))throw Error('Unsupported selected host');this.hostRegistry=hostRegistry??null;
   this.beta=beta;this.verifyCurrentWorker=verifyCurrentWorker;this.workerProfile=workerProfile?normalizeWorkerProfile(workerProfile):null;
   this.store=new Store(root);this.now=now;this.registry=registry;
   for(const record of this.store.all('mode')){const m=record.definition??record;if(!this.registry.modes.has(`${m.id}@${m.version}`))this.registry.registerMode(m);}
   for(const record of this.store.all('workflow')){const w=record.definition??record;if(!this.registry.workflows.has(`${w.id}@${w.version}`))this.registry.registerWorkflow(w);}
-  this.learning=new Learning({c:this});
+  this.learning=new Learning({c:this});this.reviewService=new ReviewService({c:this,providers:this.providerRegistry,hostRegistry:this.hostRegistry});
  }
  close(){this.store.close();}
  acquireWorker(token){identifier(token,'worker token');const lease=this.store.tx(()=>{
@@ -159,13 +162,25 @@ export class Coordinator {
    }
   }
   if(type==='task.answered')for(const n of this.store.all('notification').filter(n=>n.taskId===taskId&&n.kind==='decision'&&!n.resolved)){n.resolved=true;n.resolvedAt=this.now();this.store.put('notification',n);}
-  const kind=type==='overnight.attention'?(data.phase==='waiting-answer'?'decision':'blocker'):type==='task.question'?'decision':['task.blocked','task.uncertain','legacy_review.failed'].includes(type)?'blocker':type==='goal.finalized'?'completion':['task.result','task.integrated','task.native_finished','learning.promoted'].includes(type)?'result':null;
+  const kind=type==='overnight.attention'?(data.phase==='waiting-answer'?'decision':'blocker'):type==='task.question'?'decision':['task.blocked','task.uncertain','legacy_review.failed','review.waiting'].includes(type)?'blocker':type==='goal.finalized'?'completion':['task.result','task.integrated','task.native_finished','learning.promoted'].includes(type)?'result':null;
   if(kind&&!(kind==='result'&&isOvernightV2(this.store.maybe('goal',goalId)?.manifest))){const task=taskId?this.store.get('task',taskId):null,title=type==='task.question'?'An answer is needed':type==='goal.finalized'?'Goal '+data.status:type==='learning.promoted'?'Tested procedure available':kind==='blocker'?'Work needs attention':'Saved work is ready';this.store.put('notification',{id:`notice-${seq}`,sequence:seq,goalId,taskId,kind,title,objective:task?.spec.objective??this.store.maybe('goal',goalId)?.manifest.objective??'',at:this.now(),acknowledged:false,resolved:false});}
   return seq;
  });}
  notifications({goalId}={}){return this.store.all('notification').filter(n=>!n.acknowledged&&!n.resolved&&(!goalId||n.goalId===goalId)).sort((a,b)=>b.sequence-a.sequence).slice(0,50);}
  ackNotification(input,key){return this.store.command(key,{op:'notification.ack',...input},()=>{const n=this.store.get('notification',input.notificationId);n.acknowledged=true;n.acknowledgedAt=this.now();this.store.put('notification',n);return n;});}
- goalManifest(raw,providerRegistry=this.providerRegistry){
+ reviewPreparation(raw,{portable=false}={}){
+  if(raw.reviewPolicy?.source==='host'&&(!this.selectedHost||raw.reviewPolicy.hostId!==this.selectedHost))throw Error('Host review requires matching trusted selected host context');
+  const mode=this.registry.mode(raw.mode??(this.beta?(this.workerProfile||raw.providerPolicy?'collaborative':'codex_only'):undefined),raw.modeVersion);
+  if(!raw.reviewPolicy&&(portable||this.beta||raw.providerPolicy||this.selectedHost)&&mode.review!=='checks'){
+   if(!this.selectedHost)throw Error('Select a trusted host in setup or supply an explicitly permitted API review policy');
+   return {...raw,reviewPolicy:{version:1,source:'host',hostId:this.selectedHost,fallback:'wait'}};
+  }
+  return raw;
+ }
+ preparePortableGoal(raw,key){return this.prepareGoal(raw,key,{portable:true});}
+ prepareLegacyGoal(raw,key){if(this.beta||raw.providerPolicy||raw.reviewPolicy)throw Error('Legacy preparation cannot select portable policy');return this.prepareGoal(raw,key,{legacy:true});}
+ goalManifest(raw,providerRegistry=this.providerRegistry,{historic=false}={}){
+  if(!historic)raw=this.reviewPreparation(raw);
   if(!this.beta)return normalizeGoal(raw,this.registry,providerRegistry);
   if(raw.researchPolicy)throw Error('Research is parked in Mosaic Beta');
   const manifest=normalizeGoal({...raw,mode:raw.mode??(this.workerProfile||raw.providerPolicy?'collaborative':'codex_only'),modeVersion:raw.modeVersion??1},this.registry,providerRegistry);
@@ -207,24 +222,24 @@ export class Coordinator {
  }
  verifyGoalBinding(goal){
   if(goal.manifest.mode.actors.includes('deepseek'))this.verifyWorkerBinding(goal);
+  if(goal.manifest.reviewPolicy){const policy=normalizeReviewPolicy(goal.manifest.reviewPolicy);if(digest(policy)!==goal.manifest.reviewPolicyHash)throw Error('Approved review policy changed');if(policy.source==='api'&&(!this.providerRegistry||digest(this.providerRegistry.get(policy.reviewer.id,policy.reviewer.revision))!==digest(policy.reviewer)))throw Error('Approved reviewer identity changed');}
  }
- prepareGoal(raw,key){
+ prepareGoal(raw,key,{legacy=false,portable=false}={}){
   const saved=typeof key==='string'?this.store.db.prepare('SELECT hash,result FROM commands WHERE key=?').get(key):null;
   const previous=saved?JSON.parse(saved.result):null;
-  if(saved&&(raw?.providerPolicy!==undefined||previous?.manifest?.providerPolicy)){
+  if(saved){
    const approved=previous?.manifest;
-   if(!raw?.providerPolicy||!approved?.providerPolicy||previous.hash!==digest(approved)||saved.hash!==digest({op:'goal.prepare',manifest:approved}))throw Error('Idempotency key conflict');
-   // An existing portable preparation receipt binds its original public pool.
-   // Replay canonicalizes against that saved identity, never mutable settings.
+   if(!approved||previous.hash!==digest(approved)||saved.hash!==digest({op:'goal.prepare',manifest:approved}))throw Error('Idempotency key conflict');
    const catalog=Object.freeze({get(id,revision){
-    const profile=approved.providerPolicy.workers.find(worker=>worker.id===id&&worker.revision===revision);
-    if(!profile)throw Error('Saved provider revision differs');
-    return structuredClone(profile);
+    const profile=approved.providerPolicy?.workers.find(worker=>worker.id===id&&worker.revision===revision)??(approved.reviewPolicy?.reviewer?.id===id&&approved.reviewPolicy.reviewer.revision===revision?approved.reviewPolicy.reviewer:null);
+    if(!profile)throw Error('Saved provider revision differs');return structuredClone(profile);
    }});
-   let manifest;try{manifest=this.goalManifest(raw,catalog);}catch{throw Error('Idempotency key conflict');}
-   return this.store.command(key,{op:'goal.prepare',manifest},()=>{throw Error('Saved portable preparation command is unavailable');});
+   const replayRaw=raw.reviewPolicy===undefined&&approved.reviewPolicy?{...raw,reviewPolicy:approved.reviewPolicy}:raw;
+   let manifest;try{manifest=this.goalManifest(replayRaw,catalog,{historic:true});}catch{throw Error('Idempotency key conflict');}
+   return this.store.command(key,{op:'goal.prepare',manifest},()=>{throw Error('Saved preparation command is unavailable');});
   }
-  const manifest=this.goalManifest(raw);return this.store.command(key,{op:'goal.prepare',manifest},()=>{
+  if(!legacy)raw=this.reviewPreparation(raw,{portable});
+  const manifest=legacy?normalizeGoal(raw,this.registry,this.providerRegistry):this.goalManifest(raw);return this.store.command(key,{op:'goal.prepare',manifest},()=>{
   const g=this.store.submission('goal','',manifest.submissionId,digest(manifest),id=>({id,manifest,hash:digest(manifest),version:1,status:'draft',createdAt:this.now(),activatedAt:null,deadline:null}));
   this.emit('goal.prepared',g.id,null,{hash:g.hash});return g;
  });}
@@ -239,7 +254,7 @@ export class Coordinator {
   return g;
  });}
  getGoal(id){const g=this.store.get('goal',id),planning=this.store.maybe('planning',id);return {...g,...(isOvernightV2(g.manifest)?{overnightRun:this.store.maybe('overnight_run',id)??null}:{}),planning:planning?{...planning,spent:this.store.spent(id).model??0}:null,tasks:this.store.all('task').filter(t=>t.goalId===id).map(t=>this.getTask(t.id)),reviewerRuns:this.store.all('reviewer').filter(r=>r.goalId===id)};}
- getTask(id){const t=this.store.get('task',id),local=this.store.spent(id),spent={model:0,search:0,download:0,codexReview:0};for(const k of Object.keys(spent))spent[k]=Math.max(local[k]??0,t.remoteSpent?.[k]??0);return {...t,spent};}
+ getTask(id){const t=this.store.get('task',id),local=this.store.spent(id),spent={model:0,search:0,download:0,codexReview:0,...(this.store.get('goal',t.goalId).manifest.reviewPolicy?.source==='api'||local.apiReview?{apiReview:0}:{})};for(const k of Object.keys(spent))spent[k]=Math.max(local[k]??0,t.remoteSpent?.[k]??0);return {...t,spent};}
  snapshot(){return {goals:this.store.all('goal').map(g=>this.getGoal(g.id)),notifications:this.notifications(),events:this.store.events(Math.max(0,Number(this.store.db.prepare('SELECT COALESCE(MAX(seq),0) AS n FROM events').get().n)-1000),1000),operations:this.store.all('operation').slice(-30).map(({result,...r})=>r),registry:this.registry.snapshot()};}
  liveGoal(g){if(g.status!=='active')throw Error('Goal is not active');if(this.now()>=g.deadline)throw Error('Goal deadline exceeded');}
  liveTask(t,{allowStopped=false}={}){const current=this.store.get('task',t.id),g=this.store.get('goal',current.goalId);this.liveGoal(g);if(current.goalVersion!==g.version)throw Error('Task needs explicit rebind to the approved goal version');if(current.deadline&&this.now()>=current.deadline)throw Error('Original task deadline exceeded');if(current.pauseRequested||(current.stopRequested&&!(allowStopped&&current.status==='stopped'&&!current.owner)))throw Error('Task is paused or stopped');return current;}
@@ -255,7 +270,7 @@ export class Coordinator {
   const t=this.getTask(input.taskId);this.liveTask(t);if(t.status!=='codex_active'||t.executionActor!=='codex'||!['consult','learning'].includes(t.spec.kind))throw Error('Native text ownership required');
   const lessons=t.spec.kind==='learning'?this.store.all('lesson').filter(l=>l.maintenanceId===t.id):[];
   if(t.spec.kind==='learning'&&(!lessons.length||lessons.some(l=>l.status==='candidate')||!this.store.all('evaluation').some(e=>lessons.some(l=>l.id===e.lessonId))))throw Error('Native learning needs a protected evaluation and finalized procedure decision');
-  text(input.content,'native result',20000);t.result={content:input.content,actor:'codex',accounting:'native host; token totals unavailable',...(lessons.length?{lessons:lessons.map(l=>({id:l.id,status:l.status,recipeHash:l.recipeHash}))}:{})};t.status='accepted';this.store.put('task',t);this.emit('task.native_finished',t.goalId,t.id,{status:t.status,actor:'codex'});return this.getTask(t.id);
+  text(input.content,'native result',20000);t.result={content:input.content,actor:'codex',accounting:'native host; token totals unavailable',...(lessons.length?{lessons:lessons.map(l=>({id:l.id,status:l.status,recipeHash:l.recipeHash}))}:{})};t.status=this.store.get('goal',t.goalId).manifest.reviewPolicy&&t.spec.kind==='consult'?'awaiting_review':'accepted';this.store.put('task',t);this.emit('task.native_finished',t.goalId,t.id,{status:t.status,actor:'codex'});return this.getTask(t.id);
  });}
  submitTask(input,key){const {goalId,...raw}=input;return this.store.command(key,{op:'task.submit',...input},()=>{
   const g=this.store.get('goal',goalId);this.liveGoal(g);const spec=normalizeTask(raw,g.manifest,this.registry),hash=digest(spec);
@@ -447,12 +462,12 @@ export class Coordinator {
   text(input.answer,'answer',8000);const answer={questionId:t.questions.at(-1).id,text:input.answer,responder:input.responder,at:this.now()};if(help){answer.helperTaskId=help.helperTaskId;answer.helperResultHash=digest(this.getTask(help.helperTaskId).result);help.status='answered';help.answeredAt=this.now();help.resultHash=answer.helperResultHash;this.store.put('help_link',help);}t.answers.push(answer);t.status=t.spec.actor==='codex'?'codex_ready':'queued';this.store.put('task',t);this.emit('task.answered',t.goalId,t.id,answer);this.requestUrgentYield();return this.getTask(t.id);
  });}
  completeTask(taskId,result,owner,{reviewRequired=false}={}){return this.store.tx(()=>{const t=this.owned(taskId,owner),g=this.store.get('goal',t.goalId);if(t.spec.kind==='research'&&t.spec.researchPolicy?.version===3&&result.receiptStatus!=='partial'&&(!result.reviewBinding||result.independentReview!=='accepted'))throw Error('Reviewed research requires accepted bound receipt');if(t.spec.kind==='research'&&t.spec.researchPolicy?.version===3&&result.receiptStatus!=='partial'){const accepted=verifyLocalAcceptance(t,id=>this.store.maybe('reviewer',id));if(result.remoteJobId!==accepted.jobId||digest(result.reviewBinding)!==digest(accepted.descriptor))throw Error('Result differs from authoritative local research acceptance');}t.result=result;t.owner=null;t.yieldRequested=false;
-  t.status=(t.spec.kind==='research'&&result.receiptStatus==='partial')||this.now()>=Math.min(g.deadline,t.deadline)?'partial':t.spec.kind==='coding'?(g.manifest.mode.review==='checks'?'ready_to_integrate':g.manifest.mode.review==='legacy'?'awaiting_legacy_review':'awaiting_review'):reviewRequired&&g.manifest.mode.review==='operator'?'awaiting_review':'accepted';
+  t.status=(t.spec.kind==='research'&&result.receiptStatus==='partial')||this.now()>=Math.min(g.deadline,t.deadline)?'partial':t.spec.kind==='coding'?(g.manifest.mode.review==='checks'?'ready_to_integrate':g.manifest.reviewPolicy?'awaiting_review':g.manifest.mode.review==='legacy'?'awaiting_legacy_review':'awaiting_review'):reviewRequired&&(g.manifest.reviewPolicy||g.manifest.mode.review==='operator')?'awaiting_review':'accepted';
   if(t.status!=='partial'&&(t.stopRequested||g.status==='stopped')){t.controlReturnStatus=t.status;t.status='stopped';}
   else if(t.status!=='partial'&&(t.pauseRequested||g.status==='paused')){t.controlReturnStatus=t.status;t.status='paused';}
   this.store.put('task',t);this.emit('task.result',t.goalId,t.id,{status:t.status,result});return this.getTask(t.id);
  });}
- review(input,key){return this.store.command(key,{op:'task.review',...input},()=>{const t=this.store.get('task',input.taskId),g=this.store.get('goal',t.goalId);this.liveTask(t);if(t.spec.kind==='research'&&t.spec.researchPolicy?.version===3)throw Error('Use hash-bound research_review for this research contract');if(g.manifest.mode.review!=='operator')throw Error('Mode prohibits Codex operator review');if(t.status!=='awaiting_review')throw Error('Task is not awaiting review');if(t.reviews>=t.spec.limits.reviews)throw Error('Review limit reached');if(!['accept','revise'].includes(input.decision))throw Error('Invalid review decision');text(input.feedback,'feedback',12000);t.reviews++;t.feedback.push({decision:input.decision,text:input.feedback,at:this.now()});t.reviewed=true;
+ review(input,key){return this.store.command(key,{op:'task.review',...input},()=>{const t=this.store.get('task',input.taskId),g=this.store.get('goal',t.goalId);this.liveTask(t);if(g.manifest.reviewPolicy)throw Error('Use bound review_submit for this policy');if(t.spec.kind==='research'&&t.spec.researchPolicy?.version===3)throw Error('Use hash-bound research_review for this research contract');if(g.manifest.mode.review!=='operator')throw Error('Mode prohibits Codex operator review');if(t.status!=='awaiting_review')throw Error('Task is not awaiting review');if(t.reviews>=t.spec.limits.reviews)throw Error('Review limit reached');if(!['accept','revise'].includes(input.decision))throw Error('Invalid review decision');text(input.feedback,'feedback',12000);t.reviews++;t.feedback.push({decision:input.decision,text:input.feedback,at:this.now()});t.reviewed=true;
   if(g.integrationPending?.taskId===t.id)throw Error('Pending integration must finish before revision');
   const exhausted=t.reviews>=t.spec.limits.reviews||t.attempts>=t.spec.limits.attempts||(this.store.spent(t.id).model??0)>=t.spec.limits.modelCalls;
   t.status=input.decision==='accept'?(t.spec.kind==='coding'?'ready_to_integrate':'accepted'):exhausted?'blocked':t.native?.layout==='candidate_v1'?'codex_ready':'queued';if(input.decision==='revise'){if(t.native?.layout==='candidate_v1')t.native.status='revision_requested';t.checkpoint={...t.checkpoint,phase:'attempt'};if(exhausted)t.reason='Revision cannot proceed: original review, attempt or request budget exhausted';}
@@ -484,6 +499,6 @@ export class Coordinator {
   this.emit('work.control',g.id,input.taskId??null,{action:input.action});return input.goalId?this.getGoal(g.id):this.getTask(input.taskId);
  });}
  markUncertain(taskId,reason,owner){return this.store.tx(()=>{const t=this.owned(taskId,owner);t.status='uncertain';t.reason=reason;this.store.put('task',t);this.emit('task.uncertain',t.goalId,t.id,{reason});return this.getTask(t.id);});}
- reserveReviewer(input,key){return this.store.command(key,{op:'reviewer.reserve',...input},()=>{const t=this.store.get('task',input.taskId),g=this.store.get('goal',t.goalId);this.liveGoal(g);if(g.manifest.mode.review!=='operator')throw Error('Mode prohibits reviewer');if(this.beta&&t.spec.kind==='coding'&&!['awaiting_review','ready_to_integrate'].includes(t.status))throw Error('Wait for the protected checks before reserving a reviewer');const runs=this.store.all('reviewer').filter(r=>r.goalId===g.id);if(runs.some(r=>r.status==='reserved'))throw Error('A reviewer is already active');if(runs.length>=g.manifest.limits.reviewAgentRuns)throw Error('Reviewer budget limit reached');const run={id:randomUUID(),goalId:g.id,taskId:t.id,status:'reserved',at:this.now()};this.store.put('reviewer',run);this.emit('reviewer.reserved',g.id,t.id,{id:run.id});return run;});}
- finishReviewer(input,key){return this.store.command(key,{op:'reviewer.finish',...input},()=>{const r=this.store.get('reviewer',input.reservationId);if(r.status!=='reserved')throw Error('Reviewer is already finalized');r.status=input.error?'failed':'completed';r.result=input.result??null;r.error=input.error??null;this.store.put('reviewer',r);this.emit('reviewer.finished',r.goalId,r.taskId,{id:r.id,status:r.status});return r;});}
+ reserveReviewer(input,key){return this.store.command(key,{op:'reviewer.reserve',...input},()=>{const t=this.store.get('task',input.taskId),g=this.store.get('goal',t.goalId);this.liveGoal(g);if(g.manifest.reviewPolicy)throw Error('Use bound review_reserve for this policy');if(g.manifest.mode.review!=='operator')throw Error('Mode prohibits reviewer');if(this.beta&&t.spec.kind==='coding'&&!['awaiting_review','ready_to_integrate'].includes(t.status))throw Error('Wait for the protected checks before reserving a reviewer');const runs=this.store.all('reviewer').filter(r=>r.goalId===g.id);if(runs.some(r=>r.status==='reserved'))throw Error('A reviewer is already active');if(runs.length>=g.manifest.limits.reviewAgentRuns)throw Error('Reviewer budget limit reached');const run={id:randomUUID(),goalId:g.id,taskId:t.id,status:'reserved',at:this.now()};this.store.put('reviewer',run);this.emit('reviewer.reserved',g.id,t.id,{id:run.id});return run;});}
+ finishReviewer(input,key){return this.store.command(key,{op:'reviewer.finish',...input},()=>{const r=this.store.get('reviewer',input.reservationId);if(this.store.get('goal',r.goalId).manifest.reviewPolicy)throw Error('Use bound review_submit for this policy');if(r.status!=='reserved')throw Error('Reviewer is already finalized');r.status=input.error?'failed':'completed';r.result=input.result??null;r.error=input.error??null;this.store.put('reviewer',r);this.emit('reviewer.finished',r.goalId,r.taskId,{id:r.id,status:r.status});return r;});}
 }

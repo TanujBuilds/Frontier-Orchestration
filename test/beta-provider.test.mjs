@@ -1,3 +1,4 @@
+// Fresh beta preparations use trusted host context; separate legacy hash fixtures omit it.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -58,7 +59,7 @@ const profile={baseUrl:'https://provider.example/v1',model:'custom-model',displa
 function state(t,options={}) {
  const root=mkdtempSync(path.join(os.tmpdir(),'mosaic-beta-provider-'));
  const opened=[];
- const open=options=>{const c=new Coordinator({root,...options});opened.push(c);return c;};
+ const open=options=>{const c=new Coordinator({root,...(options.beta ? {selectedHost:'codex'} : {}),...options});opened.push(c);return c;};
  t.after(()=>{for(const c of opened)c.close();rmSync(root,{recursive:true,force:true});});
  return {c:open(options),open};
 }

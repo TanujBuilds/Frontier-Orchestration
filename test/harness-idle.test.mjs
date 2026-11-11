@@ -1,3 +1,4 @@
+// Historical no-policy workflows explicitly select the legacy preparation tool.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
@@ -65,7 +66,7 @@ test('idle service leaves expired reports and history alone, then wakes on work 
  assert.deepEqual(runs(),before,'expired reports must not be rewritten');
  assert.equal(await scans(),beforeScans,'unchanged idle service must not rescan task history');
 
- const g=await call('goal_prepare',{idempotencyKey:'prepare',manifest:{submissionId:'idle-wakeup',objective:'Fixture task',acceptance:['Return a saved response'],environment:'fixture'}});
+ const g=await call('legacy_goal_prepare',{idempotencyKey:'prepare',manifest:{submissionId:'idle-wakeup',objective:'Fixture task',acceptance:['Return a saved response'],environment:'fixture'}});
  await call('goal_activate',{idempotencyKey:'activate',goalId:g.id,hash:g.hash});
  await delay(400); // Exercise submission from a settled idle worker.
  const at=performance.now();

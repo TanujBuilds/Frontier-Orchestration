@@ -14,20 +14,31 @@ function nativeModelConfig(config){
 export class Agents {
  constructor({c,config={}}){this.c=c;this.config=config;}
  register(input,key){return this.c.store.command(key,{op:'agent.register',...input},()=>{
-  const registration=normalizeAgentRegistration(input),t=this.c.getTask(registration.taskId),g=this.c.store.get('goal',t.goalId);this.c.liveTask(t,{allowStopped:true});
+  const caller=normalizeAgentRegistration(input);
+  const previous=caller.hostAgentId?this.c.store.all('agent').find(a=>a.hostAgentId===caller.hostAgentId):null;
+  // Correlation replays preserve a persisted historical identity. Inferring a
+  // host after upgrade must not change the old no-host registration's digest.
+  const historicalReplay=previous&&!Object.hasOwn(previous,'hostId')&&input.hostId===undefined;
+  const selectedHost=this.c.selectedHost??this.config.hostId;
+  if(selectedHost&&input.hostId!==undefined&&input.hostId!==selectedHost)throw Error('Reported host identity differs from selected host');
+  const registration=normalizeAgentRegistration(!historicalReplay&&selectedHost&&input.hostId===undefined?{...input,hostId:selectedHost}:input),t=this.c.getTask(registration.taskId),g=this.c.store.get('goal',t.goalId);this.c.liveTask(t,{allowStopped:true});
   if(!g.manifest.mode.actors.includes(registration.actor))throw Error('Mode prohibits registered actor');
+  // An identical historical correlation is a metadata replay, not a request to
+  // apply newly configured model defaults or to rewrite its persisted identity.
+  if(historicalReplay&&previous.registrationHash===digest(caller))return previous;
   let modelSource=registration.model.requested?'explicit':'inherited';
-  if(registration.actor==='codex'){
+  if(registration.actor==='codex'&&(!registration.hostId||registration.hostId==='codex')){
    const {models,roles}=nativeModelConfig(this.config);
    const fallback=roles[registration.role];
    if(!registration.model.requested&&fallback){registration.model.requested=fallback;modelSource='role_default';}
    for(const model of [registration.model.requested,registration.model.resolved].filter(Boolean))if(!models.includes(model))throw Error(`Native model unavailable or unsupported: ${model}`);
   }
-  if(registration.actor==='codex'&&registration.model.requested&&registration.model.resolved&&registration.model.requested!==registration.model.resolved)throw Error('Native requested/resolved model mismatch; host aliases are unsupported');
-  const previous=registration.hostAgentId?this.c.store.all('agent').find(a=>a.hostAgentId===registration.hostAgentId):null;
+  if(registration.actor==='codex'&&(!registration.hostId||registration.hostId==='codex')&&registration.model.requested&&registration.model.resolved&&registration.model.requested!==registration.model.resolved)throw Error('Native requested/resolved model mismatch; host aliases are unsupported');
   if(previous){if(previous.registrationHash!==digest(registration))throw Error('Host agent correlation already belongs to another registration');return previous;}
-  const agent={...registration,id:randomUUID(),goalId:t.goalId,registrationHash:digest(registration),modelSource,registeredAt:this.c.now(),lastReport:null,accounting:{tokens:null,source:'unavailable'}};
-  this.c.store.put('agent',agent);this.c.emit('agent.registered',t.goalId,t.id,{agentId:agent.id,actor:agent.actor,role:agent.role,model:agent.model,modelSource});return agent;
+  if(registration.hostId&&!registration.model.requested&&!registration.model.resolved)modelSource='unknown';
+  const identity=registration.hostId?{modelProvenance:registration.model.resolved?'reported':'unknown'}:{};
+  const agent={...registration,...identity,id:randomUUID(),goalId:t.goalId,registrationHash:digest(registration),modelSource,registeredAt:this.c.now(),lastReport:null,accounting:{tokens:null,source:'unavailable'}};
+  this.c.store.put('agent',agent);this.c.emit('agent.registered',t.goalId,t.id,{agentId:agent.id,actor:agent.actor,role:agent.role,model:agent.model,modelSource,...(agent.hostId?{hostId:agent.hostId,modelProvenance:agent.modelProvenance}:{})});return agent;
  });}
  report(input,key){return this.c.store.command(key,{op:'agent.report',...input},()=>{
   const report=normalizeProgressReport(input),agent=this.c.store.get('agent',report.agentId);

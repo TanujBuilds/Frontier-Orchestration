@@ -80,7 +80,7 @@ async function fixture(t, beta, endpoints) {
   const connect = () => {
     // Rebuild the registry/client cache as well as the coordinator on restart.
     const providerRegistry = ProviderRegistry({profiles, credentialResolver: ref => credentials[ref.replace('fixture-key-', '')]});
-    c = new Coordinator({root: state, beta, now: () => now, providerRegistry});
+    c = new Coordinator({root: state, beta, selectedHost:'codex', now: () => now, providerRegistry});
     owner = `composition-owner-${++generation}`;
     c.acquireWorker(owner);
     worker = new Worker({c, owner, config: {environment: 'fixture', beta}});
@@ -118,7 +118,7 @@ async function fixture(t, beta, endpoints) {
   const goal = async id => {
     const workers = c.providerRegistry.snapshot(profiles.map(({id, revision}) => ({id, revision})));
     const manifest = {submissionId: `goal-${id}`, objective: `Fix parser with fixture worker ${id}`, acceptance: ['Protected parser check passes'],
-      environment: 'fixture', mode: 'collaborative', project, limits: {hours: 1, maxTasks: 2, reviewAgentRuns: 0},
+      environment: 'fixture', mode: 'collaborative', project, limits: {hours: 1, maxTasks: 2, reviewAgentRuns: 2},
       providerPolicy: {version: 1, workers, defaultWorkerId: `worker-${id}`, plannerWorkerId: `worker-${id}`,
         maxConcurrentTasks: 1, capacityGroups: workers.map(p => ({id: p.capacityGroup, limit: 1}))}};
     const draft = await mutate('assignment_prepare', {manifest}, `prepare-${id}`);
@@ -205,10 +205,13 @@ for (const beta of [false, true]) test(`provider-pinned coding composes intake, 
     assert.equal(await readFile(path.join(candidate.result.worktree, sourcePath), 'utf8'), repaired(endpoint.id));
     assert.equal((await f.read('outcomes_report', {goalId: goal.id})).counts.usefulAccepted, 0);
     const reviewInput = {taskId: id, decision: 'accept', feedback: 'Scripted fixture host reviewed the parser diff and protected check evidence'};
-    const reviewed = await f.mutate('task_review', reviewInput, `review-${endpoint.id}`);
+    const item=(await f.read('review_inbox',{goalId:goal.id})).items.find(item=>item.taskId===id);
+    const ticket=await f.mutate('review_reserve',item.binding,`reserve-${endpoint.id}`);
+    const boundReview={...item.binding,ticketId:ticket.ticketId,verdict:{decision:reviewInput.decision,feedback:reviewInput.feedback,findings:[]}};
+    const reviewed = await f.mutate('review_submit', boundReview, `review-${endpoint.id}`);
     assert.equal(reviewed.status, 'ready_to_integrate');
     assert.equal(reviewed.reviews, 1);
-    assert.deepEqual(await f.mutate('task_review', reviewInput, `review-${endpoint.id}`), reviewed);
+    assert.deepEqual(await f.mutate('review_submit', boundReview, `review-${endpoint.id}`), reviewed);
     assert.equal((await f.read('outcomes_report', {goalId: goal.id})).counts.usefulAccepted, 0, 'Host review alone is not integrated acceptance');
     const integrateInput = {taskId: id, feedback: 'Integrate the fixture-host-reviewed candidate'};
     const result = await f.operation('task_integrate', integrateInput, `integrate-${endpoint.id}`);
@@ -229,7 +232,7 @@ for (const beta of [false, true]) test(`provider-pinned coding composes intake, 
     assert.equal(report.counts.acceptedCoding, 1);
     assert.equal(report.counts.usefulAccepted, 1);
     assert.equal(report.tasks.filter(row => row.id === id).length, 1);
-    accepted.push({result, endpoint, goal, integrateInput, reviewInput});
+    accepted.push({result, endpoint, goal, integrateInput, boundReview});
   }
 
   assert.deepEqual(a.errors.concat(b.errors), []);
@@ -246,8 +249,8 @@ for (const beta of [false, true]) test(`provider-pinned coding composes intake, 
   const requestsBeforeReplay = f.current().store.db.prepare('SELECT * FROM requests ORDER BY id').all();
   assert.equal(requestsBeforeReplay.length, 3, 'Only the two repair attempts and the second worker request are spent');
   await f.restart();
-  for (const {result, endpoint, goal, integrateInput, reviewInput} of accepted) {
-    await f.mutate('task_review', reviewInput, `review-${endpoint.id}`);
+  for (const {result, endpoint, goal, integrateInput, boundReview} of accepted) {
+    await f.mutate('review_submit', boundReview, `review-${endpoint.id}`);
     assert.deepEqual(await f.operation('task_integrate', integrateInput, `integrate-${endpoint.id}`), result);
     assert.equal((await f.read('outcomes_report', {goalId: goal.id})).counts.usefulAccepted, 1);
   }
