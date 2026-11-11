@@ -2,6 +2,7 @@ import {isOvernightV2,overnightCompletionReady} from './overnight.mjs';
 import {assertOvernightPreflight} from './overnight-preflight.mjs';
 import {randomUUID} from 'node:crypto';
 import {normalizeTask,digest,text} from './contracts.mjs';
+import {taskRoutingManifest} from './routing/runtime.mjs';
 
 function quiescent(c,goalId){return !c.store.db.prepare("SELECT 1 FROM requests r JOIN records t ON t.kind='task' AND t.id=r.task_id WHERE r.kind='apiReview' AND r.status='reserved' AND json_extract(t.data,'$.goalId')=?").get(goalId)&&!c.store.get('goal',goalId).integrationOwner&&!c.store.get('goal',goalId).integrationPending&&!c.store.all('task').some(t=>t.goalId===goalId&&(t.owner||t.native?.writerActive||t.executionActor==='codex'&&['paused','stopped'].includes(t.status)||['codex_active','legacy_reviewing'].includes(t.status)))&&!['running','uncertain'].includes(c.store.maybe('planning',goalId)?.status);}
 function assertWorkerUnchanged(g,manifest){
@@ -37,11 +38,11 @@ export class Goals {
   const t=this.c.getTask(input.taskId),g=this.c.store.get('goal',t.goalId);this.c.liveGoal(g);
   if(t.owner||t.native?.writerActive||g.integrationPending?.taskId===t.id||['codex_active','legacy_reviewing','accepted'].includes(t.status)||(t.status==='partial'&&!(t.native?.layout==='candidate_v1'&&t.goalVersion<g.version)))throw Error('Task must be quiescent and unfinished');
   if(isOvernightV2(g.manifest))throw Error('Overnight v2 stage graph changes require a separately validated plan; preserve original IDs and spending');
-  const spec=normalizeTask(input.spec??t.spec,g.manifest,this.c.registry);if(spec.submissionId!==t.spec.submissionId||spec.kind!==t.spec.kind)throw Error('Task identity/kind cannot change');
+  const spec=normalizeTask(input.spec??t.spec,taskRoutingManifest(this.c,g,t),this.c.registry);if(spec.submissionId!==t.spec.submissionId||spec.kind!==t.spec.kind)throw Error('Task identity/kind cannot change');
   if(t.workerProfile&&digest(t.workerProfile)!==digest(g.manifest.workerProfile??null))throw Error('Started assignments retain their approved worker profile');
-  const providerBinding=spec.actor==='deepseek'?this.c.providerBinding(g,g.manifest.providerPolicy?.defaultWorkerId):undefined;
+  const providerBinding=spec.actor==='deepseek'?(t.startedAt&&t.providerBinding?t.providerBinding:spec.routing?undefined:this.c.providerBinding(g,g.manifest.providerPolicy?.defaultWorkerId)):undefined;
   if(t.startedAt&&digest(t.providerBinding??null)!==digest(providerBinding??null))throw Error('Started assignments retain their approved provider binding');
-  if(providerBinding)this.c.verifyWorkerBinding(g,{goalId:g.id,goalVersion:g.version,spec,providerBinding});
+  if(providerBinding)this.c.verifyWorkerBinding(g,{goalId:g.id,goalVersion:g.version,spec,providerBinding,...(t.route?{route:t.route,routeHash:t.routeHash,hash:digest(spec),history:[...(t.history??[]),{spec:t.spec,hash:t.hash}]}:{})});
   if(t.startedAt&&spec.actor!==t.spec.actor)throw Error('Started actor changes require explicit takeover');
   let nextNativePermissions=null;if(t.native?.layout==='candidate_v1'){const permissions={readPaths:spec.permissions.readPaths,writePaths:spec.permissions.writePaths,checks:g.manifest.project.checks.filter(x=>spec.permissions.checks.includes(x.id))};if(digest(permissions)!==digest(t.native.manifest.permissions)){if(t.goalVersion>=g.version)throw Error('Changed native scope/checks require an explicitly approved goal version');nextNativePermissions=permissions;}}
   for(const [name,limit] of Object.entries(spec.limits))if(limit>t.spec.limits[name])throw Error('Rebind cannot refresh assignment limits');
@@ -59,7 +60,8 @@ export class Goals {
    t.result=null;t.reviewed=false;t.feedback.push({kind:'approved_generation',text:'Explicit approved rebind requires a new native candidate generation and fresh checks/review.',goalVersion:g.version,at:this.c.now()});
   }
   t.history??=[];t.history.push({goalVersion:t.goalVersion,spec:t.spec,hash:t.hash,...(t.providerBinding?{providerBinding:t.providerBinding}:{}),at:this.c.now()});t.spec=spec;t.hash=digest(spec);t.goalVersion=g.version;t.deadline=t.deadline?Math.min(t.deadline,g.deadline):null;
-  if(providerBinding)t.providerBinding=providerBinding;else delete t.providerBinding;
+  if(providerBinding)t.providerBinding=providerBinding;else{delete t.providerBinding;delete t.route;delete t.routeHash;}
+  delete t.routingWait;
   if(!['awaiting_review','ready_to_integrate','awaiting_supervisor','awaiting_user','awaiting_legacy_review'].includes(t.status))t.status=t.executionActor==='codex'||spec.actor==='codex'?'codex_ready':'queued';t.stopRequested=t.pauseRequested=false;
   if(nextNativePermissions){const exhausted=t.reviews>=t.spec.limits.reviews||t.attempts>=t.spec.limits.attempts||(this.c.store.spent(t.id).model??0)>=t.spec.limits.modelCalls;t.status=exhausted?'blocked':'codex_ready';if(exhausted)t.reason='Approved generation retains exhausted original task limits';}
   this.c.store.put('task',t);this.c.emit('task.rebound',g.id,t.id,{goalVersion:t.goalVersion,hash:t.hash});return this.c.getTask(t.id);

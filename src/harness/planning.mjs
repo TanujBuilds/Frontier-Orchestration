@@ -6,7 +6,7 @@ function validatePlan(raw,g,registry){
  keys(raw,['tasks'],'plan');if(!Array.isArray(raw.tasks)||!raw.tasks.length||raw.tasks.length>g.manifest.limits.maxTasks)throw Error('Plan exceeds assignment limit');
  const seen=new Set(),tasks=[];
  for(const item of raw.tasks){
-  keys(item,['key','kind','objective','context','acceptance','dependsOn','priority','permissions','scope','limits',...(isOvernightV2(g.manifest)?['role']:[])],'planned assignment');identifier(item.key,'stage key');
+  keys(item,['key','kind','objective','context','acceptance','dependsOn','priority','permissions','scope','limits',...(g.manifest.routingPolicy?['routing']:[]),...(isOvernightV2(g.manifest)?['role']:[])],'planned assignment');identifier(item.key,'stage key');
   if(isOvernightV2(g.manifest)&&!Array.isArray(item.dependsOn))throw Error('Overnight v2 requires explicit dependencies');
   if(seen.has(item.key))throw Error('Duplicate plan stage');
   if(item.kind==='learning')throw Error('Maintenance requires observed outcomes after requested work');

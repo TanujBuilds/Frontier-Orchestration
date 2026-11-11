@@ -303,7 +303,7 @@ async function resolveAssignment(raw, c, {legacy=false}={}) {
 }
 
 export async function prepareAssignment(c, raw = {}, key, {legacy=false}={}) {
-  if(legacy&&(c.beta||raw.providerPolicy||raw.reviewPolicy))throw Error('Legacy assignment cannot select portable policy');
+  if(legacy&&(c.beta||raw.providerPolicy||raw.reviewPolicy||raw.routingPolicy))throw Error('Legacy assignment cannot select portable policy');
   const command = { op: 'assignment.prepare', manifest: raw };
   const unresolved = Symbol();
   try {

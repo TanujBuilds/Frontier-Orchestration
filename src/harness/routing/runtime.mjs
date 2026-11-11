@@ -1,0 +1,90 @@
+import {digest,normalizeTask} from '../contracts.mjs';
+import {selectRoute} from './router.mjs';
+
+export const isRoutedTask=(goal,task)=>Boolean(goal.manifest.routingPolicy&&task.spec.routing);
+export function assertRoutingApproval(goal){
+ if((Object.hasOwn(goal.manifest,'routingPolicy')||Object.hasOwn(goal.manifest,'routingPolicyHash'))&&digest(goal.manifest)!==goal.hash)throw Error('Approved routing goal hash changed');
+}
+export function routeOrigin(c,goal,task){
+ const origin=task.route.goalVersion===goal.version?goal:c.store.maybe('goal_history',`${goal.id}-${task.route.goalVersion}`);
+ if(!origin||origin.hash!==task.route.goalHash||digest(origin.manifest)!==task.route.goalHash)throw Error('Original route approval is unavailable');
+ return origin;
+}
+/** Current permissions/mode stay authoritative; a started task keeps its route policy. */
+export function taskRoutingManifest(c,goal,task){
+ if(!task.startedAt||!task.route)return goal.manifest;
+ const original=routeOrigin(c,goal,task).manifest;
+ return {...goal.manifest,routingPolicy:original.routingPolicy,routingPolicyHash:original.routingPolicyHash};
+}
+export function remainingCalls(c,task){return Math.max(0,task.spec.limits.modelCalls-(c.store.spent(task.id).model??0));}
+function busy(c,goal,binding){
+ const selected=goal.manifest.providerPolicy.workers.find(p=>p.id===binding.providerId);
+ return c.store.db.prepare("SELECT data FROM requests WHERE status='reserved' OR (status='failed' AND json_extract(data,'$.requestOutcome')='unknown')").all().some(row=>{
+  const data=JSON.parse(row.data),other=data.providerBinding??data.reviewerBinding;
+  if(!other)return false;
+  if(other.profileHash===binding.profileHash)return true;
+  const profiles=c.store.all('goal').flatMap(g=>[...(g.manifest.providerPolicy?.workers??[]),...(g.manifest.reviewPolicy?.reviewer?[g.manifest.reviewPolicy.reviewer]:[])]);
+  const profile=profiles.find(p=>p.id===other.providerId&&p.revision===other.revision&&digest(p)===other.profileHash);
+  return profile&&(profile.capacityGroup===selected.capacityGroup||profile.baseUrl===selected.baseUrl);
+ });
+}
+export function routeDecision(c,goal,task,observation){
+ assertRoutingApproval(goal);
+ const availability={providers:[],budget:{remainingModelCalls:remainingCalls(c,task)}};
+ const route=selectRoute({goal,task,availability});
+ if(!route.binding)return route;
+ if(busy(c,goal,route.binding))availability.providers=[{...route.binding,status:'busy',observedAt:new Date(c.now()).toISOString(),provenance:'existing reserved or uncertain request on selected profile/group'}];
+ else if(observation)availability.providers=[observation];
+ return selectRoute({goal,task,availability});
+}
+/** Shared synchronous public/composition preview. Never probes, reserves or writes. */
+export function previewRoute(c,{goalId,task}){
+ const goal=c.store.get('goal',goalId);assertRoutingApproval(goal);
+ const saved=c.store.all('task').find(t=>t.goalId===goalId&&t.spec.submissionId===task.submissionId);
+ const spec=normalizeTask(task,saved?taskRoutingManifest(c,goal,saved):goal.manifest,c.registry,{checkRoutingEligibility:false});
+ const candidate={id:saved?.id??'preview',spec};
+ let selectionGoal=goal;
+ if(saved?.route&&saved.hash===digest(spec)){assertRoutePin(c,goal,saved);selectionGoal=routeOrigin(c,goal,saved);}
+ const decision=routeDecision(c,selectionGoal,candidate);
+ return {...decision,expectedGoalHash:goal.hash,expectedGoalVersion:goal.version};
+}
+export function assertRoutePin(c,goal,task){
+ if(digest(goal.manifest)!==goal.hash)throw Error('Approved routing goal hash changed');
+ const route=task.route;
+ if(!route||route.version!==1||task.routeHash!==digest(route)||route.decision.status!=='selected'||digest(route.decision.binding)!==digest(task.providerBinding)||digest(task.spec)!==task.hash)throw Error('Task route pin changed');
+ const originalGoal=routeOrigin(c,goal,task);
+ const original=route.taskHash===task.hash?task:(task.history??[]).find(h=>h.hash===route.taskHash);
+ if(!original||digest(original.spec)!==route.taskHash||digest(original.spec.routing)!==digest(task.spec.routing)||original.spec.actor!==task.spec.actor||original.spec.kind!==task.spec.kind)throw Error('Original task routing authority changed');
+ const selected=selectRoute({goal:originalGoal,task:original,availability:{budget:{remainingModelCalls:1}}});
+ if(!selected.binding||digest(selected.binding)!==digest(task.providerBinding))throw Error('Pinned provider differs from original approved route');
+}
+function same(c,snapshot){
+ const task=c.store.get('task',snapshot.taskId),goal=c.store.get('goal',task.goalId);
+ return task.hash===snapshot.taskHash&&digest(task.spec)===snapshot.taskHash&&task.goalVersion===snapshot.goalVersion&&goal.version===snapshot.goalVersion&&goal.hash===snapshot.goalHash&&c.eligible(task)&&!task.providerBinding;
+}
+export function recordRoutingWait(c,task,goal,decision){
+ const retryAt=Math.min(goal.deadline,task.deadline??goal.deadline,c.now()+15000);
+ task.routingWait={retryAt,goalHash:goal.hash,goalVersion:goal.version,taskHash:task.hash,decision};
+ c.store.put('task',task);c.emit('task.routing_wait',goal.id,task.id,{reasonCode:decision.reasonCode,explanation:decision.explanation,binding:decision.binding,retryAt});
+}
+/** Selected-endpoint readiness is bounded, outside every Store transaction. */
+export async function claimAvailable(worker){
+ const c=worker.c,claimed=c.claimNext(worker.owner);if(claimed)return claimed;
+ if(c.store.all('planning').some(p=>['running','uncertain'].includes(p.status))||c.store.all('task').some(t=>['running','uncertain','taking_over'].includes(t.status)&&t.spec.actor==='deepseek'))return null;
+ const priorities=c.effectivePriorities(),task=c.store.all('task').filter(t=>['queued','suspended'].includes(t.status)&&t.spec.actor==='deepseek'&&t.executionActor!=='codex'&&c.eligible(t)).sort((a,b)=>priorities.get(b.id)-priorities.get(a.id)||a.sequence-b.sequence)[0];
+ if(!task||!isRoutedTask(c.store.get('goal',task.goalId),task)||task.providerBinding)return null;
+ const goal=c.store.get('goal',task.goalId),snapshot={taskId:task.id,taskHash:task.hash,goalHash:goal.hash,goalVersion:goal.version,lease:c.workerLease?.generation??null};
+ let route;
+ try{route=routeDecision(c,goal,task);c.verifyWorkerBinding(goal,route.binding);}
+ catch(error){return c.store.tx(()=>c.settleTask(task,'blocked',String(error.message).slice(0,500)));}
+ if(route.status==='ineligible')return c.store.tx(()=>c.settleTask(task,'blocked',route.explanation));
+ if(route.reasonCode==='provider_busy'){c.store.tx(()=>recordRoutingWait(c,task,goal,route));return {waiting:true};}
+ const until=Math.min(goal.deadline,task.deadline??goal.deadline,task.providerWait?.until??Infinity);
+ let available=false;
+ try{const provider=c.providerRegistry.createClient(route.binding);if(until>c.now())available=await provider.availability(AbortSignal.timeout(Math.max(1,Math.min(10000,until-c.now()))))===true;}
+ catch{/* Unavailable does not authorize inference or fallback. */}
+ if((c.workerLease?.generation??null)!==snapshot.lease)return null;
+ if(!same(c,snapshot))return null;
+ const observation={providerId:route.binding.providerId,revision:route.binding.revision,profileHash:route.binding.profileHash,status:available?'available':'offline',observedAt:new Date(c.now()).toISOString(),provenance:'bounded selected-provider availability probe'};
+ return c.claimNext(worker.owner,{...snapshot,observation})??{waiting:true};
+}
