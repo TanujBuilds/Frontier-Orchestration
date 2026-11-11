@@ -1,5 +1,6 @@
 import {digest,normalizeTask} from '../contracts.mjs';
 import {selectRoute} from './router.mjs';
+import {codingModelReplayEligible} from '../coding.mjs';
 
 export const isRoutedTask=(goal,task)=>Boolean(goal.manifest.routingPolicy&&task.spec.routing);
 export function assertRoutingApproval(goal){
@@ -34,7 +35,8 @@ export function pinnedResourceWait(c,goal,task){
  if(!task.route||!task.providerBinding)return null;
  const cp=task.checkpoint,key=task.spec.kind==='consult'?'consult-1':cp.phase==='model'?`code-${cp.attempt}-${cp.exchange}`:null;
  const saved=key&&c.store.request(task.id,key);
- if(saved?.kind==='model'&&saved.status==='completed'&&saved.routeHash===task.routeHash&&saved.providerBinding&&digest(saved.providerBinding)===digest(task.providerBinding))return null;
+ if(saved?.kind==='model'&&saved.status==='completed'&&saved.routeHash===task.routeHash&&saved.providerBinding&&digest(saved.providerBinding)===digest(task.providerBinding)&&
+    (task.spec.kind==='consult'||codingModelReplayEligible(c,task)))return null;
  if(!busy(c,goal,task.providerBinding))return null;
  return {status:'waiting',binding:structuredClone(task.providerBinding),reasonCode:'provider_busy',
   explanation:'Pinned worker '+task.providerBinding.providerId+' has an existing reserved or uncertain request on its selected profile/group; wait without fallback. Original selection: '+task.route.decision.explanation,
@@ -76,6 +78,7 @@ function same(c,snapshot){
 }
 export function recordRoutingWait(c,task,goal,decision){
  const retryAt=Math.min(goal.deadline,task.deadline??goal.deadline,task.providerWait?.until??Infinity,c.now()+15000);
+ if(task.providerWait)delete task.providerWait.readyOwner;
  task.routingWait={retryAt,goalHash:goal.hash,goalVersion:goal.version,taskHash:task.hash,decision};
  c.store.put('task',task);c.emit('task.routing_wait',goal.id,task.id,{reasonCode:decision.reasonCode,explanation:decision.explanation,binding:decision.binding,retryAt});
 }
@@ -88,7 +91,6 @@ export function holdPinnedResource(worker,task){
   if(!decision)return null;
   if(c.store.db.prepare("SELECT 1 FROM requests WHERE task_id=? AND kind='model' AND (status='reserved' OR (status='failed' AND json_extract(data,'$.requestOutcome')='unknown'))").get(current.id))return {waiting:true,taskId:current.id};
   current.status='suspended';current.owner=null;
-  if(current.providerWait)delete current.providerWait.readyOwner;
   recordRoutingWait(c,current,goal,decision);return c.getTask(current.id);
  });
 }
