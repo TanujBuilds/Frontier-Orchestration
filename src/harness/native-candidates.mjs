@@ -41,10 +41,12 @@ export class NativeCandidates {
   const lifecycle=await new Journal(path.join(this.c.store.root,'native-lifecycle'),taskId).load(),unlockLifecycle=await lifecycle.lock();
   try{
   t=this.c.liveTask(t,{allowStopped:!!extra.takeoverReason});g=this.c.store.get('goal',t.goalId);
+  this.c.verifyCurrentWorker?.();
   if(digest({status:t.status,goalVersion:t.goalVersion,hash:t.hash,native:t.native??null})!==fence)throw Error('Native start state changed while resolving its execution base');
   if(registration&&(registration.taskId!==t.id||registration.actor!=='codex'))throw Error('Native registration task/actor mismatch');
   const agentId=registration?this.agents.register(registration,`native-agent-${t.id}`).id:t.native?.agentId??this.agents.register({version:1,taskId:t.id,role:'implementer',actor:'codex'},`native-agent-${t.id}`).id;
   this.c.store.tx(()=>{
+   this.c.verifyCurrentWorker?.();
    const current=this.c.liveTask(t,{allowStopped:!!extra.takeoverReason});
    const scopeWait=writeScopeWait({task:current,goal:g,snapshot:capacitySnapshot(this.c)});if(scopeWait)throw Error(scopeWait.explanation);
    if(current.owner||digest({status:current.status,goalVersion:current.goalVersion,hash:current.hash,native:current.native??null})!==fence)throw Error('Native start state changed before writer reservation');
@@ -71,6 +73,7 @@ export class NativeCandidates {
    if(t.native.transfer)await this.transferGeneration(t,target);
    this.i.signal?.throwIfAborted();
    this.c.store.tx(()=>{
+    this.c.verifyCurrentWorker?.();
     const current=this.c.liveTask(t);if(current.status!=='codex_active')throw Error('Native ownership changed');
     current.native={...current.native,worktree:target.workspace.root,branch:target.workspace.branch,status:'active'};
     this.c.store.put('task',current);this.c.learning.pin(t.id);this.c.emit('task.native_started',g.id,t.id,{layout:'candidate_v1',baseCommit:base,worktree:target.workspace.root});

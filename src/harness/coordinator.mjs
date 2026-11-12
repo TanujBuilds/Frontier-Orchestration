@@ -1,4 +1,4 @@
-import {normalizeExecutionPolicy,assertExecutionAvailable,assertExecutionConfiguration} from './execution.mjs';
+import {normalizeExecutionPolicy,assertExecutionAvailable,assertExecutionConfiguration,assertExecutionRuntime} from './execution.mjs';
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -71,13 +71,16 @@ function savedFailedGate(c,t,g){
  return verified.candidateId===gate.candidateId&&verified.failureId===gate.failureId&&verified.signature===gate.signature;
 }
 export class Coordinator {
- constructor({root,now=Date.now,registry=new Registry(),beta=false,workerProfile,verifyCurrentWorker,providerRegistry,selectedHost,hostRegistry,serviceMaxConcurrentTasks,executionPolicy,codexPath}={}){
+ constructor({root,now=Date.now,registry=new Registry(),beta=false,workerProfile,verifyCurrentWorker,providerRegistry,selectedHost,hostRegistry,serviceMaxConcurrentTasks,executionPolicy,codexPath,defaultCodexPath}={}){
   if(providerRegistry&&!['get','snapshot','createClient'].every(method=>typeof providerRegistry[method]==='function'))throw Error('A normalized provider registry is required');
   this.providerRegistry=providerRegistry??null;
   this.selectedHost=typeof selectedHost==='string'?selectedHost:selectedHost?.id??null;if(this.selectedHost&&!HOST_IDS.includes(this.selectedHost))throw Error('Unsupported selected host');this.hostRegistry=hostRegistry??null;
-  this.beta=beta;this.verifyCurrentWorker=verifyCurrentWorker;this.workerProfile=workerProfile?normalizeWorkerProfile(workerProfile):null;
+  this.beta=beta;this.verifyCurrentWorker=()=>{verifyCurrentWorker?.();assertExecutionRuntime(this);};this.workerProfile=workerProfile?normalizeWorkerProfile(workerProfile):null;
   this.executionPolicy=normalizeExecutionPolicy(executionPolicy);this.executionConfig={codexPath};
   this.store=new Store(root);this.now=now;this.registry=registry;
+  // Existing runner-only callers have no trusted selector to reconstruct.
+  // Pin a new configured default without rebinding those historical records.
+  if(codexPath===undefined&&(defaultCodexPath!==undefined||this.executionPolicy?.backend==='codex-sandbox')&&this.store.maybe('execution_configuration','coordinator')?.identity?.runtime!==null)this.executionConfig.codexPath=defaultCodexPath??'codex';
   try{this.serviceMaxConcurrentTasks=this.store.tx(()=>{assertExecutionConfiguration(this);return configureServiceCapacity(this,serviceMaxConcurrentTasks);});}catch(error){this.store.close();throw error;}
   for(const record of this.store.all('mode')){const m=record.definition??record;if(!this.registry.modes.has(`${m.id}@${m.version}`))this.registry.registerMode(m);}
   for(const record of this.store.all('workflow')){const w=record.definition??record;if(!this.registry.workflows.has(`${w.id}@${w.version}`))this.registry.registerWorkflow(w);}

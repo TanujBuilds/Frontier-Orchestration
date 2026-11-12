@@ -379,7 +379,7 @@ export class Integration {
  async repair(input,key){return this.effect(key,{op:'integration.repair',...input},()=>repairIntegration(this,input,key));}
  async startNative(input,key){return this.effect(key,{op:'native.start',...input},()=>input.layout==='candidate_v1'?this.nativeCandidates.start(input.taskId,{},input.registration):this.beginNative(input.taskId));}
  async beginNative(taskId,extra={}){
-  const t=this.c.getTask(taskId),g=this.c.store.get('goal',t.goalId);this.c.liveGoal(g);
+  const t=this.c.getTask(taskId),g=this.c.store.get('goal',t.goalId);this.c.liveGoal(g);this.c.verifyCurrentWorker?.();
   this.c.liveTask(t,{allowStopped:!!extra.takeoverReason});
   if(!g.manifest.mode.actors.includes('codex')||t.spec.kind!=='coding')throw Error('Mode prohibits native Codex execution');
   if(g.manifest.reviewPolicy)throw Error('Versioned review requires an isolated candidate_v1 native layout');
@@ -391,7 +391,7 @@ export class Integration {
   const target=await this.lockedGoal(g.id),unlock=target.release;try{
    if(target.shared)throw Error('Historical native layout requires private integration; preserve shared target for separately approved integration');
    const snapshot=await target.workspace.snapshot();
-   this.c.store.tx(()=>{const current=this.c.liveTask(t,{allowStopped:!!extra.takeoverReason});const scopeWait=writeScopeWait({task:current,goal:g,snapshot:capacitySnapshot(this.c)});if(scopeWait)throw Error(scopeWait.explanation);current.status='codex_active';current.executionActor='codex';current.stopRequested=false;current.startedAt??=this.c.now();current.deadline??=Math.min(g.deadline,current.startedAt+t.spec.limits.seconds*1000);current.native={worktree:target.workspace.root,startSnapshot:snapshot,...extra};const goal=this.c.store.get('goal',g.id);if(goal.integrationOwner&&goal.integrationOwner!==t.id)throw Error('Another native task owns integration workspace');goal.integrationOwner=t.id;this.c.store.put('goal',goal);this.c.store.put('task',current);this.c.learning.pin(t.id);this.c.emit('task.native_started',g.id,t.id,{worktree:target.workspace.root});});
+   this.c.store.tx(()=>{this.c.verifyCurrentWorker?.();const current=this.c.liveTask(t,{allowStopped:!!extra.takeoverReason});const scopeWait=writeScopeWait({task:current,goal:g,snapshot:capacitySnapshot(this.c)});if(scopeWait)throw Error(scopeWait.explanation);current.status='codex_active';current.executionActor='codex';current.stopRequested=false;current.startedAt??=this.c.now();current.deadline??=Math.min(g.deadline,current.startedAt+t.spec.limits.seconds*1000);current.native={worktree:target.workspace.root,startSnapshot:snapshot,...extra};const goal=this.c.store.get('goal',g.id);if(goal.integrationOwner&&goal.integrationOwner!==t.id)throw Error('Another native task owns integration workspace');goal.integrationOwner=t.id;this.c.store.put('goal',goal);this.c.store.put('task',current);this.c.learning.pin(t.id);this.c.emit('task.native_started',g.id,t.id,{worktree:target.workspace.root});});
   }finally{await unlock();}return this.c.getTask(t.id);
  }
  async takeover(input,key){return this.effect(key,{op:'native.takeover',...input},async()=>{

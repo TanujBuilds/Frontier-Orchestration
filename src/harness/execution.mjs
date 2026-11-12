@@ -38,11 +38,18 @@ function configuredRuntime(codexPath){
  for(const file of candidates){try{const executable=realpathSync(file);accessSync(executable,constants.X_OK);if(statSync(executable).isFile())return {executable,sha256:createHash('sha256').update(readFileSync(executable)).digest('hex')};}catch{}}
  return {unavailable:true,selector:codexPath};
 }
+export function assertExecutionRuntime(c){
+ const previous=c.store.get('execution_configuration','coordinator');
+ if(previous.schema!==1||!previous.identity||!Object.hasOwn(previous.identity,'runtime'))throw Error('Invalid saved execution runtime identity');
+ // Live fences validate the constructor's pin; they must never refresh it.
+ // An absent historical runtime remains null rather than inferring a new pin.
+ if(JSON.stringify(configuredRuntime(c.executionConfig.codexPath))!==JSON.stringify(previous.identity.runtime))throw Error('Execution sandbox runtime changed; restore the trusted executable before continuing approved work');
+}
 export function assertExecutionConfiguration(c){
  const identity={defaultBackend:executionIdentity({executionPolicy:c.executionPolicy}),runtime:configuredRuntime(c.executionConfig.codexPath)},hash=createHash('sha256').update(JSON.stringify(identity)).digest('hex');
  const previous=c.store.maybe('execution_configuration','coordinator');
  if(previous&&(previous.schema!==1||typeof previous.hash!=='string'))throw Error('Invalid saved execution configuration identity');
- const held=goal=>['draft','active','paused'].includes(goal.status)||c.store.all('task').some(task=>task.goalId===goal.id&&(task.owner||task.native?.writerActive||['running','uncertain','taking_over','codex_active','legacy_reviewing','awaiting_review','ready_to_integrate'].includes(task.status)))||goal.integrationOwner||goal.integrationPending||['running','uncertain'].includes(c.store.maybe('planning',goal.id)?.status)||c.store.all('goal_revision').some(revision=>revision.goalId===goal.id&&revision.status==='draft'&&revision.previousHash===goal.hash&&!['completed','partial'].includes(goal.status));
+ const held=goal=>['draft','active','paused','stopped'].includes(goal.status)||c.store.all('task').some(task=>task.goalId===goal.id&&(task.owner||task.native?.writerActive||['running','uncertain','taking_over','codex_active','legacy_reviewing','awaiting_review','ready_to_integrate'].includes(task.status)))||goal.integrationOwner||goal.integrationPending||['running','uncertain'].includes(c.store.maybe('planning',goal.id)?.status)||c.store.all('goal_revision').some(revision=>revision.goalId===goal.id&&revision.status==='draft'&&revision.previousHash===goal.hash&&!['completed','partial'].includes(goal.status));
  // Configuration is a service default/runtime identity, independent of each
  // goal's immutable explicit override. Never rebind saved approvals/evidence.
  if(previous&&previous.hash!==hash&&c.store.all('goal').some(held))throw Error('Execution backend settings or runtime changed with prepared, active or unfinished work; retain the trusted configuration until resolved');
