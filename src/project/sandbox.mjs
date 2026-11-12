@@ -1,16 +1,19 @@
 import { createServer } from 'node:net';
 import { mkdir, writeFile, readFile, copyFile, rm } from 'node:fs/promises';
 import path from 'node:path';
-import { accessSync, constants } from 'node:fs';
-import { command } from './process.mjs';
-import { Pause, secretPath, matches, digest } from './contracts.mjs';
+import { Pause, digest } from './contracts.mjs';
+import { createBackend, createPolicy, validateBackend } from './check-backends/contracts.mjs';
 
 export class CheckRunner {
-  constructor(workspace, { codex = 'codex' } = {}) {
+  constructor(workspace, { codex = 'codex', backend = 'codex-sandbox', backendOptions = {}, backendFactory } = {}) {
     this.workspace = workspace;
-    this.codex = codex.includes('/') ? codex : (process.env.PATH ?? '').split(path.delimiter)
-      .map(dir => path.join(dir, codex)).find(file => { try { accessSync(file, constants.X_OK); return true; } catch { return false; } });
-    if (!this.codex) throw new Pause('Codex CLI is not on PATH; sandbox unavailable', 'isolation');
+    // Fixture injection is only a JavaScript option. Manifest/model data never
+    // supplies a factory, executable implementation or verification result.
+    if (backendFactory !== undefined && typeof backendFactory !== 'function') throw new Pause('Sandbox backendFactory must be an explicit JavaScript function', 'isolation');
+    const factory = backendFactory ?? createBackend;
+    this.backend = validateBackend(factory({ id: backend, workspace, options: { codex, ...backendOptions } }));
+    this.backendIdentity = Object.freeze(structuredClone(this.backend.identity()));
+    this.codex = this.backendIdentity.executable;
   }
   async stageInputs(){
     const inventory=await this.workspace.inventory(),version=digest(inventory).slice(0,20),relative='.overnight-output/approved-inputs-'+version,root=await this.workspace.file(relative);await rm(root,{recursive:true,force:true});await mkdir(root,{recursive:true});
@@ -18,29 +21,12 @@ export class CheckRunner {
     this.stagedInputRoot=root;return {root,files:inventory.map(f=>f.path),inventoryHash:digest(inventory)};
   }
   async execute(argv, timeoutMs, signal) {
-    if (process.platform !== 'darwin') throw new Pause('Unattended checks currently require the verified Mac sandbox', 'isolation');
     const root = this.workspace.root;
     const scratch = path.join(root, '.overnight-output', 'tmp');
     await mkdir(scratch, { recursive: true });
-    const fs = {
-      ':root': 'deny', ':minimal': 'read', '/System': 'read', '/usr': 'read', '/bin': 'read',
-      '/sbin': 'read', '/opt/homebrew': 'read', '/Library/Fonts': 'read',
-      [root]: 'read', [path.join(root, '.git')]: 'deny',
-      [path.join(root, '.overnight-output')]: 'write', [path.join(root, 'dist')]: 'write',
-    };
-    // A check executes worker-controlled source. Do not let that source read
-    // undisclosed tracked files or secrets and smuggle them into check output.
-    const permissions = this.workspace.manifest?.permissions;
-    if (permissions) {
-      for (const file of Object.keys(await this.workspace.snapshot())) {
-        if (secretPath(file) || !matches(file, permissions.readPaths)) fs[path.join(root, file)] = 'deny';
-      }
-    }
-    for (const name of ['.env', '.aws', '.ssh', '.codex', '.agents', '.data', '.npmrc', '.netrc', '.pypirc', '.git-credentials']) fs[path.join(root, name)] = 'deny';
-    const fields = Object.entries(fs).map(([key, value]) => `${JSON.stringify(key)}=${JSON.stringify(value)}`).join(',');
-    const config = `permissions.overnight={filesystem={${fields}},network={enabled=false}}`;
-    return command([this.codex, 'sandbox', '-P', 'overnight', '-c', config, '-C', root, '--', ...argv], {
-      cwd: root, timeoutMs, signal,
+    const permissions = await createPolicy(this.workspace);
+    return this.backend.execute({
+      argv, cwd: root, timeoutMs, signal, permissions,
       env: {
         PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin`,
         TMPDIR: scratch, CI: '1', LANG: 'en_US.UTF-8',
@@ -52,7 +38,12 @@ export class CheckRunner {
   async verify(signal) {
     const canary = path.join(this.workspace.journal.dir, 'sandbox-private-canary');
     await writeFile(canary, 'private-canary', { mode: 0o600 });
-    const server = createServer(socket => socket.end('network-access'));
+    const server = createServer(socket => {
+      // An unenforced probe connects and immediately destroys its socket.
+      // A peer reset is a failed isolation probe, not an unhandled host error.
+      socket.on('error', () => {});
+      socket.end('network-access');
+    });
     try {
       await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
       const probe = `
@@ -63,16 +54,16 @@ export class CheckRunner {
         try{fs.writeFileSync('.overnight-output/probe','ok');result.outputWorks=true}catch{result.outputWorks=false}
         const socket=net.connect(${server.address().port},'127.0.0.1');
         socket.once('connect',()=>{result.networkDenied=false;socket.destroy();console.log(JSON.stringify(result))});
-        socket.once('error',()=>{result.networkDenied=true;console.log(JSON.stringify(result))});
-        socket.setTimeout(2000,()=>{socket.destroy();result.networkDenied=true;console.log(JSON.stringify(result))});
+        socket.once('error',e=>{result.networkDenied=['EPERM','EACCES'].includes(e.code);console.log(JSON.stringify(result))});
+        socket.setTimeout(2000,()=>{socket.destroy();result.networkDenied=false;console.log(JSON.stringify(result))});
       `;
       const run = await this.execute([process.execPath, '-e', probe], 15_000, signal);
       let result;
       try { result = JSON.parse(run.stdout.trim()); } catch {}
-      if (run.code !== 0 || !result || !result.readDenied || !result.writeDenied || !result.networkDenied || !result.outputWorks) {
+      if (run.code !== 0 || run.stopped || !result || !['readDenied', 'writeDenied', 'networkDenied', 'outputWorks'].every(key => result[key] === true)) {
         throw new Pause(`Sandbox enforcement probe failed: ${run.stderr.slice(-1000) || run.stdout}`, 'isolation');
       }
-      return result;
+      return { ...result, backend: this.backendIdentity };
     } finally { server.close(); }
   }
   async run(checks, key, signal) {
@@ -95,7 +86,7 @@ export class CheckRunner {
           screenshots.push(destination);
         }
       }
-      results.push({ id: check.id, argv: check.argv, ...result, passed: result.code === 0 && !result.stopped, screenshots });
+      results.push({ id: check.id, argv: check.argv, ...result, passed: result.code === 0 && !result.stopped, screenshots, backend: this.backendIdentity });
     }
     return results;
   }
