@@ -1,4 +1,4 @@
-import {inferenceWait} from '../scheduling/capacity.mjs';
+import {canClaim,capacitySnapshot,inferenceWait} from '../scheduling/capacity.mjs';
 import {digest,normalizeTask,isStartedLegacyTask} from '../contracts.mjs';
 import {selectRoute} from './router.mjs';
 import {codingModelReplayEligible} from '../coding.mjs';
@@ -99,22 +99,37 @@ export function holdPinnedResource(worker,task){
 }
 /** Selected-endpoint readiness is bounded, outside every Store transaction. */
 export async function claimAvailable(worker){
+ if(worker.shutdown?.signal.aborted)return {waiting:true,reasonCode:'service_stopping'};
  const c=worker.c,claimed=c.claimNext(worker.owner);if(claimed)return claimed;
- if(c.store.all('planning').some(p=>['running','uncertain'].includes(p.status))||c.store.all('task').some(t=>['running','uncertain','taking_over'].includes(t.status)&&t.spec.actor==='deepseek'))return null;
- const priorities=c.effectivePriorities(),task=c.store.all('task').filter(t=>['queued','suspended'].includes(t.status)&&t.spec.actor==='deepseek'&&t.executionActor!=='codex'&&c.eligible(t)).sort((a,b)=>priorities.get(b.id)-priorities.get(a.id)||a.sequence-b.sequence)[0];
- if(!task||!isRoutedTask(c.store.get('goal',task.goalId),task)||task.providerBinding)return null;
- const goal=c.store.get('goal',task.goalId),snapshot={taskId:task.id,taskHash:task.hash,goalHash:goal.hash,goalVersion:goal.version,lease:c.workerLease?.generation??null};
- let route;
- try{route=routeDecision(c,goal,task);c.verifyWorkerBinding(goal,route.binding);}
- catch(error){return c.store.tx(()=>c.settleTask(task,'blocked',String(error.message).slice(0,500)));}
- if(route.status==='ineligible')return c.store.tx(()=>c.settleTask(task,'blocked',route.explanation));
- if(route.reasonCode==='provider_busy'){c.store.tx(()=>recordRoutingWait(c,task,goal,route));return {waiting:true};}
- const until=Math.min(goal.deadline,task.deadline??goal.deadline,task.providerWait?.until??Infinity);
- let available=false;
- try{const provider=c.providerRegistry.createClient(route.binding);if(until>c.now())available=await provider.availability(AbortSignal.timeout(Math.max(1,Math.min(10000,until-c.now()))))===true;}
- catch{/* Unavailable does not authorize inference or fallback. */}
- if((c.workerLease?.generation??null)!==snapshot.lease)return null;
- if(!same(c,snapshot))return null;
- const observation={providerId:route.binding.providerId,revision:route.binding.revision,profileHash:route.binding.profileHash,status:available?'available':'offline',observedAt:new Date(c.now()).toISOString(),provenance:'bounded selected-provider availability probe'};
- return c.claimNext(worker.owner,{...snapshot,observation})??{waiting:true};
+ const snapshot=capacitySnapshot(c),parallel=snapshot.serviceLimit>1;
+ if(!parallel&&(snapshot.planning.some(p=>!c.store.get('goal',p.goalId).manifest.providerPolicy)||snapshot.activeTasks.some(t=>!c.store.get('goal',t.goalId).manifest.providerPolicy)))return null;
+ const priorities=c.effectivePriorities(),tasks=c.store.all('task').filter(t=>['queued','suspended'].includes(t.status)&&t.spec.actor==='deepseek'&&t.executionActor!=='codex'&&c.eligible(t)).sort((a,b)=>priorities.get(b.id)-priorities.get(a.id)||a.sequence-b.sequence);
+ let waited=false,probes=0;const observations=new Map(),offlineEndpoints=new Set();
+ for(const task of tasks){
+  const goal=c.store.get('goal',task.goalId);
+  if(!isRoutedTask(goal,task)||task.providerBinding)continue;
+  if(!canClaim({task,goal,snapshot:capacitySnapshot(c)}).allowed)continue;
+  const snapshot={taskId:task.id,taskHash:task.hash,goalHash:goal.hash,goalVersion:goal.version,lease:c.workerLease?.generation??null};
+  let route;
+  try{route=routeDecision(c,goal,task);c.verifyWorkerBinding(goal,route.binding);}
+  catch(error){return c.store.tx(()=>c.settleTask(task,'blocked',String(error.message).slice(0,500)));}
+  if(route.status==='ineligible')return c.store.tx(()=>c.settleTask(task,'blocked',route.explanation));
+  if(route.reasonCode==='provider_busy'){c.store.tx(()=>recordRoutingWait(c,task,goal,route));waited=true;if(!parallel)return {waiting:true};continue;}
+  const until=Math.min(goal.deadline,task.deadline??goal.deadline,task.providerWait?.until??Infinity);
+  const profile=c.providerRegistry.get(route.binding.providerId,route.binding.revision),cacheKey=route.binding.profileHash;
+  if(!observations.has(cacheKey)&&!offlineEndpoints.has(profile.baseUrl)&&probes>=1)return {waiting:true,reasonCode:'availability_scan_pending',retryAt:c.now()+250};
+  let available=observations.get(cacheKey)??false;
+  if(!observations.has(cacheKey)&&!offlineEndpoints.has(profile.baseUrl)){probes++;
+  try{const provider=c.providerRegistry.createClient(route.binding);if(until>c.now())available=await provider.availability(AbortSignal.any([AbortSignal.timeout(Math.max(1,Math.min(10000,until-c.now()))),...(worker.shutdown?[worker.shutdown.signal]:[])]))===true;}
+  catch{/* Unavailable does not authorize inference or fallback. */}
+  observations.set(cacheKey,available);if(!available)offlineEndpoints.add(profile.baseUrl);
+  }
+  if(worker.shutdown?.signal.aborted)return {waiting:true,reasonCode:'service_stopping'};
+  if((c.workerLease?.generation??null)!==snapshot.lease)return null;
+  if(!same(c,snapshot))continue;
+  const observation={providerId:route.binding.providerId,revision:route.binding.revision,profileHash:route.binding.profileHash,status:available?'available':'offline',observedAt:new Date(c.now()).toISOString(),provenance:'bounded selected-provider availability probe'};
+  const next=c.claimNext(worker.owner,{...snapshot,observation});if(next)return next;
+  waited=true;if(!parallel)return {waiting:true};
+ }
+ return waited?{waiting:true}:null;
 }

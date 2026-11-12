@@ -1,4 +1,4 @@
-import {assertInferenceCapacity,inferenceWait,CapacityWaitError} from '../scheduling/capacity.mjs';
+import {assertInferenceCapacity,inferenceWait,CapacityWaitError,capacitySnapshot} from '../scheduling/capacity.mjs';
 import {randomUUID} from 'node:crypto';
 import {digest,keys,identifier,integer} from '../contracts.mjs';
 import {normalizeReviewPolicy,normalizeVerdict,assertReviewMode,assertBinding,bindingFields,reviewerIdentity} from './contracts.mjs';
@@ -115,7 +115,7 @@ export class ReviewService {
  }
  async runApi(input,key){
   const {signal,...data}=input;identifier(key,'idempotencyKey');
-  if(!this.#runs.has(key)&&this.#runs.size)throw Error('Another API review is active; wait without spending');
+  if(!this.#runs.has(key)&&this.#runs.size>=capacitySnapshot(this.c).serviceLimit)return {waiting:true,reasonCode:'review_runner_capacity'};
   if(this.#runs.has(key)){const running=this.#runs.get(key);if(running.hash!==digest(data))throw Error('Idempotency key conflict');return running.promise;}
   const promise=this.#runApi(data,key,signal);this.#runs.set(key,{hash:digest(data),promise});try{return await promise;}catch(error){const request=this.c.store.request(data.taskId,`api-review-${digest(key)}`);if(request)this.c.store.tx(()=>{
    const t=this.c.getTask(data.taskId),reasonCode=request.status==='reserved'?'request_uncertain':request.status==='failed'?'request_failed':error.reviewReasonCode??'response_rejected';

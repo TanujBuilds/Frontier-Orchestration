@@ -1,5 +1,6 @@
 import {claimAvailable,holdPinnedResource} from './routing/runtime.mjs';
 import {digest} from './contracts.mjs';
+import {capacitySnapshot,CapacityWaitError} from './scheduling/capacity.mjs';
 import { randomUUID } from 'node:crypto';
 import { CodingAdapter } from './coding.mjs';
 import { LocalProvider } from './provider.mjs';
@@ -14,9 +15,10 @@ import {isRegistryClient} from './providers/registry.mjs';
 export class Worker {
  constructor({c,coordinator=c,provider,reviewer,checksFactory,owner=randomUUID(),config={},adapters={}}){
   this.c=coordinator;this.owner=owner;this.config=config;this.checksFactory=checksFactory;
+  this.runners=new Map();this.runnerContexts=new Map();this.auxiliary=new Map();this.finished=[];this.wake=Promise.withResolvers();this.shutdown=new AbortController();this.adapterOverrides=adapters;
   this.provider=provider??null;
   this.reviewer=reviewer??null;this.legacyReview=new LegacyReview(this);
-  this.integration=new Integration({c:this.c,checksFactory,config});
+  this.integration=new Integration({c:this.c,checksFactory,config,signal:this.shutdown.signal});
   this.planner=new Planner(this);
   this.overnight=new OvernightLifecycle({c:this.c,...(config.environment==='fixture'?{notify:async()=>({fixture:true}),power:{sync(){},close(){}}}:{})});
   this.adapters={coding:new CodingAdapter(this),learning:new MaintenanceAdapter(this),...(config.research?{research:new ResearchAdapter(this)}:{}),...adapters};
@@ -101,7 +103,7 @@ export class Worker {
    expectedModel=this.c.getTask(task.id).providerModel??profile?.model;
    this.activity(task,'model.request.started',{requestId:reservation.id,key});
    invoked=true;
-   result=await provider.complete(messages,{maxTokens:Math.min(maxTokens,profile?.maxOutputTokens??maxTokens,task.spec.routing?.maxOutputTokens??maxTokens),streaming:profile?.streaming??this.c.workerProfile?.streaming??this.config.deepseekStreaming??false,signal:AbortSignal.timeout(remaining),expectedModel,onModel:model=>{
+   result=await provider.complete(messages,{maxTokens:Math.min(maxTokens,profile?.maxOutputTokens??maxTokens,task.spec.routing?.maxOutputTokens??maxTokens),streaming:profile?.streaming??this.c.workerProfile?.streaming??this.config.deepseekStreaming??false,signal:AbortSignal.any([AbortSignal.timeout(remaining),this.shutdown.signal]),expectedModel,onModel:model=>{
     try{this.pinModel(task,owner,model,reservation.reconnectUntil,true,reservation);}
     catch(error){dispatchFailure=error;throw error;}
     this.activity(task,'model.request.resolved',{operationId:reservation.id,requestId:reservation.id,model});
@@ -147,6 +149,7 @@ export class Worker {
   const {store}=this.c;
   let next=Infinity;
   const consider=at=>{if(at>startedAt)next=Math.min(next,at);};
+  consider(this.nextProbeAt);
   for(const goal of store.all('goal'))consider(goal.deadline);
   for(const task of store.all('task')){
    if(!['accepted','failed','partial','cancelled'].includes(task.status))consider(task.deadline);
@@ -164,15 +167,23 @@ export class Worker {
  }
  async tick(){await this.overnight.tick();try{return await this.executeTick();}finally{await this.overnight.tick();}}
  async executeTick(){
+  if(capacitySnapshot(this.c).serviceLimit>1)return this.executeParallel();
+  return this.executeSequential();
+ }
+ async executeSequential(){
   this.c.expireQuiescent();
   const automatic=this.c.store.all('task').find(t=>t.status==='ready_to_integrate'&&this.c.eligible(t)&&['checks','legacy'].includes(this.c.store.get('goal',t.goalId).manifest.mode.review));
   if(automatic){try{return await this.integration.accept({taskId:automatic.id,feedback:'Trusted checks passed; no Codex review'},`auto-integrate-${automatic.id}`);}catch(error){this.c.store.tx(()=>{const t=this.c.store.get('task',automatic.id);if(t.status==='ready_to_integrate'){t.status='blocked';t.reason=error.message;this.c.store.put('task',t);this.c.emit('task.blocked',t.goalId,t.id,{reason:t.reason});}});return this.c.getTask(automatic.id);}}
-  const planning=await this.planner.tick();if(planning)return planning;
+  const planning=await this.planner.tick();if(planning&&(!planning.waiting||!this.c.store.all('goal').filter(g=>g.status==='active').every(g=>g.manifest.providerPolicy)))return planning;
   let task=this.c.store.all('task').find(t=>t.status==='running'&&t.owner===this.owner);
   if(task)task=this.c.getTask(task.id);else task=await claimAvailable(this);
   if(task?.waiting)return task;
   if(!task)return this.legacyReview.tick();
+  return this.executeTask(task);
+ }
+ async executeTask(task){
   try{
+   if(this.shutdown.signal.aborted)return this.c.store.tx(()=>{const current=this.c.owned(task.id,this.owner);current.yieldRequested=true;this.c.store.put('task',current);return this.c.boundary(current.id,current.checkpoint,this.owner);});
    if(task.spec.kind!=='research'){task=this.c.boundary(task.id,task.checkpoint,this.owner);if(task.status!=='running')return task;}
    if(this.c.store.get('goal',task.goalId).manifest.environment!==(this.config.environment??'live'))throw Error('Approved environment differs from configured providers');
    this.c.verifyWorkerBinding(this.c.store.get('goal',task.goalId),task);
@@ -201,10 +212,84 @@ export class Worker {
    const adapter=this.adapters[task.spec.kind];if(!adapter)throw Error(`Capability ${task.spec.kind} is not configured`);
    return await adapter.step(task,this.owner);
   }catch(error){
+   if(error instanceof CapacityWaitError)return this.c.store.tx(()=>{const current=this.c.owned(task.id,this.owner);current.status='suspended';current.owner=null;current.capacityWait={reasonCode:error.reasonCode};this.c.store.put('task',current);return {waiting:true,reasonCode:error.reasonCode,taskId:current.id};});
    const current=this.c.getTask(task.id);
    if(current.status!=='running'||current.owner!==this.owner)return current;
    return this.c.failTaskStep(task.id,this.owner,String(error?.message??error));
   }
+ }
+ taskContext(owner){
+  const context=Object.create(this);context.owner=owner;
+  context.adapters={coding:new CodingAdapter(context),learning:new MaintenanceAdapter(context),...(this.config.research?{research:new ResearchAdapter(context)}:{}),...this.adapterOverrides};
+  return context;
+ }
+ notify(){const wake=this.wake;this.wake=Promise.withResolvers();wake.resolve();}
+ launch(map,key,action,{task=false}={}){
+  const entry={key,promise:null};map.set(key,entry);
+  entry.promise=Promise.resolve().then(action).then(result=>{
+   if(task||result&&!result.waiting){this.finished.push({result});this.notify();}
+   return result;
+  },error=>{this.finished.push({error});this.notify();}).finally(()=>{if(map.get(key)===entry)map.delete(key);if(entry.taskId){const context=this.runnerContexts.get(entry.taskId),current=this.c.store.maybe('task',entry.taskId);if(context&&(!current||current.owner!==context.owner||current.status!=='running'))this.runnerContexts.delete(entry.taskId);}});
+  return entry;
+ }
+ async executeParallel(){
+  if(this.shutdown.signal.aborted)return {waiting:true,reasonCode:'service_stopping'};
+  this.c.expireQuiescent();this.nextProbeAt=null;
+  const limit=capacitySnapshot(this.c).serviceLimit;
+  // Separate bounded lanes keep a slow planner/reviewer/import from holding the
+  // autonomous dispatch loop. Their own durable reservation guards remain final.
+  const automatic=this.c.store.all('task').find(t=>t.status==='ready_to_integrate'&&this.c.eligible(t)&&['checks','legacy'].includes(this.c.store.get('goal',t.goalId).manifest.mode.review));
+  if(automatic&&!this.auxiliary.has('integration'))this.launch(this.auxiliary,'integration',async()=>{
+   try{return await this.integration.accept({taskId:automatic.id,feedback:'Trusted checks passed; no automatic host review'},`auto-integrate-${automatic.id}`);}
+   catch(error){return this.c.store.tx(()=>{const t=this.c.getTask(automatic.id);if(t.status==='ready_to_integrate'){t.status='blocked';t.reason=error.message;this.c.store.put('task',t);this.c.emit('task.blocked',t.goalId,t.id,{reason:t.reason});}return t;});}
+  });
+  const goals=this.c.store.all('goal'),planning=goals.filter(g=>this.planner.schedulable(g)),legacy=planning.find(g=>!g.manifest.providerPolicy);
+  // Compatibility work has one explicit goal lane. Never run a wildcard next
+  // to scoped planners, and never widen legacy global process ownership.
+  for(const goal of legacy?[legacy]:planning){
+   const key=`planning:${goal.id}`;
+   if([...this.auxiliary.keys()].filter(k=>k.startsWith('planning:')).length>=limit)break;
+   if(!this.auxiliary.has(key))this.launch(this.auxiliary,key,()=>this.planner.tick({goalId:goal.id}));
+  }
+  const reviews=this.c.store.all('task').filter(t=>this.legacyReview.schedulable(t));
+  for(const candidate of reviews){
+   const key=`review:${candidate.id}`;
+   if([...this.auxiliary.keys()].filter(k=>k.startsWith('review:')).length>=limit)break;
+   if(!this.auxiliary.has(key))this.launch(this.auxiliary,key,()=>this.legacyReview.tick({taskId:candidate.id}));
+  }
+  if(!reviews.length&&!this.auxiliary.has('review'))this.launch(this.auxiliary,'review',()=>this.legacyReview.tick({legacyOnly:true}));
+  for(const [id,context] of this.runnerContexts){const current=this.c.store.maybe('task',id);if(!current||current.owner!==context.owner||current.status!=='running')this.runnerContexts.delete(id);}
+  const mapped=new Set([...this.runners.values()].map(entry=>entry.taskId));
+  for(const running of this.c.store.all('task').filter(t=>t.status==='running'&&!mapped.has(t.id)&&
+   (t.owner===this.owner||this.runnerContexts.has(t.id)||this.c.workerLease&&t.ownerLease===this.c.workerLease.generation))){
+   if(this.runners.size>=limit)break;
+   const savedContext=this.runnerContexts.get(running.id),context=savedContext?.owner===running.owner?savedContext:this.taskContext(running.owner);this.runnerContexts.set(running.id,context);
+   const entry=this.launch(this.runners,`${running.id}:${running.runnerGeneration??0}`,()=>context.executeTask(this.c.getTask(running.id)),{task:true});entry.taskId=running.id;
+  }
+  for(let n=this.runners.size;n<limit;n++){
+   const context=this.taskContext(`runner-${randomUUID()}`),task=await claimAvailable(context);
+   if(task?.retryAt)this.nextProbeAt=task.retryAt;
+   if(!task||task.waiting)break;
+   this.runnerContexts.set(task.id,context);
+   const entry=this.launch(this.runners,`${task.id}:${task.runnerGeneration??0}`,()=>context.executeTask(task),{task:true});entry.taskId=task.id;
+  }
+  // Let immediate no-work lanes settle before deciding whether there is useful
+  // work to await. Completion and database commits both wake this supervisor.
+  await Promise.resolve();
+  const take=()=>{const item=this.finished.shift();if(item?.error)throw item.error;return item?.result;};
+  if(this.finished.length)return take();
+  if(this.runners.size||this.auxiliary.size){
+   const revision=this.c.store.revision(),wake=this.wake.promise,controller=new AbortController();
+   const signal=AbortSignal.any([controller.signal,this.shutdown.signal]);
+   try{await Promise.race([wake,this.c.store.waitForChange(revision,Math.min(5000,Math.max(1,this.nextIdleCheck(this.c.now())-this.c.now())),signal)]);}
+   finally{controller.abort();}
+   if(this.finished.length)return take();
+  }
+  return {waiting:true,reasonCode:'scheduler_wait',runners:this.runners.size};
+ }
+ async close(){
+  this.shutdown.abort();this.notify();
+  await Promise.allSettled([...this.runners.values(),...this.auxiliary.values()].map(entry=>entry.promise));
  }
  async drain({maxSteps=1000}={}){for(let n=0;n<maxSteps;n++){const result=await this.tick();if(!result||result.waiting)return;}throw Error('Worker step safety limit reached');}
 }

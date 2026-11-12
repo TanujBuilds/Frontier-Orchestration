@@ -133,8 +133,8 @@ export class CodingAdapter {
    await workspace.initialize();await workspace.recover();
    if(phase==='no_progress')return this.stopNoProgress(task,owner);
    const checks=this.worker.checksFactory?.(workspace)??new CheckRunner(workspace,{codex:this.worker.config.codexPath??'codex'});
-   if(!journal.events.some(e=>e.type==='harness.sandbox'&&e.data.permissionsHash===permissionsHash)){const probe=await checks.verify();await journal.append('harness.sandbox',{...probe,permissionsHash});}
-   if(v2&&!journal.last('harness.stage_preflight')){const ids=c.store.get('goal',task.goalId).manifest.overnightPolicy.preflightCheckIds;const results=await checks.run(manifest.permissions.checks.filter(check=>ids.includes(check.id)),'stage-preflight');await journal.append('harness.stage_preflight',{results});if(!results.every(r=>r.passed))throw Error('Stage infrastructure preflight failed under exact stage read policy; correct approved input scope before spending');}
+   if(!journal.events.some(e=>e.type==='harness.sandbox'&&e.data.permissionsHash===permissionsHash)){const probe=await checks.verify(this.worker.shutdown?.signal);await journal.append('harness.sandbox',{...probe,permissionsHash});}
+   if(v2&&!journal.last('harness.stage_preflight')){const ids=c.store.get('goal',task.goalId).manifest.overnightPolicy.preflightCheckIds;const results=await checks.run(manifest.permissions.checks.filter(check=>ids.includes(check.id)),'stage-preflight',this.worker.shutdown?.signal);await journal.append('harness.stage_preflight',{results});if(!results.every(r=>r.passed))throw Error('Stage infrastructure preflight failed under exact stage read policy; correct approved input scope before spending');}
    if(v2&&journal.last('harness.stage_preflight')?.results.some(r=>!r.passed))throw Error('Saved stage infrastructure preflight failed; inspect scope');
    if(phase==='attempt'){
     return c.store.tx(()=>{
@@ -221,7 +221,7 @@ export class CodingAdapter {
     const reviewSnapshot=g.manifest.reviewPolicy?await workspace.snapshot():null;
     const reviewModes=reviewSnapshot?await readBehavioralFileModes(workspace,Object.keys(reviewSnapshot)):null;
     if(reviewSnapshot){const pinned=await journal.memo(`${evidenceKey}/review-input`,async()=>({snapshotHash:digest(reviewSnapshot),executableModesHash:behavioralModeHash(reviewModes)}));if(pinned.snapshotHash!==digest(reviewSnapshot)||pinned.executableModesHash!==behavioralModeHash(reviewModes))throw Error('Candidate changed since the protected-check reservation');}
-    let results;try{results=await journal.memo(evidenceKey,()=>checks.run(manifest.permissions.checks,`attempt-${cp.attempt}`));}catch(error){this.worker.activity(task,'coding.checks.failed',{operationId:`checks-end-${cp.attempt}`,requestId:cp.requestId??null,attempt:cp.attempt,outcome:'error'});throw error;}
+    let results;try{results=await journal.memo(evidenceKey,()=>checks.run(manifest.permissions.checks,`attempt-${cp.attempt}`,this.worker.shutdown?.signal));}catch(error){this.worker.activity(task,'coding.checks.failed',{operationId:`checks-end-${cp.attempt}`,requestId:cp.requestId??null,attempt:cp.attempt,outcome:'error'});throw error;}
     this.worker.activity(task,results.every(r=>r.passed)?'coding.checks.passed':'coding.checks.failed',{operationId:`checks-end-${cp.attempt}`,requestId:cp.requestId??null,attempt:cp.attempt,checks:results.map(r=>({id:r.id,passed:r.passed}))});
     if(infrastructureCheckFailure(results))throw Error('Protected-check infrastructure failure; inspect saved check evidence and approved inputs before continuation');
     if(!results.every(r=>r.passed)){

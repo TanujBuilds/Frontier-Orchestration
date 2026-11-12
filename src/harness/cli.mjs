@@ -43,7 +43,7 @@ export async function serve({root,configFile,port,runtimeConfig,headless=false,c
  const worker=new Worker({c,owner,config,provider}),dispatcher=new Dispatcher({c,worker,config});const stopWorker=new AbortController();
  for(const task of c.store.all('task').filter(t=>t.status==='uncertain')){try{c.recoverSaved(task.id,owner);}catch{/* Ambiguous model/backend ownership stays held. */}}
  for(const planning of c.store.all('planning').filter(p=>p.status==='uncertain')){try{c.recoverPlanning(planning.id,owner);}catch{/* Pending planner calls remain spent and exclusive. */}}
- const stop=()=>stopWorker.abort();process.once('SIGTERM',stop);process.once('SIGINT',stop);dispatcher.onStop=()=>{canStop?.(c);if(canStop)dispatcher.quiescing=true;stop();};
+ const stop=()=>{stopWorker.abort();worker.shutdown.abort();worker.notify();};process.once('SIGTERM',stop);process.once('SIGINT',stop);dispatcher.onStop=()=>{canStop?.(c);if(canStop)dispatcher.quiescing=true;stop();};
  let old;try{old=await connection(root);}catch(error){if(error.code!=='ENOENT')throw error;}
  const token=old?.token??randomBytes(32).toString('hex'),viewerToken=old?.viewerToken??randomBytes(32).toString('hex'),api=await startApi({dispatcher,token,viewerToken,port,headless,trustedOrigins:config.observerOrigins??[]});
  await atomic(path.join(root,'connection.json'),{url:api.url,token,viewerToken});await atomic(path.join(root,'viewer-connection.json'),{url:api.url,token:viewerToken,role:'viewer'});await atomic(path.join(root,'service.json'),{pid:process.pid,owner,url:api.url,node:process.versions.node,startedAt:Date.now()});
@@ -79,12 +79,14 @@ export async function serve({root,configFile,port,runtimeConfig,headless=false,c
    try{await monitor;await worker.overnight.tick();}
    finally{worker.overnight.close();}
   }
-  let active=c.store.all('task').find(t=>t.owner===owner&&t.status==='running');
-  if(active){c.store.tx(()=>{active.yieldRequested=true;c.store.put('task',active);});
-   const until=Date.now()+25000;while(active&&Date.now()<until){if(active.spec.kind==='research')await worker.adapters.research.step(c.getTask(active.id),owner);else c.boundary(active.id,active.checkpoint,owner);active=c.store.all('task').find(t=>t.owner===owner&&t.status==='running');if(active)await delay(250);}
-   if(active)c.markUncertain(active.id,'Service stopped before remote quiescence was confirmed',owner);
+  await worker.close();
+  const owned=t=>t.owner===owner||t.ownerLease===c.workerLease?.generation;
+  let active=c.store.all('task').find(t=>owned(t)&&t.status==='running');
+  if(active){c.store.tx(()=>{for(const task of c.store.all('task').filter(t=>owned(t)&&t.status==='running')){task.yieldRequested=true;c.store.put('task',task);}});
+   const until=Date.now()+25000;while(active&&Date.now()<until){if(active.spec.kind==='research')await worker.adapters.research.step(c.getTask(active.id),active.owner);else c.boundary(active.id,active.checkpoint,active.owner);active=c.store.all('task').find(t=>owned(t)&&t.status==='running');if(active)await delay(250);}
+   if(active)c.markUncertain(active.id,'Service stopped before remote quiescence was confirmed',active.owner);
   }
- }finally{await api.close();await dispatcher.whenIdle();c.releaseWorker(owner);c.close();process.removeListener('SIGTERM',stop);process.removeListener('SIGINT',stop);}
+ }finally{await worker.close();await api.close();await dispatcher.whenIdle();c.releaseWorker(owner);c.close();process.removeListener('SIGTERM',stop);process.removeListener('SIGINT',stop);}
 }
 export async function main(argv=process.argv.slice(2)){
  if(Number(process.versions.node.split('.')[0])<24)throw Error('Harness requires Node24 or newer');

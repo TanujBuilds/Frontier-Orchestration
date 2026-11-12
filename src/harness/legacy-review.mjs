@@ -1,3 +1,4 @@
+import {assertInferenceCapacity,CapacityWaitError,inferenceWait,capacitySnapshot} from './scheduling/capacity.mjs';
 import path from 'node:path';
 import {Journal} from '../project/journal.mjs';
 import {randomUUID} from 'node:crypto';
@@ -30,22 +31,38 @@ function behavioralReviewCandidate(c,g,task,current){
 }
 
 export class LegacyReview {
- constructor(worker){this.worker=worker;this.c=worker.c;this.inflight=null;}
- async tick(){
-  if(this.inflight)return null;
+ constructor(worker){this.worker=worker;this.c=worker.c;this.inflight=new Map();}
+ schedulable(task){
+  const {c}=this,goal=c.store.get('goal',task.goalId);
+  if(this.inflight.has(task.id)||task.status!=='awaiting_review'||goal.manifest.reviewPolicy?.source!=='api'||!c.eligible(task))return false;
+  const ticket=c.store.all('review_ticket').find(r=>r.taskId===task.id&&r.status==='reserved');
+  if(ticket){
+   const request=c.store.db.prepare("SELECT status,data FROM requests WHERE task_id=? AND kind='apiReview' AND json_extract(data,'$.ticketId')=?").get(task.id,ticket.id);
+   if(request?.status!=='completed'||task.reviewWait?.reasonCode!==undefined&&task.reviewWait.reasonCode!=='controls_active')return false;
+   try{identifier(JSON.parse(request.data).runKey,'saved API run key');return true;}catch{return false;}
+  }
+  if(task.reviewWait&&task.reviewWait.reasonCode!=='controls_active')return false;
+  const reviewer=goal.manifest.reviewPolicy.reviewer;
+  return !inferenceWait(c,goal,{providerId:reviewer.id,revision:reviewer.revision,profileHash:digest(reviewer)});
+ }
+ async tick({taskId,legacyOnly=false}={}){
+  if(taskId?this.inflight.has(taskId):this.inflight.size)return null;
+  const parallel=capacitySnapshot(this.c).serviceLimit>1;
   this.c.expireQuiescent();
   const requests=[];
   for(const row of this.c.store.db.prepare("SELECT id,task_id,status,data FROM requests WHERE kind='apiReview'").all()){
-   // Uncertain or unreadable remote ownership fences every background review,
-   // even if that request's goal is paused or no longer first in the inbox.
+   // Historical sequential review keeps its global hold. Parallel review uses
+   // the shared inference ledger below, retaining unknown group ownership.
    let data;try{data=JSON.parse(row.data);}catch{return null;}
-   if(!data||row.status==='reserved'||!['completed','failed'].includes(row.status)||
-    (row.status==='completed'?data.requestOutcome!=='completed':!['completed','not_dispatched'].includes(data.requestOutcome)))return null;
+   if(!data)return null;
+   if(!parallel&&(row.status==='reserved'||!['completed','failed'].includes(row.status)||
+    (row.status==='completed'?data.requestOutcome!=='completed':!['completed','not_dispatched'].includes(data.requestOutcome))))return null;
    requests.push({...data,id:row.id,taskId:row.task_id,status:row.status});
   }
   const tickets=this.c.store.all('review_ticket');
-  for(const portable of this.c.store.all('task').filter(t=>t.status==='awaiting_review'&&this.c.store.get('goal',t.goalId).manifest.reviewPolicy?.source==='api'&&this.c.eligible(t))){
+  for(const portable of this.c.store.all('task').filter(t=>!legacyOnly&&(!taskId||t.id===taskId)&&t.status==='awaiting_review'&&this.c.store.get('goal',t.goalId).manifest.reviewPolicy?.source==='api'&&this.c.eligible(t))){
    const ticket=tickets.find(r=>r.taskId===portable.id&&r.status==='reserved');let run;
+   if(!ticket){const goal=this.c.store.get('goal',portable.goalId),reviewer=goal.manifest.reviewPolicy.reviewer,wait=inferenceWait(this.c,goal,{providerId:reviewer.id,revision:reviewer.revision,profileHash:digest(reviewer)});if(wait){if(taskId)return wait;continue;}}
    if(ticket){
     const saved=requests.find(r=>r.taskId===portable.id&&r.ticketId===ticket.id);
     // A terminal failed/invalid response holds its own spent reservation, not
@@ -54,14 +71,16 @@ export class LegacyReview {
     // data becomes a durable operator wait inside ReviewService.
     if(saved?.status!=='completed'||(portable.reviewWait?.reasonCode!==undefined&&portable.reviewWait.reasonCode!=='controls_active'))continue;
     try{identifier(saved.runKey,'saved API run key');}catch{continue;}
-    run=this.c.reviewService.runApi(ticket.binding,saved.runKey);
+    run=this.c.reviewService.runApi({...ticket.binding,signal:this.worker.shutdown.signal},saved.runKey);
    }else{
-    run=(async()=>{const entry=(await this.c.reviewService.inbox({goalId:portable.goalId,limit:20})).items.find(x=>x.taskId===portable.id);if(!entry?.binding)return null;return this.c.reviewService.runApi(entry.binding,`auto-review-${portable.id}-${portable.reviews+1}`);})();
+    run=(async()=>{const entry=(await this.c.reviewService.inbox({goalId:portable.goalId,limit:20})).items.find(x=>x.taskId===portable.id);if(!entry?.binding)return null;return this.c.reviewService.runApi({...entry.binding,signal:this.worker.shutdown.signal},`auto-review-${portable.id}-${portable.reviews+1}`);})();
    }
-   this.inflight=run;try{return await run;}finally{this.inflight=null;}
+   this.inflight.set(portable.id,run);try{return await run;}finally{this.inflight.delete(portable.id);}
   }
+  if(taskId)return null;
+  const occupancy=capacitySnapshot(this.c);if(occupancy.activeTasks.length||occupancy.planning.length)return {waiting:true,reasonCode:'legacy_global_slot'};
   const task=this.c.store.all('task').find(t=>!this.c.store.get('goal',t.goalId).manifest.reviewPolicy&&['awaiting_legacy_review','legacy_reviewing'].includes(t.status)&&this.c.eligible(t));if(!task)return null;
-  const run=this.run(task);this.inflight=run;try{return await run;}finally{this.inflight=null;}
+  const run=this.run(task);this.inflight.set(task.id,run);try{return await run;}finally{this.inflight.delete(task.id);}
  }
  async referenceFiles(source,task){
   const paths=(await source.workspace.inventory()).map(f=>f.path).filter(file=>task.spec.role==='final'||!matches(file,task.spec.permissions.writePaths));
@@ -91,8 +110,8 @@ export class LegacyReview {
   try{
    await source.workspace.recover();const snapshot=(await source.workspace.evidence()).snapshot;if(digest(snapshot)!==digest(task.result.snapshot))throw Error('Candidate changed after its passing check receipt; evidence-only retry cannot repair code');
    const executableModesHash=g.manifest.project.behavioralChecks?await snapshotModesHash(source.workspace,snapshot):undefined;
-   const references=await this.referenceFiles(source,task),runner=this.worker.integration.checks(source.workspace);await runner.verify();
-   const declared=source.manifest.permissions.checks,checks=await runner.run(declared,'review-evidence-repair');
+   const references=await this.referenceFiles(source,task),runner=this.worker.integration.checks(source.workspace);await runner.verify(this.worker.shutdown?.signal);
+   const declared=source.manifest.permissions.checks,checks=await runner.run(declared,'review-evidence-repair',this.worker.shutdown?.signal);
    if(!checks.every(r=>r.passed))throw Error('Candidate checks failed before evidence re-review');
    assertBehavioralChecks(deriveBehavioralEvidence(g.manifest.project,{checks,checkIds:declared.map(check=>check.id),snapshot,executableModesHash}));
    if(digest((await source.workspace.evidence()).snapshot)!==digest(snapshot))throw Error('Candidate changed during evidence re-review preparation');
@@ -119,8 +138,8 @@ export class LegacyReview {
     await source.workspace.recover();await source.workspace.assertSnapshot(checkedSnapshot);
     await assertSnapshotModes(source.workspace,scopedSnapshot,executableModesHash);
    };
-   const runner=this.worker.integration.checks(source.workspace),sandbox=await runner.verify();
-   const declared=source.manifest.permissions.checks,checks=await runner.run(declared,`legacy-${task.id}-${task.reviews}`);
+   const runner=this.worker.integration.checks(source.workspace),sandbox=await runner.verify(this.worker.shutdown?.signal);
+   const declared=source.manifest.permissions.checks,checks=await runner.run(declared,`legacy-${task.id}-${task.reviews}`,this.worker.shutdown?.signal);
    if(!checks.every(r=>r.passed))throw Error('Legacy review requires passing protected checks');
    const behavioralEvidence=deriveBehavioralEvidence(project,{checks,checkIds:declared.map(check=>check.id),snapshot:scopedSnapshot,executableModesHash});
    assertBehavioralChecks(behavioralEvidence);
@@ -147,7 +166,7 @@ export class LegacyReview {
      if(mapped&&(!saved?.reviewBinding||digest(saved.reviewBinding)!==digest(reviewBinding)))throw Error('Saved review does not match the checked behavioral candidate');
      return saved;
     }
-    if(c.store.db.prepare("SELECT 1 FROM requests WHERE kind='codexReview' AND status='reserved'").get())throw Error('Another background review has uncertain ownership');
+    assertInferenceCapacity(c,g,null);
     if((c.store.spent(task.id).codexReview??0)>=current.spec.limits.reviews)throw Error('Legacy review budget exhausted');
     const id=randomUUID(),key=`legacy-review-${current.reviews+1}`;current.reviews++;current.status='legacy_reviewing';current.checkpoint.legacyReviewKey=key;c.store.put('task',current);
     c.store.db.prepare('INSERT INTO requests VALUES(?,?,?,?,?,?)').run(id,task.id,key,'codexReview','reserved',JSON.stringify({reservedAt:c.now(),...(mapped?{reviewBinding}:{})}));c.emit('legacy_review.reserved',g.id,task.id,{id,round:current.reviews});return {id,key,status:'reserved',fresh:true};
@@ -161,7 +180,7 @@ export class LegacyReview {
      const fixture=await sourceFixture(g);
      evidence=preparedEvidence?{...preparedEvidence,sourceFixture:fixture}:{...await source.workspace.evidence(),checks,sandbox,sourceFixture:fixture,modelContext:modelContext()};
     }
-    try{result=await this.worker.reviewer.reviewCode({brief:g.manifest.objective,approvedPlan:g.manifest.acceptance,stage:task.spec,assignment:task.spec,evidence},AbortSignal.timeout(Math.max(1,Math.min(300000,task.deadline-c.now()))));c.saveRequest(reservation.id,result);}
+    try{result=await this.worker.reviewer.reviewCode({brief:g.manifest.objective,approvedPlan:g.manifest.acceptance,stage:task.spec,assignment:task.spec,evidence},AbortSignal.any([AbortSignal.timeout(Math.max(1,Math.min(300000,task.deadline-c.now()))),this.worker.shutdown.signal]));c.saveRequest(reservation.id,result);}
     catch(error){c.store.tx(()=>{const t=c.store.get('task',task.id);t.status='blocked';t.reason=error.message;c.store.put('task',t);c.store.db.prepare("UPDATE requests SET status='failed' WHERE id=?").run(reservation.id);c.emit('legacy_review.failed',g.id,t.id,{id:reservation.id,reason:t.reason});});return c.getTask(task.id);}
    }
    keys(result,['decision','feedback','unverified'],'legacy review');text(result.feedback,'review feedback',12000);if(!['accept','revise','blocked'].includes(result.decision)||!Array.isArray(result.unverified))throw Error('Malformed legacy review');
@@ -180,6 +199,7 @@ export class LegacyReview {
     if(t.status==='queued')t.checkpoint.phase='attempt';c.store.put('task',t);c.emit('task.legacy_reviewed',g.id,t.id,{decision:result.decision,unverified:result.unverified});return c.getTask(t.id);
    });
   }catch(error){
+   if(error instanceof CapacityWaitError)return {waiting:true,reasonCode:error.reasonCode};
    if(!v2&&!mapped)throw error;
    return c.store.tx(()=>{
     const t=c.store.get('task',task.id);
