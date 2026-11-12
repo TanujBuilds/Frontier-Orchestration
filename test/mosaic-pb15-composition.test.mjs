@@ -238,3 +238,28 @@ test('quiescent configuration changes update only trusted defaults and preserve 
  assert.deepEqual(f.restart({executionPolicy:native}).getGoal(goal.id),{...historical,planning:null,tasks:[],reviewerRuns:[]});
  assert.deepEqual(f.c.prepareGoal({...legacy,submissionId:'new'},'new-default').manifest.executionPolicy,native);
 });
+
+for(const phase of ['worker','planner'])test(`pooled ${phase} rechecks execution settings after credential lookup and retains the spent request without POST`,async t=>{
+ const {createServer}=await import('node:http');const {readFileSync}=await import('node:fs');const {Worker}=await import('../src/harness/worker.mjs');const {ProviderRegistry}=await import('../src/harness/providers/registry.mjs');
+ const root=mkdtempSync(path.join(os.tmpdir(),'pb15-pooled-dispatch-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
+ const executable=path.join(root,'sandbox'),settingsFile=path.join(root,'settings.json'),settings={executionPolicy:codex,codexPath:executable};writeFileSync(executable,'never launched',{mode:0o700});writeFileSync(settingsFile,JSON.stringify(settings));
+ let c,posts=0,lookups=0,observed;
+ const server=createServer(async(req,res)=>{for await(const chunk of req){}posts++;const content=phase==='worker'?'Fixture answer':JSON.stringify({tasks:[{key:'answer',kind:'consult',objective:'Bounded answer',acceptance:['Clear'],dependsOn:[]}]});res.writeHead(200,{'content-type':'application/json'}).end(JSON.stringify({model:'fixture-worker-model',choices:[{message:{role:'assistant',content},finish_reason:'stop'}]}));});
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>{server.closeAllConnections();server.close(resolve);}));
+ const profile={schema:1,id:'worker',revision:'r1',displayName:'Fixture pooled worker',transport:'openai-chat',baseUrl:`http://127.0.0.1:${server.address().port}/v1`,model:'fixture-worker-model',roles:['worker'],capabilities:{workerProtocol:'mosaic-structured-v1',transports:['json'],modelDiscovery:'manual',taskKinds:['coding','consult']},maxContextTokens:32000,maxOutputTokens:2048,concurrency:1,capacityGroup:'fixture',credentialRef:'fixture-worker-key',streaming:false};
+ const providers=ProviderRegistry({profiles:[profile],credentialResolver:async()=>{lookups++;await new Promise(resolve=>setImmediate(resolve));const row=c.store.db.prepare("SELECT id,task_id,key,data FROM requests WHERE kind='model'").get();observed={...row,data:JSON.parse(row.data)};writeFileSync(settingsFile,JSON.stringify({...settings,executionPolicy:native}));return 'private-worker-token';}});
+ c=new Coordinator({root:path.join(root,'state'),selectedHost:'cursor',providerRegistry:providers,codexPath:executable,verifyCurrentWorker:()=>{if(digest(JSON.parse(readFileSync(settingsFile,'utf8')))!==digest(settings))throw Error('Disposable execution settings changed');}});t.after(()=>c.close());c.acquireWorker('owner');
+ const goal=c.preparePortableGoal({submissionId:'pooled-'+phase,objective:'Bounded pooled '+phase,acceptance:['Clear'],mode:phase==='worker'?'collaborative':'deepseek_only',environment:'fixture',executionPolicy:codex,providerPolicy:{version:1,workers:providers.snapshot([{id:'worker',revision:'r1'}]),plannerWorkerId:'worker',defaultWorkerId:'worker',maxConcurrentTasks:1,capacityGroups:[{id:'fixture',limit:1}]}},'prepare');c.activateGoal({goalId:goal.id,hash:goal.hash},'activate');
+ const worker=new Worker({c,owner:'owner',config:{environment:'fixture'}});let task;
+ if(phase==='worker'){task=c.submitTask({goalId:goal.id,submissionId:'answer',kind:'consult',actor:'deepseek',objective:'Fixture answer',acceptance:['Clear']},'task');const claimed=c.claimNext('owner');assert.equal(claimed.id,task.id);await worker.executeTask(claimed);}else await worker.planner.tick({goalId:goal.id});
+ assert.equal(posts,0);assert.equal(lookups,1);assert.ok(observed);const row=c.store.request(observed.task_id,observed.key);assert.equal(row.id,observed.id);assert.equal(row.status,'failed');assert.equal(row.requestOutcome,'not_dispatched');assert.deepEqual(row.providerBinding,observed.data.providerBinding);assert.equal(row.reservedAt,observed.data.reservedAt);assert.equal(c.store.spent(observed.task_id).model,1);
+ assert.equal(c.getGoal(goal.id).hash,goal.hash);assert.equal(c.store.all('review_ticket').length,0);assert.equal(c.store.all('task').length,phase==='worker'?1:0);
+ if(phase==='worker'){const saved=c.getTask(task.id);assert.equal(saved.id,task.id);assert.equal(saved.status,'blocked');assert.equal(saved.result,null);assert.equal(saved.reviews,0);}else{const saved=c.store.get('planning',goal.id);assert.equal(saved.status,'blocked');assert.equal(saved.attempt,1);}
+ writeFileSync(settingsFile,JSON.stringify(settings));if(phase==='worker')await worker.executeTask(c.getTask(task.id));else await worker.planner.tick({goalId:goal.id});
+ assert.equal(posts,0);assert.equal(lookups,1);assert.equal(c.store.db.prepare("SELECT count(*) AS n FROM requests WHERE kind='model'").get().n,1);assert.equal(c.store.request(observed.task_id,observed.key).id,observed.id);assert.equal(c.store.spent(observed.task_id).model,1);assert.equal(c.store.all('task').length,phase==='worker'?1:0);
+});
+
+test('current execution settings guard also precedes the historical no-worker-profile early return',t=>{
+ let changed=false;const f=fixture(t,{verifyCurrentWorker:()=>{if(changed)throw Error('Disposable execution settings changed');}}),goal=f.c.prepareGoal(legacy,'legacy-no-worker');changed=true;
+ assert.throws(()=>f.c.verifyWorkerBinding(goal),/execution settings changed/i);assert.equal(f.c.store.spent(goal.id).model??0,0);
+});

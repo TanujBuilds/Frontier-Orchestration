@@ -203,6 +203,7 @@ export class Coordinator {
  }
  providerBinding(goal,providerId){return manifestProviderBinding(goal.manifest,providerId);}
  verifyWorkerBinding(goal,taskOrBinding){
+  this.verifyCurrentWorker?.();
   assertExecutionAvailable(goal.manifest,this.executionConfig);
   assertRoutingApproval(goal);
   const task=taskOrBinding&&Object.hasOwn(taskOrBinding,'spec')?taskOrBinding:null;
@@ -228,7 +229,6 @@ export class Coordinator {
   }
   const approved=goal.manifest.workerProfile;
   if(!approved&&!this.beta)return;
-  this.verifyCurrentWorker?.();
   if(!approved||!this.workerProfile||digest(approved)!==digest(this.workerProfile))
    throw Error('Approved API worker profile changed. Prepare and approve a goal with the current worker profile.');
  }
