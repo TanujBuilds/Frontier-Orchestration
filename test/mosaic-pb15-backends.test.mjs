@@ -95,7 +95,7 @@ test('extracted Codex backend translates the same policy and executes a literal 
 test('unsupported backend IDs, backend objects and missing executables fail closed', async t => {
   const { createBackend } = await boundary();
   const { workspace, parent } = await fixture(t);
-  for (const id of ['unknown-backend', 'darwin-seatbelt', { id: 'codex-sandbox', verified: true }]) {
+  for (const id of ['unknown-backend', { id: 'codex-sandbox', verified: true }]) {
     assert.throws(() => createBackend({ id, workspace }), error => error.code === 'isolation');
     assert.throws(() => new CheckRunner(workspace, { backend: id }), error => error.code === 'isolation');
   }

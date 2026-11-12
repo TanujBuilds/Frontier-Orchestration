@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { Pause, relativePath, secretPath, matches } from '../contracts.mjs';
 import { createCodexSandboxBackend } from './codex-sandbox.mjs';
+import { createDarwinSeatbeltBackend } from './darwin-seatbelt.mjs';
 
 export const CHECK_BACKEND_REVISION = 1;
 
@@ -70,7 +71,7 @@ export function validateBackend(backend) {
 
 export function createBackend({ id = 'codex-sandbox', workspace, options = {} } = {}) {
   if (!workspace || !safePath(workspace.root) || !record(options)) throw isolation('Invalid sandbox backend configuration');
-  // darwin-seatbelt is reserved for the independently verified native backend.
+  if (id === 'darwin-seatbelt') return validateBackend(createDarwinSeatbeltBackend({ workspace, options }));
   // An unavailable selector must never fall through to an ordinary process.
   if (id !== 'codex-sandbox') throw isolation(`Unsupported check backend: ${typeof id === 'string' ? id : 'invalid selector'}`);
   return validateBackend(createCodexSandboxBackend({ workspace, options }));
