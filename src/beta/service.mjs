@@ -1,3 +1,4 @@
+import {normalizeExecutionPolicy,executionIdentity,assertExecutionAvailable} from '../harness/execution.mjs';
 import {hostRegistry,normalizeHostSettings} from './hosts/index.mjs';
 import {lstatSync,readFileSync} from 'node:fs';
 import {canonical} from '../harness/contracts.mjs';
@@ -40,11 +41,11 @@ function assertIdle(db) {
  const revision=db.prepare(`SELECT revision.id FROM records AS revision JOIN records AS goal
   ON goal.kind='goal' AND goal.id=json_extract(revision.data,'$.goalId')
   WHERE revision.kind='goal_revision' AND json_extract(revision.data,'$.status')='draft'
-   AND json_extract(revision.data,'$.manifest.workerProfile') IS NOT NULL
+
    AND json_extract(goal.data,'$.status') NOT IN ('completed','partial')
    AND json_extract(goal.data,'$.hash')=json_extract(revision.data,'$.previousHash')
    AND json_extract(goal.data,'$.deadline')>? LIMIT 1`).get(Date.now());
- if(revision)throw Error('A prepared worker-bound revision is still current. Stop and finalize its goal as partial in Codex, or supersede the revision, before maintenance.');
+ if(revision)throw Error('A prepared revision is still current. Stop and finalize its goal as partial in its host, or supersede the revision, before maintenance.');
  const guard=db.prepare(`SELECT kind FROM records WHERE
   (kind='goal' AND json_extract(data,'$.status') IN ('draft','active','paused')) OR
   (kind='task' AND (json_extract(data,'$.owner') IS NOT NULL OR json_extract(data,'$.native.writerActive')=1)) OR
@@ -52,7 +53,7 @@ function assertIdle(db) {
   (kind='reviewer' AND json_extract(data,'$.status')='reserved') OR
   (kind='planning' AND json_extract(data,'$.status') IN ('running','uncertain')) OR
   (kind='operation' AND json_extract(data,'$.status') IN ('pending','retryable')) LIMIT 1`).get();
- if(guard)throw Error('Mosaic Beta has prepared, active or unresolved work. Resolve it in Codex before maintenance.');
+ if(guard)throw Error('Mosaic Beta has prepared, active or unresolved work. Resolve it in its host before maintenance.');
 }
 
 export async function assertMaintenanceIdle(paths){
@@ -127,11 +128,14 @@ export async function rollbackLaunchAgent(paths,{existed,registered}){
  if(registered)await startLaunchAgent(paths);
 }
 
+export function configuredExecutionIdentity(settings){return canonical({executionPolicy:normalizeExecutionPolicy(settings.executionPolicy)??null,...(executionIdentity(settings).backend==='codex-sandbox'?{codexPath:settings.codexPath??'codex'}:{})});}
+
 export async function serveBeta(paths,settings){
  if(!settings)throw Error('Run mosaic setup before starting Mosaic Beta');
+ assertExecutionAvailable(settings,{codexPath:settings.codexPath});
  await privateDirectories(paths);
  process.umask(0o077);
- const expectedWorker=canonical(settings.worker??null);
+ const expectedWorker=canonical(settings.worker??null),expectedExecution=configuredExecutionIdentity(settings);
  const selectedHost=value=>value.host?normalizeHostSettings(value.host).id:value.codexPath?'codex':null;
  const expectedHost=selectedHost(settings);
  const verifyCurrentWorker=()=>{
@@ -139,10 +143,10 @@ export async function serveBeta(paths,settings){
    const info=lstatSync(paths.config);
    if(!info.isFile()||info.size>16384||info.mode&0o077)throw Error();
    const current=JSON.parse(readFileSync(paths.config,'utf8'));
-   if(canonical(current.worker??null)===expectedWorker&&selectedHost(current)===expectedHost)return;
+   if(canonical(current.worker??null)===expectedWorker&&selectedHost(current)===expectedHost&&configuredExecutionIdentity(current)===expectedExecution)return;
   }catch{}
-  throw Error('Configured API worker or host settings changed. Restart Mosaic Beta safely and obtain a new goal approval.');
+  throw Error('Configured API worker, host or execution backend settings changed. Restart Mosaic Beta safely and obtain a new goal approval.');
  };
  return serve({root:paths.state,port:0,headless:true,canStop:c=>assertIdle(c.store.db),verifyCurrentWorker,
-  runtimeConfig:{beta:true,hostId:settings.host?.id??(settings.codexPath?'codex':undefined),hostRegistry,codexPath:settings.codexPath,workerProfile:settings.worker?.profile,workerApiKey:settings.worker?.apiKey}});
+  runtimeConfig:{beta:true,hostId:settings.host?.id??(settings.codexPath?'codex':undefined),hostRegistry,codexPath:settings.codexPath,executionPolicy:settings.executionPolicy,workerProfile:settings.worker?.profile,workerApiKey:settings.worker?.apiKey}});
 }

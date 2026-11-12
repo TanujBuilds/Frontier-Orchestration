@@ -156,6 +156,7 @@ export class ReviewService {
   if(context.policy.source!=='api')throw Error('Approved review source is host; API fallback is prohibited');
   const profile=context.policy.reviewer,binding={version:1,providerId:profile.id,revision:profile.revision,profileHash:digest(profile),policyHash:context.g.manifest.reviewPolicyHash};
   if(!this.providers||digest(this.providers.get(profile.id,profile.revision))!==digest(profile)||typeof this.providers.createReviewer!=='function')throw Error('Configured reviewer identity unavailable');
+  c.verifyGoalBinding(context.g);
   const client=this.providers.createReviewer(binding);
   if(c.store.db.prepare("SELECT 1 FROM requests WHERE task_id=? AND kind='apiReview' AND status='reserved'").get(input.taskId))throw Error('An API review has uncertain ownership; no fallback dispatch');
   const capacityWait=inferenceWait(c,context.g,binding);if(capacityWait)return {waiting:true,...capacityWait};
@@ -165,6 +166,7 @@ export class ReviewService {
    reservation=this.#reserveContext(input,`api-ticket-${digest(key)}`,context);
    const t=c.getTask(input.taskId),{g,policy}=policyFor(c,t);
    if(policy.source!=='api'||g.hash!==context.g.hash)throw Error('API review approval changed');
+   c.verifyGoalBinding(g);
    const row={id:c.store.get('review_ticket',reservation.ticketId).requestId,taskId:t.id,key:requestKey,kind:'apiReview',status:'reserved',inputHash:digest(input),ticketId:reservation.ticketId,reviewerBinding:binding,reservedAt:c.now(),capacityResource,requestOutcome:'unknown'};
    c.store.db.prepare('INSERT INTO requests VALUES(?,?,?,?,?,?)').run(row.id,t.id,row.key,row.kind,row.status,JSON.stringify({runKey:key,inputHash:row.inputHash,ticketId:row.ticketId,reviewerBinding:binding,reservedAt:row.reservedAt,capacityResource,requestOutcome:'unknown'}));return row;
   });

@@ -1,3 +1,4 @@
+import {normalizeExecutionPolicy,assertExecutionAvailable,assertExecutionConfiguration} from './execution.mjs';
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -70,13 +71,14 @@ function savedFailedGate(c,t,g){
  return verified.candidateId===gate.candidateId&&verified.failureId===gate.failureId&&verified.signature===gate.signature;
 }
 export class Coordinator {
- constructor({root,now=Date.now,registry=new Registry(),beta=false,workerProfile,verifyCurrentWorker,providerRegistry,selectedHost,hostRegistry,serviceMaxConcurrentTasks}={}){
+ constructor({root,now=Date.now,registry=new Registry(),beta=false,workerProfile,verifyCurrentWorker,providerRegistry,selectedHost,hostRegistry,serviceMaxConcurrentTasks,executionPolicy,codexPath}={}){
   if(providerRegistry&&!['get','snapshot','createClient'].every(method=>typeof providerRegistry[method]==='function'))throw Error('A normalized provider registry is required');
   this.providerRegistry=providerRegistry??null;
   this.selectedHost=typeof selectedHost==='string'?selectedHost:selectedHost?.id??null;if(this.selectedHost&&!HOST_IDS.includes(this.selectedHost))throw Error('Unsupported selected host');this.hostRegistry=hostRegistry??null;
   this.beta=beta;this.verifyCurrentWorker=verifyCurrentWorker;this.workerProfile=workerProfile?normalizeWorkerProfile(workerProfile):null;
+  this.executionPolicy=normalizeExecutionPolicy(executionPolicy);this.executionConfig={codexPath};
   this.store=new Store(root);this.now=now;this.registry=registry;
-  try{this.serviceMaxConcurrentTasks=this.store.tx(()=>configureServiceCapacity(this,serviceMaxConcurrentTasks));}catch(error){this.store.close();throw error;}
+  try{assertExecutionConfiguration(this);this.serviceMaxConcurrentTasks=this.store.tx(()=>configureServiceCapacity(this,serviceMaxConcurrentTasks));}catch(error){this.store.close();throw error;}
   for(const record of this.store.all('mode')){const m=record.definition??record;if(!this.registry.modes.has(`${m.id}@${m.version}`))this.registry.registerMode(m);}
   for(const record of this.store.all('workflow')){const w=record.definition??record;if(!this.registry.workflows.has(`${w.id}@${w.version}`))this.registry.registerWorkflow(w);}
   this.learning=new Learning({c:this});this.reviewService=new ReviewService({c:this,providers:this.providerRegistry,hostRegistry:this.hostRegistry});
@@ -183,7 +185,7 @@ export class Coordinator {
   return raw;
  }
  preparePortableGoal(raw,key){return this.prepareGoal(raw,key,{portable:true});}
- prepareLegacyGoal(raw,key){if(this.beta||raw.providerPolicy||raw.reviewPolicy||raw.routingPolicy)throw Error('Legacy preparation cannot select portable policy');return this.prepareGoal(raw,key,{legacy:true});}
+ prepareLegacyGoal(raw,key){if(this.beta||raw.providerPolicy||raw.reviewPolicy||raw.routingPolicy||raw.executionPolicy)throw Error('Legacy preparation cannot select portable policy');return this.prepareGoal(raw,key,{legacy:true});}
  goalManifest(raw,providerRegistry=this.providerRegistry,{historic=false}={}){
   if(!historic)raw=this.reviewPreparation(raw);
   if(!this.beta)return normalizeGoal(raw,this.registry,providerRegistry);
@@ -201,6 +203,7 @@ export class Coordinator {
  }
  providerBinding(goal,providerId){return manifestProviderBinding(goal.manifest,providerId);}
  verifyWorkerBinding(goal,taskOrBinding){
+  assertExecutionAvailable(goal.manifest,this.executionConfig);
   assertRoutingApproval(goal);
   const task=taskOrBinding&&Object.hasOwn(taskOrBinding,'spec')?taskOrBinding:null;
   // A routed task cannot fall through to legacy transport if approval fields
@@ -230,6 +233,7 @@ export class Coordinator {
    throw Error('Approved API worker profile changed. Prepare and approve a goal with the current worker profile.');
  }
  verifyGoalBinding(goal){
+  this.verifyCurrentWorker?.();assertExecutionAvailable(goal.manifest,this.executionConfig);
   if(goal.manifest.mode.actors.includes('deepseek'))this.verifyWorkerBinding(goal);
   if(goal.manifest.reviewPolicy){const policy=normalizeReviewPolicy(goal.manifest.reviewPolicy);if(digest(policy)!==goal.manifest.reviewPolicyHash)throw Error('Approved review policy changed');if(policy.source==='api'&&(!this.providerRegistry||digest(this.providerRegistry.get(policy.reviewer.id,policy.reviewer.revision))!==digest(policy.reviewer)))throw Error('Approved reviewer identity changed');}
  }
@@ -243,11 +247,12 @@ export class Coordinator {
     const profile=approved.providerPolicy?.workers.find(worker=>worker.id===id&&worker.revision===revision)??(approved.reviewPolicy?.reviewer?.id===id&&approved.reviewPolicy.reviewer.revision===revision?approved.reviewPolicy.reviewer:null);
     if(!profile)throw Error('Saved provider revision differs');return structuredClone(profile);
    }});
-   const replayRaw=raw.reviewPolicy===undefined&&approved.reviewPolicy?{...raw,reviewPolicy:approved.reviewPolicy}:raw;
+   let replayRaw=raw.reviewPolicy===undefined&&approved.reviewPolicy?{...raw,reviewPolicy:approved.reviewPolicy}:raw;
+   if(raw.executionPolicy===undefined&&approved.executionPolicy)replayRaw={...replayRaw,executionPolicy:approved.executionPolicy};
    let manifest;try{manifest=this.goalManifest(replayRaw,catalog,{historic:true});}catch{throw Error('Idempotency key conflict');}
    return this.store.command(key,{op:'goal.prepare',manifest},()=>{throw Error('Saved preparation command is unavailable');});
   }
-  if(!legacy)raw=this.reviewPreparation(raw,{portable});
+  if(!legacy){raw=this.reviewPreparation(raw,{portable});if(raw.executionPolicy===undefined&&this.executionPolicy)raw={...raw,executionPolicy:this.executionPolicy};}
   const manifest=legacy?normalizeGoal(raw,this.registry,this.providerRegistry):this.goalManifest(raw);return this.store.command(key,{op:'goal.prepare',manifest},()=>{
   assertCapacityConfiguration(this,manifest);
   const g=this.store.submission('goal','',manifest.submissionId,digest(manifest),id=>({id,manifest,hash:digest(manifest),version:1,status:'draft',createdAt:this.now(),activatedAt:null,deadline:null}));

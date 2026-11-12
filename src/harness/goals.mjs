@@ -7,6 +7,7 @@ import {taskRoutingManifest} from './routing/runtime.mjs';
 
 function quiescent(c,goalId){return !c.store.db.prepare("SELECT 1 FROM requests r JOIN records t ON t.kind='task' AND t.id=r.task_id WHERE r.kind='apiReview' AND r.status='reserved' AND json_extract(t.data,'$.goalId')=?").get(goalId)&&!c.store.get('goal',goalId).integrationOwner&&!c.store.get('goal',goalId).integrationPending&&!c.store.all('task').some(t=>t.goalId===goalId&&(t.owner||t.native?.writerActive||t.executionActor==='codex'&&['paused','stopped'].includes(t.status)||['codex_active','legacy_reviewing'].includes(t.status)))&&!['running','uncertain'].includes(c.store.maybe('planning',goalId)?.status);}
 function assertWorkerUnchanged(g,manifest){
+ if(digest(g.manifest.executionPolicy??null)!==digest(manifest.executionPolicy??null))throw Error('An existing goal retains its execution backend policy. Prepare a new goal to select another backend.');
  if(g.activatedAt!=null&&digest(g.manifest.workerProfile??null)!==digest(manifest.workerProfile??null))
   throw Error('An approved goal retains its worker profile. Prepare and approve a new goal to select a different worker.');
 }

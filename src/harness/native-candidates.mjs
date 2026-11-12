@@ -1,3 +1,4 @@
+import {executionFields,assertExecutionAvailable} from './execution.mjs';
 import path from 'node:path';
 import { lstat } from 'node:fs/promises';
 import { Agents } from './agents.mjs';
@@ -15,7 +16,9 @@ export class NativeCandidates {
  async open(task){
   if(task.native?.layout!=='candidate_v1')throw Error('Native candidate layout required');
   const journal=await new Journal(path.join(this.c.store.root,'native-candidates'),task.native.generationId??task.id).load();
-  const manifest=task.native.manifest,workspace=new Workspace(manifest,journal);
+  const manifest=task.native.manifest;
+  if(digest(executionFields(manifest))!==digest(executionFields(this.c.store.get('goal',task.goalId).manifest)))throw Error('Native workspace execution backend differs from approved goal');
+  const workspace=new Workspace(manifest,journal);
   // A distinct branch also prevents collision with this task's original coding journal.
   workspace.branch=`orchestrator/native-${task.id}${(task.native.generation??1)>1?`-g${task.native.generation}`:''}`;
   return {journal,workspace,manifest};
@@ -23,7 +26,7 @@ export class NativeCandidates {
  async start(taskId,extra={},registration=null){
   this.i.signal?.throwIfAborted();
   let t=this.c.getTask(taskId),g=this.c.store.get('goal',t.goalId);
-  this.c.liveTask(t,{allowStopped:!!extra.takeoverReason});
+  this.c.liveTask(t,{allowStopped:!!extra.takeoverReason});this.c.verifyCurrentWorker?.();assertExecutionAvailable(g.manifest,this.i.config);
   if(!g.manifest.mode.actors.includes('codex')||t.spec.kind!=='coding')throw Error('Mode prohibits native Codex execution');
   if(t.native&&t.native.layout!=='candidate_v1')throw Error('Existing native layout cannot be changed');
   if(t.owner||!['codex_ready','codex_active','stopped','blocked'].includes(t.status))throw Error('Worker must be quiescent before native execution');
@@ -46,11 +49,11 @@ export class NativeCandidates {
    const scopeWait=writeScopeWait({task:current,goal:g,snapshot:capacitySnapshot(this.c)});if(scopeWait)throw Error(scopeWait.explanation);
    if(current.owner||digest({status:current.status,goalVersion:current.goalVersion,hash:current.hash,native:current.native??null})!==fence)throw Error('Native start state changed before writer reservation');
    if(!current.native){
-    const p=g.manifest.project,manifest={repo:p.repo,baseCommit:base,permissions:{readPaths:current.spec.permissions.readPaths,writePaths:current.spec.permissions.writePaths,checks:p.checks.filter(x=>current.spec.permissions.checks.includes(x.id))}};
+    const p=g.manifest.project,manifest={...executionFields(g.manifest),repo:p.repo,baseCommit:base,permissions:{readPaths:current.spec.permissions.readPaths,writePaths:current.spec.permissions.writePaths,checks:p.checks.filter(x=>current.spec.permissions.checks.includes(x.id))}};
     current.native={layout:'candidate_v1',agentId,generation:1,generationId:t.id,baseCommit:base,manifest,round:1,status:'starting',writerActive:true,...extra};
    }else if(current.native.needsGeneration){
     const intent=current.native.needsGeneration;if(intent.goalVersion!==g.version)throw Error('Native generation approval changed');
-    current.native={layout:'candidate_v1',agentId,generation:intent.number,generationId:intent.id,baseCommit:base,manifest:{repo:g.manifest.project.repo,baseCommit:base,permissions:intent.permissions},round:current.native.round+1,status:'starting',writerActive:true,transfer:{...intent,baseCommit:base},workerWorktree:current.native.workerWorktree??null,workerSnapshot:current.native.workerSnapshot??null,workerManifest:current.native.workerManifest??null,workerJournalRoot:current.native.workerJournalRoot??null};
+    current.native={layout:'candidate_v1',agentId,generation:intent.number,generationId:intent.id,baseCommit:base,manifest:{...executionFields(g.manifest),repo:g.manifest.project.repo,baseCommit:base,permissions:intent.permissions},round:current.native.round+1,status:'starting',writerActive:true,transfer:{...intent,baseCommit:base},workerWorktree:current.native.workerWorktree??null,workerSnapshot:current.native.workerSnapshot??null,workerManifest:current.native.workerManifest??null,workerJournalRoot:current.native.workerJournalRoot??null};
    }else if(current.native.status==='generation_blocked'){
     current.native.status='starting';current.native.writerActive=true;
    }else if(current.status==='codex_ready'){

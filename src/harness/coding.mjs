@@ -4,7 +4,7 @@ import {isOvernightV2,effectiveIntegrationChecks,infrastructureCheckFailure} fro
 import {parseOvernightReply,overnightSystem} from './overnight-protocol.mjs';
 import { Journal } from '../project/journal.mjs';
 import { Workspace } from '../project/workspace.mjs';
-import { CheckRunner } from '../project/sandbox.mjs';
+import {approvedChecks,executionFields} from './execution.mjs';
 import { validateReply, AttemptError, matches, secretPath } from '../project/contracts.mjs';
 import { keys,digest } from './contracts.mjs';
 import {readBehavioralFileModes,behavioralModeHash} from './behavioral-validation.mjs';
@@ -94,7 +94,8 @@ export class CodingAdapter {
   const journal=await new Journal(root,task.id).load();
   const permissions=codingPermissions(c,task,g);
   let manifest=journal.last('harness.manifest');
-  if(!manifest){manifest={repo:g.manifest.project.repo,baseCommit:task.checkpoint.executionBase??g.manifest.project.baseCommit,permissions,...(isOvernightV2(g.manifest)?{overnightV2:true}:{})};await journal.append('harness.manifest',manifest);}
+  if(!manifest){manifest={...executionFields(g.manifest),repo:g.manifest.project.repo,baseCommit:task.checkpoint.executionBase??g.manifest.project.baseCommit,permissions,...(isOvernightV2(g.manifest)?{overnightV2:true}:{})};await journal.append('harness.manifest',manifest);}
+  else if(digest(executionFields(manifest))!==digest(executionFields(g.manifest)))throw Error('Saved coding workspace execution backend differs from approved goal');
   else if(digest(manifest.permissions)!==digest(permissions)){
    if(!task.history?.some(h=>h.goalVersion<task.goalVersion))throw Error('Approved scope version transition required');
    manifest={...manifest,permissions};await journal.append('harness.manifest',manifest);
@@ -125,6 +126,7 @@ export class CodingAdapter {
   });
  }
  async step(task,owner){
+  this.worker.c.verifyCurrentWorker?.();
   const {c}=this.worker,g=c.store.get('goal',task.goalId),v2=isOvernightV2(g.manifest),policy=c.store.get('goal',task.goalId).manifest.overnightPolicy,{journal,workspace,manifest}=await this.open(task),release=await journal.lock();
   let cp={...task.checkpoint},phase=cp.phase??'attempt',modelDispatch=false;
   try{
@@ -132,7 +134,7 @@ export class CodingAdapter {
    cp=recovered.checkpoint;phase=recovered.phase;
    await workspace.initialize();await workspace.recover();
    if(phase==='no_progress')return this.stopNoProgress(task,owner);
-   const checks=this.worker.checksFactory?.(workspace)??new CheckRunner(workspace,{codex:this.worker.config.codexPath??'codex'});
+   const checks=approvedChecks(workspace,{checksFactory:this.worker.checksFactory,config:this.worker.config});
    if(!journal.events.some(e=>e.type==='harness.sandbox'&&e.data.permissionsHash===permissionsHash)){const probe=await checks.verify(this.worker.shutdown?.signal);await journal.append('harness.sandbox',{...probe,permissionsHash});}
    if(v2&&!journal.last('harness.stage_preflight')){const ids=c.store.get('goal',task.goalId).manifest.overnightPolicy.preflightCheckIds;const results=await checks.run(manifest.permissions.checks.filter(check=>ids.includes(check.id)),'stage-preflight',this.worker.shutdown?.signal);await journal.append('harness.stage_preflight',{results});if(!results.every(r=>r.passed))throw Error('Stage infrastructure preflight failed under exact stage read policy; correct approved input scope before spending');}
    if(v2&&journal.last('harness.stage_preflight')?.results.some(r=>!r.passed))throw Error('Saved stage infrastructure preflight failed; inspect scope');

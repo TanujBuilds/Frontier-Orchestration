@@ -6,7 +6,7 @@ import { repairIntegration,assertPendingRepair } from './integration-repair.mjs'
 import { NativeCandidates } from './native-candidates.mjs';
 import { Journal } from '../project/journal.mjs';
 import { Workspace,inspectRepository } from '../project/workspace.mjs';
-import { CheckRunner } from '../project/sandbox.mjs';
+import {approvedChecks,executionFields} from './execution.mjs';
 import { matches,protectedPath,secretPath,digest as fileDigest } from '../project/contracts.mjs';
 import { git } from '../project/process.mjs';
 import { CodingAdapter } from './coding.mjs';
@@ -130,7 +130,7 @@ export class Integration {
   const journal=lockedJournal??await this.integrationJournal(g),p=g.manifest.project;
   const shared=journal.id!==g.id,origin=journal.last('integration.repository');
   if(shared&&origin&&(origin.baseCommit!==p.baseCommit||origin.repository!==canonicalRepository(p.repo)))throw Error('Incompatible approved repository base; preserve candidate for a separately approved integration');
-  const manifest={repo:p.repo,baseCommit:p.baseCommit,permissions:p,...(isOvernightV2(g.manifest)?{overnightV2:true}:{})};
+  const manifest={...executionFields(g.manifest),repo:p.repo,baseCommit:p.baseCommit,permissions:p,...(isOvernightV2(g.manifest)?{overnightV2:true}:{})};
   if(!repairPin&&!journal.last('workspace.created')){const inspected=await inspectRepository(p.repo,p);if(inspected.baseCommit!==p.baseCommit)throw Error('Approved source revision changed');}
   const workspace=new Workspace(manifest,journal);
   if(repairPin){
@@ -145,7 +145,7 @@ export class Integration {
   this.c.store.tx(()=>{const current=repairPin?assertPendingRepair(this,repairPin).goal:this.assertPreparationGoal(g,{live:!native||!g.integration});validatePrior?.();if(!current.integration){current.integration={worktree:workspace.root,branch:workspace.branch,baseCommit:p.baseCommit,...(shared?{journalId:journal.id}: {})};this.c.store.put('goal',current);}});
   return {journal,workspace,g:this.c.store.get('goal',goalId),shared};
  }
- checks(workspace){return this.checksFactory?.(workspace)??new CheckRunner(workspace,{codex:this.config.codexPath??'codex'});}
+ checks(workspace){this.c.verifyCurrentWorker?.();return approvedChecks(workspace,{checksFactory:this.checksFactory,config:this.config});}
  async lockedGoal(goalId,{native=false,refuseLegacy=false,integrationTaskId=null,repairPin}={}){
   if(repairPin){if(repairPin.goal.id!==goalId||repairPin.task.id!==integrationTaskId)throw Error('Pending repair target mismatch');assertPendingRepair(this,repairPin);}
   const g=this.c.store.get('goal',goalId),repository=canonicalRepository(g.manifest.project.repo);
@@ -203,7 +203,7 @@ export class Integration {
     if(journal.tail||journal.events.some(e=>e.type==='edits.intent'&&!journal.events.some(done=>done.type==='edits.applied'&&done.data.key===e.data.key)))throw Error('Prior integration journal remains uncertain; preserve pending recovery');
     try{const lock=JSON.parse(await readFile(path.join(journal.dir,'lock.json'),'utf8'));if(!Number.isInteger(lock.pid)||lock.pid<=0||typeof lock.token!=='string'||!lock.token)throw Error('Prior integration lock is uncertain');try{process.kill(lock.pid,0);throw Error('Prior integration writer still owns its journal');}catch(error){if(error.code!=='ESRCH')throw error;}}
     catch(error){if(error.code!=='ENOENT')throw error;}
-    const workspace=new Workspace({repo:prior.manifest.project.repo,baseCommit:prior.manifest.project.baseCommit,permissions:prior.manifest.project},journal),checkpoint=journal.last('stage.accepted')??{commit:prior.manifest.project.baseCommit,snapshot:journal.last('workspace.created')?.snapshot};
+    const workspace=new Workspace({...executionFields(prior.manifest),repo:prior.manifest.project.repo,baseCommit:prior.manifest.project.baseCommit,permissions:prior.manifest.project},journal),checkpoint=journal.last('stage.accepted')??{commit:prior.manifest.project.baseCommit,snapshot:journal.last('workspace.created')?.snapshot};
     if(workspace.root!==prior.integration.worktree||!checkpoint.snapshot||await git(workspace.root,'rev-parse','HEAD')!==checkpoint.commit)throw Error('Prior accepted integration head changed; preserve prior journal');
     const sealed=prior.integrationSealed;
     if(sealed){

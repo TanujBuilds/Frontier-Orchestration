@@ -1,3 +1,4 @@
+import {normalizeExecutionPolicy,assertExecutionAvailable} from '../harness/execution.mjs';
 import {execFile} from 'node:child_process';
 import {access,mkdir,readdir,realpath,rm,rmdir} from 'node:fs/promises';
 import {constants} from 'node:fs';
@@ -125,6 +126,7 @@ export async function readSettings(paths){
  await localDirectory(paths,paths.configDir,{create:false});
  const value=await jsonFile(paths.config,{privateFile:true,max:16384});
  if(!value)return null;
+ if(value.executionPolicy!==undefined)value.executionPolicy=normalizeExecutionPolicy(value.executionPolicy);
  if(value.host!==undefined)value.host=normalizeHostSettings(value.host);
  if(value.schema!==1||value.codexPath!==undefined&&(typeof value.codexPath!=='string'||!path.isAbsolute(value.codexPath))||!value.codexPath&&(!value.host||value.host.id==='codex'))throw Error('Invalid Mosaic Beta configuration. Run mosaic setup.');
  if(value.worker){
@@ -344,6 +346,8 @@ export async function doctor(paths,output=process.stdout){
  }catch{check('Setup',false,'Cannot read the private beta binding receipt. Inspect the beta settings directory.');}
  check('Installation',!!await entry(paths.launcher),'Expected launcher '+paths.launcher);
  if(!checks.some(item=>item.name==='Settings'))check('Settings',!!settings,settings?'Private setup saved.':'Run mosaic setup.');
+ const selectedHost=settings?.host?.id??'codex';
+ if(selectedHost==='codex'){
  const codex=await findCodex(paths,settings?.codexPath);
  check('Codex CLI',!!codex,codex??'Install the Codex CLI, then run codex login.');
  if(codex){
@@ -357,6 +361,11 @@ export async function doctor(paths,output=process.stdout){
    const own=expectedRegistration(server,paths)&&ownership?.mcpHash===fingerprint(server);
    check(checkName,own,own?(paths.isolated?'Fixture registration points to this launcher; host registration and sign-in are outside this check.':'mosaic-beta points to this launcher.'):'Run mosaic setup or inspect a conflicting mosaic-beta entry.');
   }catch{check(checkName,false,paths.isolated?'Cannot read fixture registration. Run mosaic setup.':'Cannot read registration. Check codex mcp list.');}
+ }
+ }else check('Host',true,getHost(selectedHost).displayName+' selected; inspect its Mosaic MCP connection in the host.');
+ if(settings&&(selectedHost!=='codex'||settings.executionPolicy)){
+  try{assertExecutionAvailable({...settings,executionPolicy:settings.executionPolicy??{version:1,backend:'codex-sandbox',backendRevision:1}},{codexPath:settings.codexPath});check('Protected checks',true,'Configured backend prerequisites found; actual enforcement probe is required before work.');}
+  catch(error){check('Protected checks',false,error.message);}
  }
  try{await client(paths,{viewer:true})('tools_list');check('Coordinator',true,'Authenticated viewer connection ready.');}
  catch{check('Coordinator',false,paths.isolated?'Start the isolated instance with mosaic serve.':'Run mosaic setup to repair the LaunchAgent.');}
@@ -375,7 +384,7 @@ export async function doctor(paths,output=process.stdout){
     'Could not confirm the required model through discovery. Check the endpoint and bearer key.':
     unsupported?'Discovery is unsupported. The model is configured manually.':'Model discovery failed. Check the endpoint and bearer key.')+untested);
   }
- }else check('API worker',true,'Codex only.');
+ }else check('API worker',true,selectedHost==='codex'?'Codex only.':'No API worker configured.');
  for(const {name,ok,detail} of checks)output.write(`${ok?'OK':'CHECK'}  ${name} · ${detail}\n`);
  return checks.every(item=>item.ok);
 }
