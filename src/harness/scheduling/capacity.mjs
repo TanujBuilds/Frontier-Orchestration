@@ -1,3 +1,4 @@
+import {executionHolds} from '../execution-ownership.mjs';
 import {realpathSync,readFileSync,statSync,lstatSync,readdirSync} from 'node:fs';
 import path from 'node:path';
 import {digest} from '../contracts.mjs';
@@ -24,6 +25,7 @@ export const sharedBaseJournalId=(goal,generation)=>uuidHash({layout:'repository
 // or changes the old approval. Drafts may lack physical baseline ownership, but
 // remain prepared capacity policy unless the caller explicitly opts in here.
 export function inertUnstartedGoal(c,goal,{allowDraft=false}={}){
+ if(executionHolds(c,{goalId:goal?.id}).length)return false;
  if(!goal||terminalGoals.has(goal.status)||digest(goal.manifest)!==goal.hash)return false;
  const draft=allowDraft&&goal.status==='draft'&&goal.activatedAt==null,expired=goal.activatedAt!=null&&Number.isFinite(goal.deadline)&&goal.deadline<=c.now();
  if(!draft&&!expired||goal.integration||goal.integrationSealed||goal.integrationOwner||goal.integrationPending)return false;
@@ -66,7 +68,7 @@ export function scopesOverlap(a,b){
 }
 function profiles(goal){return [...(goal.manifest.providerPolicy?.workers??[]),...(goal.manifest.reviewPolicy?.reviewer?[goal.manifest.reviewPolicy.reviewer]:[])];}
 const executableRevision=(c,r)=>r.status==='draft'&&!terminalGoals.has(c.store.maybe('goal',r.goalId)?.status)&&!inertUnstartedGoal(c,c.store.maybe('goal',r.goalId));
-export function hasPreparedWork(c){return c.store.all('goal_revision').some(r=>executableRevision(c,r))||c.store.all('goal').some(g=>!terminalGoals.has(g.status)&&!inertUnstartedGoal(c,g))||c.store.db.prepare('SELECT 1 FROM requests WHERE '+heldRequest).get()!==undefined;}
+export function hasPreparedWork(c){return executionHolds(c).length>0||c.store.all('goal_revision').some(r=>executableRevision(c,r))||c.store.all('goal').some(g=>!terminalGoals.has(g.status)&&!inertUnstartedGoal(c,g))||c.store.db.prepare('SELECT 1 FROM requests WHERE '+heldRequest).get()!==undefined;}
 export function configureServiceCapacity(c,requested){
  if(requested!==undefined&&(!Number.isSafeInteger(requested)||requested<1||requested>4))throw Error('Invalid service maximum concurrent tasks');
  const saved=c.store.maybe('capacity_config','service'),limit=requested??saved?.limit??1;
@@ -138,22 +140,24 @@ export function capacitySnapshot(c){
   const data=requestData(row.data);
   return {...data,...row,resource:requestResource(data,row,approvals,tasks)};
  });
- return {serviceLimit:c.store.maybe('capacity_config','service')?.limit??c.serviceMaxConcurrentTasks??1,autonomousParallelBusy:c.autonomousParallelBusy===true,activeTasks:tasks.filter(t=>slots.has(t.status)&&t.spec.actor==='deepseek'&&t.executionActor!=='codex'),tasks,goals,planning:c.store.all('planning').filter(p=>['running','uncertain'].includes(p.status)),requests};
+ return {executionOwners:executionHolds(c),serviceLimit:c.store.maybe('capacity_config','service')?.limit??c.serviceMaxConcurrentTasks??1,autonomousParallelBusy:c.autonomousParallelBusy===true,activeTasks:tasks.filter(t=>slots.has(t.status)&&t.spec.actor==='deepseek'&&t.executionActor!=='codex'),tasks,goals,planning:c.store.all('planning').filter(p=>['running','uncertain'].includes(p.status)),requests};
 }
 export function canClaim({task,goal,route,snapshot}){
- const active=snapshot.activeTasks,policy=goal.manifest.providerPolicy;
+ const active=snapshot.activeTasks,policy=goal.manifest.providerPolicy,extra=(snapshot.executionOwners??[]).filter(owner=>!active.some(t=>t.id===owner.taskId));
+ if(extra.some(owner=>owner.goalId===goal.id&&(!owner.taskId||owner.taskId===task.id)))return {allowed:false,reasonCode:'execution_ownership_held',explanation:'Native execution requires exact quiescence before reuse'};
  if(!policy&&snapshot.autonomousParallelBusy)return {allowed:false,reasonCode:'legacy_global_slot',explanation:'Historical work waits for parallel process lanes to settle'};
  if(!policy||active.some(t=>!snapshot.goals.find(g=>g.id===t.goalId)?.manifest.providerPolicy)||snapshot.planning.some(p=>!snapshot.goals.find(g=>g.id===p.goalId)?.manifest.providerPolicy)){
   if(active.length||snapshot.planning.length)return {allowed:false,reasonCode:'legacy_global_slot',explanation:'Historical work retains its single global autonomous slot'};
  }
- if(active.length>=snapshot.serviceLimit)return {allowed:false,reasonCode:'service_task_capacity',explanation:'Private service task capacity is occupied'};
- if(active.filter(t=>t.goalId===goal.id).length>=(policy?.maxConcurrentTasks??1))return {allowed:false,reasonCode:'goal_task_capacity',explanation:'Approved goal task capacity is occupied'};
+ if(active.length+extra.length>=snapshot.serviceLimit)return {allowed:false,reasonCode:'service_task_capacity',explanation:'Private service task capacity is occupied'};
+ if(active.filter(t=>t.goalId===goal.id).length+extra.filter(owner=>owner.goalId===goal.id).length>=(policy?.maxConcurrentTasks??1))return {allowed:false,reasonCode:'goal_task_capacity',explanation:'Approved goal task capacity is occupied'};
  const scopeWait=writeScopeWait({task,goal,snapshot});if(scopeWait)return scopeWait;
  return {allowed:true,reasonCode:'capacity_available',explanation:'Task runner capacity available'};
 }
 export function writeScopeWait({task,goal,snapshot}){
  if(task.spec.kind==='coding'&&goal.manifest.project){
   const repo=canonicalRepository(goal.manifest.project.repo);
+  for(const owner of snapshot.executionOwners??[])if(owner.repository&&canonicalRepository(owner.repository)===repo&&scopesOverlap(task.spec.permissions?.writePaths,owner.writePaths))return {allowed:false,reasonCode:'execution_scope_held',explanation:'Native execution retains overlapping or ambiguous write scope until quiescence'};
   for(const other of snapshot.tasks){
    const otherGoal=snapshot.goals.find(g=>g.id===other.goalId),writer=other.native?.writerActive||other.status==='codex_active'||otherGoal?.integrationOwner===other.id;
    if(other.id===task.id||other.spec.kind!=='coding'||(!other.startedAt&&!other.owner&&!writer)||!writer&&['accepted','cancelled','failed','partial'].includes(other.status))continue;

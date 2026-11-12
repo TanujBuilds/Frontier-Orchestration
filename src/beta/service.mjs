@@ -52,7 +52,8 @@ function assertIdle(db) {
   (kind='task' AND json_extract(data,'$.status')='legacy_reviewing') OR
   (kind='reviewer' AND json_extract(data,'$.status')='reserved') OR
   (kind='planning' AND json_extract(data,'$.status') IN ('running','uncertain')) OR
-  (kind='operation' AND json_extract(data,'$.status') IN ('pending','retryable')) LIMIT 1`).get();
+  (kind='execution_owner' AND json_extract(data,'$.status')!='quiescent') OR
+  (kind='operation' AND json_extract(data,'$.status') IN ('pending','retryable','uncertain')) LIMIT 1`).get();
  if(guard)throw Error('Mosaic Beta has prepared, active or unresolved work. Resolve it in its host before maintenance.');
 }
 
@@ -128,11 +129,11 @@ export async function rollbackLaunchAgent(paths,{existed,registered}){
  if(registered)await startLaunchAgent(paths);
 }
 
-export function configuredExecutionIdentity(settings){return canonical({executionPolicy:normalizeExecutionPolicy(settings.executionPolicy)??null,...(executionIdentity(settings).backend==='codex-sandbox'?{codexPath:settings.codexPath??'codex'}:{})});}
+export function configuredExecutionIdentity(settings){return canonical({executionPolicy:normalizeExecutionPolicy(settings.executionPolicy)??null,...(settings.nativeCheckRuntime?{nativeCheckRuntime:settings.nativeCheckRuntime}:{}),...(executionIdentity(settings).backend==='codex-sandbox'?{codexPath:settings.codexPath??'codex'}:{})});}
 
 export async function serveBeta(paths,settings){
  if(!settings)throw Error('Run mosaic setup before starting Mosaic Beta');
- assertExecutionAvailable(settings,{codexPath:settings.codexPath});
+ assertExecutionAvailable(settings,{codexPath:settings.codexPath,nativeCheckRuntime:settings.nativeCheckRuntime});
  await privateDirectories(paths);
  process.umask(0o077);
  const expectedWorker=canonical(settings.worker??null),expectedExecution=configuredExecutionIdentity(settings);
@@ -148,5 +149,5 @@ export async function serveBeta(paths,settings){
   throw Error('Configured API worker, host or execution backend settings changed. Restart Mosaic Beta safely and obtain a new goal approval.');
  };
  return serve({root:paths.state,port:0,headless:true,canStop:c=>assertIdle(c.store.db),verifyCurrentWorker,
-  runtimeConfig:{beta:true,hostId:settings.host?.id??(settings.codexPath?'codex':undefined),hostRegistry,codexPath:settings.codexPath,executionPolicy:settings.executionPolicy,workerProfile:settings.worker?.profile,workerApiKey:settings.worker?.apiKey}});
+  runtimeConfig:{beta:true,hostId:settings.host?.id??(settings.codexPath?'codex':undefined),hostRegistry,codexPath:settings.codexPath,nativeCheckRuntime:settings.nativeCheckRuntime,executionPolicy:settings.executionPolicy,workerProfile:settings.worker?.profile,workerApiKey:settings.worker?.apiKey}});
 }

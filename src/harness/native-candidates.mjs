@@ -1,3 +1,4 @@
+import {executionHolds} from './execution-ownership.mjs';
 import {executionFields,assertExecutionAvailable} from './execution.mjs';
 import path from 'node:path';
 import { lstat } from 'node:fs/promises';
@@ -92,7 +93,7 @@ export class NativeCandidates {
    const saved=target.journal.last('generation.source');if(saved&&(digest(saved.sourceSnapshot)!==digest(snapshot)||saved.head!==head))throw Error('Frozen generation source changed');
    if(!saved)await target.journal.append('generation.source',{taskId:t.id,sourceGeneration:archived.native.generation??1,head,sourceSnapshot:snapshot,changes});
    await this.i.applyChanges(target.workspace,changes,'generation-transfer',t.spec.permissions.writePaths);
-   const sandbox=await this.i.checks(target.workspace).verify(this.i.signal);
+   const sandbox=await this.i.checks(target.workspace,{goalId:t.goalId,taskId:t.id,operationKey:'native-transfer:'+t.id}).verify(this.i.signal);
    this.i.signal?.throwIfAborted();
    await target.journal.append('generation.transferred',{taskId:t.id,fromGeneration:archived.native.generation??1,generation:t.native.generation,baseCommit:t.native.baseCommit,sandbox,permissionsHash:digest(target.manifest.permissions),snapshot:await target.workspace.snapshot()});
   }finally{await release();}
@@ -128,7 +129,7 @@ export class NativeCandidates {
    }
    const snapshot=await workspace.snapshot(),reviewModes=g.manifest.reviewPolicy?await readBehavioralFileModes(workspace,Object.keys(snapshot)):null;await journal.append('native.adopted',{taskId:t.id,snapshot,round:t.native.round});
    if(reviewModes){const pinned=await journal.memo(`${stage}/review-input`,async()=>({snapshotHash:digest(snapshot),executableModesHash:behavioralModeHash(reviewModes)}));if(pinned.snapshotHash!==digest(snapshot)||pinned.executableModesHash!==behavioralModeHash(reviewModes))throw Error('Candidate changed since the protected-check reservation');}
-   const runner=this.i.checks(workspace),sandbox=await runner.verify(this.i.signal),results=await runner.run(target.manifest.permissions.checks,stage,this.i.signal);
+   const runner=this.i.checks(workspace,{goalId:g.id,taskId:t.id,operationKey:'native-finish:'+t.id}),sandbox=await runner.verify(this.i.signal),results=await runner.run(target.manifest.permissions.checks,stage,this.i.signal);
    await workspace.assertSnapshot(snapshot);
    if(reviewModes&&behavioralModeHash(await readBehavioralFileModes(workspace,Object.keys(snapshot)))!==behavioralModeHash(reviewModes))throw Error('Candidate executable mode changed during checks');
    await journal.append('native.checks',{round:t.native.round,checks:results,sandbox});
@@ -146,6 +147,7 @@ export class NativeCandidates {
   }finally{await release();}
  }
  async release(input){
+  if(executionHolds(this.c,{taskId:input.taskId}).length)throw Error('Native execution quiescence remains held before writer release');
   const t=this.c.getTask(input.taskId);text(input.reason,'release reason');
   if(t.status==='partial'&&t.result?.savedNative)return t;
   if(t.status!=='stopped'||!t.native.writerActive||t.owner)throw Error('Stop native editing before explicit host-confirmed release');

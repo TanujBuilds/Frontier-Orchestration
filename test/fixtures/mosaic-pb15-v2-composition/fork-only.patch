@@ -1,0 +1,12 @@
+--- a/deps/uv/src/unix/process.c
++++ b/deps/uv/src/unix/process.c
+@@ -869,7 +869,8 @@
+   int exec_errorno;
+   ssize_t r;
+ 
+-#if defined(__APPLE__)
++/* Mosaic diagnostic check runtime: use existing fork path before fd mutations. */
++#if 0
+   uv_once(&posix_spawn_init_once, uv__spawn_init_posix_spawn);
+ 
+   /* Special child process spawn case for macOS Big Sur (11.0) onwards

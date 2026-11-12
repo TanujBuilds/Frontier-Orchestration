@@ -134,7 +134,7 @@ export class CodingAdapter {
    cp=recovered.checkpoint;phase=recovered.phase;
    await workspace.initialize();await workspace.recover();
    if(phase==='no_progress')return this.stopNoProgress(task,owner);
-   const checks=approvedChecks(workspace,{checksFactory:this.worker.checksFactory,config:this.worker.config});
+   const checks=approvedChecks(workspace,{checksFactory:this.worker.checksFactory,config:this.worker.config,context:{c,goalId:g.id,taskId:task.id,operationKey:`coding:${task.id}:${cp.phase??'attempt'}:${cp.attempt??0}:${cp.exchange??0}`}});
    if(!journal.events.some(e=>e.type==='harness.sandbox'&&e.data.permissionsHash===permissionsHash)){const probe=await checks.verify(this.worker.shutdown?.signal);await journal.append('harness.sandbox',{...probe,permissionsHash});}
    if(v2&&!journal.last('harness.stage_preflight')){const ids=c.store.get('goal',task.goalId).manifest.overnightPolicy.preflightCheckIds;const results=await checks.run(manifest.permissions.checks.filter(check=>ids.includes(check.id)),'stage-preflight',this.worker.shutdown?.signal);await journal.append('harness.stage_preflight',{results});if(!results.every(r=>r.passed))throw Error('Stage infrastructure preflight failed under exact stage read policy; correct approved input scope before spending');}
    if(v2&&journal.last('harness.stage_preflight')?.results.some(r=>!r.passed))throw Error('Saved stage infrastructure preflight failed; inspect scope');

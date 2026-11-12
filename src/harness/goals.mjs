@@ -1,3 +1,4 @@
+import {executionHolds} from './execution-ownership.mjs';
 import {assertCapacityConfiguration} from './scheduling/capacity.mjs';
 import {isOvernightV2,overnightCompletionReady} from './overnight.mjs';
 import {assertOvernightPreflight} from './overnight-preflight.mjs';
@@ -5,7 +6,7 @@ import {randomUUID} from 'node:crypto';
 import {normalizeTask,digest,text} from './contracts.mjs';
 import {taskRoutingManifest} from './routing/runtime.mjs';
 
-function quiescent(c,goalId){return !c.store.db.prepare("SELECT 1 FROM requests r JOIN records t ON t.kind='task' AND t.id=r.task_id WHERE r.kind='apiReview' AND r.status='reserved' AND json_extract(t.data,'$.goalId')=?").get(goalId)&&!c.store.get('goal',goalId).integrationOwner&&!c.store.get('goal',goalId).integrationPending&&!c.store.all('task').some(t=>t.goalId===goalId&&(t.owner||t.native?.writerActive||t.executionActor==='codex'&&['paused','stopped'].includes(t.status)||['codex_active','legacy_reviewing'].includes(t.status)))&&!['running','uncertain'].includes(c.store.maybe('planning',goalId)?.status);}
+function quiescent(c,goalId){return executionHolds(c,{goalId}).length===0&&!c.store.db.prepare("SELECT 1 FROM requests r JOIN records t ON t.kind='task' AND t.id=r.task_id WHERE r.kind='apiReview' AND r.status='reserved' AND json_extract(t.data,'$.goalId')=?").get(goalId)&&!c.store.get('goal',goalId).integrationOwner&&!c.store.get('goal',goalId).integrationPending&&!c.store.all('task').some(t=>t.goalId===goalId&&(t.owner||t.native?.writerActive||t.executionActor==='codex'&&['paused','stopped'].includes(t.status)||['codex_active','legacy_reviewing'].includes(t.status)))&&!['running','uncertain'].includes(c.store.maybe('planning',goalId)?.status);}
 function assertWorkerUnchanged(g,manifest){
  if(digest(g.manifest.executionPolicy??null)!==digest(manifest.executionPolicy??null))throw Error('An existing goal retains its execution backend policy. Prepare a new goal to select another backend.');
  if(g.activatedAt!=null&&digest(g.manifest.workerProfile??null)!==digest(manifest.workerProfile??null))
@@ -38,6 +39,7 @@ export class Goals {
  });}
  rebind(input,key){return this.c.store.command(key,{op:'task.rebind',...input},()=>{
   const t=this.c.getTask(input.taskId),g=this.c.store.get('goal',t.goalId);this.c.liveGoal(g);
+  if(executionHolds(this.c,{goalId:g.id}).some(row=>!row.taskId||row.taskId===t.id))throw Error('Native execution quiescence required before rebind');
   if(t.owner||t.native?.writerActive||g.integrationPending?.taskId===t.id||['codex_active','legacy_reviewing','accepted'].includes(t.status)||(t.status==='partial'&&!(t.native?.layout==='candidate_v1'&&t.goalVersion<g.version)))throw Error('Task must be quiescent and unfinished');
   if(isOvernightV2(g.manifest))throw Error('Overnight v2 stage graph changes require a separately validated plan; preserve original IDs and spending');
   const spec=normalizeTask(input.spec??t.spec,taskRoutingManifest(this.c,g,t),this.c.registry,{existingTask:t});if(spec.submissionId!==t.spec.submissionId||spec.kind!==t.spec.kind)throw Error('Task identity/kind cannot change');

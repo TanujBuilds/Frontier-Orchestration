@@ -1,4 +1,6 @@
-import {normalizeExecutionPolicy,assertExecutionAvailable,assertExecutionConfiguration,assertExecutionRuntime} from './execution.mjs';
+import {ExecutionOwnership,executionHolds} from './execution-ownership.mjs';
+import {assertNativePreflight,preflightNativeExecution} from './native-preflight.mjs';
+import {normalizeExecutionPolicy,assertExecutionAvailable,assertExecutionConfiguration,assertExecutionRuntime,isNativeExecution,normalizeNativeCheckRuntime} from './execution.mjs';
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -71,22 +73,24 @@ function savedFailedGate(c,t,g){
  return verified.candidateId===gate.candidateId&&verified.failureId===gate.failureId&&verified.signature===gate.signature;
 }
 export class Coordinator {
- constructor({root,now=Date.now,registry=new Registry(),beta=false,workerProfile,verifyCurrentWorker,providerRegistry,selectedHost,hostRegistry,serviceMaxConcurrentTasks,executionPolicy,codexPath,defaultCodexPath}={}){
+ constructor({root,now=Date.now,registry=new Registry(),beta=false,workerProfile,verifyCurrentWorker,providerRegistry,selectedHost,hostRegistry,serviceMaxConcurrentTasks,executionPolicy,codexPath,defaultCodexPath,nativeCheckRuntime}={}){
   if(providerRegistry&&!['get','snapshot','createClient'].every(method=>typeof providerRegistry[method]==='function'))throw Error('A normalized provider registry is required');
   this.providerRegistry=providerRegistry??null;
   this.selectedHost=typeof selectedHost==='string'?selectedHost:selectedHost?.id??null;if(this.selectedHost&&!HOST_IDS.includes(this.selectedHost))throw Error('Unsupported selected host');this.hostRegistry=hostRegistry??null;
   this.beta=beta;this.verifyCurrentWorker=()=>{verifyCurrentWorker?.();assertExecutionRuntime(this);};this.workerProfile=workerProfile?normalizeWorkerProfile(workerProfile):null;
-  this.executionPolicy=normalizeExecutionPolicy(executionPolicy);this.executionConfig={codexPath};
+  this.executionPolicy=normalizeExecutionPolicy(executionPolicy);this.executionConfig={codexPath,...(nativeCheckRuntime?{nativeCheckRuntime:normalizeNativeCheckRuntime(nativeCheckRuntime)}:{})};
   this.store=new Store(root);this.now=now;this.registry=registry;
   // Existing runner-only callers have no trusted selector to reconstruct.
   // Pin a new configured default without rebinding those historical records.
-  if(codexPath===undefined&&(defaultCodexPath!==undefined||this.executionPolicy?.backend==='codex-sandbox')&&this.store.maybe('execution_configuration','coordinator')?.identity?.runtime!==null)this.executionConfig.codexPath=defaultCodexPath??'codex';
+  if(!isNativeExecution({executionPolicy:this.executionPolicy})&&codexPath===undefined&&(defaultCodexPath!==undefined||this.executionPolicy?.backend==='codex-sandbox')&&this.store.maybe('execution_configuration','coordinator')?.identity?.runtime!==null)this.executionConfig.codexPath=defaultCodexPath??'codex';
   try{this.serviceMaxConcurrentTasks=this.store.tx(()=>{assertExecutionConfiguration(this);return configureServiceCapacity(this,serviceMaxConcurrentTasks);});}catch(error){this.store.close();throw error;}
   for(const record of this.store.all('mode')){const m=record.definition??record;if(!this.registry.modes.has(`${m.id}@${m.version}`))this.registry.registerMode(m);}
   for(const record of this.store.all('workflow')){const w=record.definition??record;if(!this.registry.workflows.has(`${w.id}@${w.version}`))this.registry.registerWorkflow(w);}
+  this.executionOwnership=new ExecutionOwnership(this);this.executionOwnership.reconcile({force:true});
   this.learning=new Learning({c:this});this.reviewService=new ReviewService({c:this,providers:this.providerRegistry,hostRegistry:this.hostRegistry});
  }
  close(){this.store.close();}
+ preflightExecution(input,options){return preflightNativeExecution(this,input,options);}
  acquireWorker(token){identifier(token,'worker token');const lease=this.store.tx(()=>{
   const existing=this.store.maybe('lease','coordinator');
   if(existing){
@@ -127,7 +131,9 @@ export class Coordinator {
  recoverSaved(taskId,owner){return this.store.tx(()=>{
   this.currentLease(owner);
   const t=this.store.get('task',taskId),g=this.store.get('goal',t.goalId);
-  if(t.status!=='uncertain'||t.owner===owner)throw Error('Task does not need ownership recovery');
+  if(executionHolds(this,{goalId:g.id}).some(row=>!row.taskId||row.taskId===taskId))throw Error('Native execution quiescence remains held');
+  const nativeProof=isNativeExecution(g.manifest)&&this.store.all('execution_owner').some(row=>row.taskId===t.id&&row.status==='quiescent'&&row.goalHash===g.hash&&row.taskHash===t.hash);
+  if(t.status!=='uncertain'||t.owner===owner&&!nativeProof)throw Error('Task does not need ownership recovery');
   const cp=t.checkpoint,requests=this.store.requestOutcomes(taskId);
   const modelKey=t.spec.kind==='consult'?'consult-1':t.spec.kind==='learning'?`learning-${cp.attempt}`:`code-${cp.attempt}-${cp.exchange}`;
   // An old non-dispatch row is reusable only as spent history after its
@@ -137,7 +143,7 @@ export class Coordinator {
   const coding=t.spec.kind==='coding',consult=t.spec.kind==='consult';
   const savedModel=requests.some(r=>r.key===modelKey&&r.status==='completed');
   const learning=t.spec.kind==='learning'&&(cp.phase==='model'||(requests.length>0&&['proposal','evaluate','finalize'].includes(cp.phase)));
-  const safePhase=consult||learning||
+  const safePhase=consult||learning||(isNativeExecution(g.manifest)&&coding&&cp.phase==='checks')||
    (coding&&(cp.phase==='model'||cp.phase==='attempt'&&savedFailedGate(this,t,g)||(savedModel&&(cp.phase==='apply'||cp.phase==='checks'&&savedStageChecks(this.store.root,t)))));
   if(!safePhase)throw Error('Backend/check quiescence requires separate verification');
   const status=controlledStatus(t,g,this.now());
@@ -205,9 +211,10 @@ export class Coordinator {
   return manifest;
  }
  providerBinding(goal,providerId){return manifestProviderBinding(goal.manifest,providerId);}
- verifyWorkerBinding(goal,taskOrBinding){
+ verifyWorkerBinding(goal,taskOrBinding,{executionTaskId}={}){
+  const executionTaskIdBound=taskOrBinding?.goalId?taskOrBinding.id:executionTaskId;if(executionHolds(this,{goalId:goal.id}).some(row=>!executionTaskIdBound||!row.taskId||row.taskId===executionTaskIdBound))throw Error('Native execution ownership requires exact quiescence before model dispatch');
   this.verifyCurrentWorker?.();
-  assertExecutionAvailable(goal.manifest,this.executionConfig);
+  assertExecutionAvailable(goal.manifest,this.executionConfig);assertNativePreflight(this,goal);
   assertRoutingApproval(goal);
   const task=taskOrBinding&&Object.hasOwn(taskOrBinding,'spec')?taskOrBinding:null;
   // A routed task cannot fall through to legacy transport if approval fields
@@ -235,9 +242,10 @@ export class Coordinator {
   if(!approved||!this.workerProfile||digest(approved)!==digest(this.workerProfile))
    throw Error('Approved API worker profile changed. Prepare and approve a goal with the current worker profile.');
  }
- verifyGoalBinding(goal){
-  this.verifyCurrentWorker?.();assertExecutionAvailable(goal.manifest,this.executionConfig);
-  if(goal.manifest.mode.actors.includes('deepseek'))this.verifyWorkerBinding(goal);
+ verifyGoalBinding(goal,{taskId}={}){
+  if(executionHolds(this,{goalId:goal.id}).some(row=>!taskId||!row.taskId||row.taskId===taskId))throw Error('Native execution ownership remains held; exact quiescence required');
+  this.verifyCurrentWorker?.();assertExecutionAvailable(goal.manifest,this.executionConfig);assertNativePreflight(this,goal);
+  if(goal.manifest.mode.actors.includes('deepseek'))this.verifyWorkerBinding(goal,undefined,{executionTaskId:taskId});
   if(goal.manifest.reviewPolicy){const policy=normalizeReviewPolicy(goal.manifest.reviewPolicy);if(digest(policy)!==goal.manifest.reviewPolicyHash)throw Error('Approved review policy changed');if(policy.source==='api'&&(!this.providerRegistry||digest(this.providerRegistry.get(policy.reviewer.id,policy.reviewer.revision))!==digest(policy.reviewer)))throw Error('Approved reviewer identity changed');}
  }
  prepareGoal(raw,key,{legacy=false,portable=false}={}){
@@ -331,6 +339,7 @@ export class Coordinator {
  }
  eligible(t){const g=this.store.get('goal',t.goalId),now=this.now();return !(t.routingWait&&t.routingWait.retryAt>now)&&!(isOvernightV2(g.manifest)&&t.providerWait&&(t.providerWait.retryAt>now||t.providerWait.until<=now))&&g.status==='active'&&g.deadline>now&&(!t.deadline||t.deadline>now)&&!(g.integrationSealed&&t.spec.kind==='coding')&&!t.pauseRequested&&!t.stopRequested&&t.goalVersion===g.version&&t.spec.dependsOn.every(id=>this.store.get('task',id).status==='accepted')&&!capacityWaitHeld(this,t,g);}
  settleTask(t,status,reason,event='task.'+status,data={}){
+  if(executionHolds(this,{goalId:t.goalId}).some(row=>!row.taskId||row.taskId===t.id)){if(t.native?.writerActive||t.status==='uncertain')return this.getTask(t.id);t.status='uncertain';t.reason='Native execution outcome unknown; exact quiescence required';this.store.put('task',t);return this.getTask(t.id);}
   const overnight=isOvernightV2(this.store.get('goal',t.goalId).manifest);
   if(status==='blocked'&&overnight)t.firstBlocker??={reason,at:this.now()};
   if(status==='partial'&&t.status==='blocked'&&t.reason&&overnight)t.firstBlocker??={reason:t.reason,at:this.now()};
@@ -340,7 +349,7 @@ export class Coordinator {
  expireQuiescent(){return this.store.tx(()=>{
   for(const t of this.store.all('task')){
    const g=this.store.get('goal',t.goalId),now=this.now();
-   if(TERMINAL.has(t.status)||t.owner||t.status==='legacy_reviewing'||t.executionActor==='codex'||g.integrationOwner===t.id)continue;
+   if(executionHolds(this,{goalId:g.id}).some(row=>!row.taskId||row.taskId===t.id)||TERMINAL.has(t.status)||t.owner||t.status==='legacy_reviewing'||t.executionActor==='codex'||g.integrationOwner===t.id)continue;
    if(now>=Math.min(g.deadline,t.deadline??g.deadline)){
     this.settleTask(t,'partial','Original deadline reached; saved evidence retained','task.expired');
    }else if(t.providerWait&&['queued','suspended'].includes(t.status)&&now>=t.providerWait.until){
@@ -480,12 +489,14 @@ export class Coordinator {
  });}
  failTaskStep(taskId,owner,reason){return this.store.tx(()=>{
   const t=this.owned(taskId,owner),g=this.store.get('goal',t.goalId),at=this.now(),controlled=controlledStatus(t,g,at);
+  if(executionHolds(this,{goalId:g.id}).some(row=>!row.taskId||row.taskId===taskId)){t.status='uncertain';t.reason='Native execution outcome unknown; exact quiescence required';this.store.put('task',t);return this.getTask(t.id);}
   if(controlled)return this.settleTask(t,controlled,controlled==='partial'?'Original deadline reached; saved evidence retained':reason,controlled==='partial'?'task.expired':undefined);
   if(t.providerWait&&at>=t.providerWait.until)reason='Original provider reconnect window exhausted';
   return this.settleTask(t,'blocked',reason);
  });}
  beginAttempt(taskId,owner){return this.store.tx(()=>{const t=this.owned(taskId,owner);if(t.attempts>=t.spec.limits.attempts)throw Error('Attempt limit reached');t.attempts++;this.store.put('task',t);this.emit('attempt.started',t.goalId,t.id,{attempt:t.attempts});return t.attempts;});}
  boundary(taskId,checkpoint,owner,{quiescent=true}={}){return this.store.tx(()=>{const t=this.owned(taskId,owner),g=this.store.get('goal',t.goalId);t.checkpoint=checkpoint;
+  if(quiescent&&executionHolds(this,{goalId:g.id}).some(row=>!row.taskId||row.taskId===taskId)){t.status='uncertain';t.reason='Native execution quiescence remains unknown';this.store.put('task',t);return this.getTask(t.id);}
   if(!quiescent){this.store.put('task',t);this.emit('task.checkpoint',t.goalId,t.id,{status:t.status,quiescent:false});return this.getTask(t.id);}
   if(this.now()>=Math.min(g.deadline,t.deadline)){t.status='partial';t.reason='Deadline reached';}
   else if(t.stopRequested||g.status==='stopped')t.status='stopped';
@@ -519,12 +530,13 @@ export class Coordinator {
  control(input,key){return this.store.command(key,{op:'control',...input},()=>{
   if(!['pause','stop','resume'].includes(input.action))throw Error('Invalid control');
   const g=input.goalId?this.store.get('goal',input.goalId):this.store.get('goal',this.store.get('task',input.taskId).goalId);
+  if(input.action==='resume'&&executionHolds(this,{goalId:g.id}).some(row=>!input.taskId||!row.taskId||row.taskId===input.taskId))throw Error('Native execution remains held; exact quiescence required before resume');
   if(input.action==='resume'&&g.status==='draft'&&isOvernightV2(g.manifest))throw Error('Use exact goal_activate after successful preflight');
   if(input.action==='resume'&&this.now()>=g.deadline)throw Error('Original deadline exceeded');
   const targets=this.store.all('task').filter(t=>input.goalId?t.goalId===g.id:t.id===input.taskId);
   if(input.goalId){if(['completed','partial'].includes(g.status))throw Error('Goal is terminal');g.status=input.action==='resume'?'active':input.action==='stop'?'stopped':'paused';this.store.put('goal',g);}
   for(const t of targets){
-   if(TERMINAL.has(t.status))continue;if(t.status==='uncertain')throw Error('Uncertain ownership must be reconciled');
+   if(TERMINAL.has(t.status))continue;if(t.status==='uncertain'){if(input.action==='resume'&&isNativeExecution(g.manifest)&&this.workerLease){this.recoverSaved(t.id,this.workerLease.token);Object.assign(t,this.store.get('task',t.id));}else throw Error('Uncertain ownership must be reconciled');}
    if(input.action==='resume'){
     if(t.deadline&&this.now()>=t.deadline)continue;t.stopRequested=t.pauseRequested=false;
     if(['paused','stopped'].includes(t.status)){t.status=t.controlReturnStatus??(t.executionActor==='codex'?'codex_active':t.spec.actor==='codex'?'codex_ready':'queued');delete t.controlReturnStatus;}

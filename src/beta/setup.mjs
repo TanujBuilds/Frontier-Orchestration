@@ -1,4 +1,4 @@
-import {normalizeExecutionPolicy,assertExecutionAvailable} from '../harness/execution.mjs';
+import {normalizeExecutionPolicy,normalizeNativeCheckRuntime,assertExecutionAvailable} from '../harness/execution.mjs';
 import {execFile} from 'node:child_process';
 import {access,mkdir,readdir,realpath,rm,rmdir} from 'node:fs/promises';
 import {constants} from 'node:fs';
@@ -126,6 +126,7 @@ export async function readSettings(paths){
  await localDirectory(paths,paths.configDir,{create:false});
  const value=await jsonFile(paths.config,{privateFile:true,max:16384});
  if(!value)return null;
+ if(value.nativeCheckRuntime!==undefined)value.nativeCheckRuntime=normalizeNativeCheckRuntime(value.nativeCheckRuntime);
  if(value.executionPolicy!==undefined)value.executionPolicy=normalizeExecutionPolicy(value.executionPolicy);
  if(value.host!==undefined)value.host=normalizeHostSettings(value.host);
  if(value.schema!==1||value.codexPath!==undefined&&(typeof value.codexPath!=='string'||!path.isAbsolute(value.codexPath))||!value.codexPath&&(!value.host||value.host.id==='codex'))throw Error('Invalid Mosaic Beta configuration. Run mosaic setup.');
@@ -364,7 +365,7 @@ export async function doctor(paths,output=process.stdout){
  }
  }else check('Host',true,getHost(selectedHost).displayName+' selected; inspect its Mosaic MCP connection in the host.');
  if(settings&&(selectedHost!=='codex'||settings.executionPolicy)){
-  try{assertExecutionAvailable({...settings,executionPolicy:settings.executionPolicy??{version:1,backend:'codex-sandbox',backendRevision:1}},{codexPath:settings.codexPath});check('Protected checks',true,'Configured backend prerequisites found; actual enforcement probe is required before work.');}
+  try{assertExecutionAvailable({...settings,executionPolicy:settings.executionPolicy??{version:1,backend:'codex-sandbox',backendRevision:1}},{codexPath:settings.codexPath,nativeCheckRuntime:settings.nativeCheckRuntime});check('Protected checks',true,'Configured backend prerequisites found; actual enforcement probe is required before work.');}
   catch(error){check('Protected checks',false,error.message);}
  }
  try{await client(paths,{viewer:true})('tools_list');check('Coordinator',true,'Authenticated viewer connection ready.');}

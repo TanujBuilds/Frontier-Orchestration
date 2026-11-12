@@ -11,7 +11,7 @@ output and live-loopback canaries. An unavailable server, timeout or refused
 connection does not count as a network permission denial. There is no ordinary
 shell fallback.
 
-## Native status: unavailable
+## Native revision 1: unavailable
 
 `darwin-seatbelt` revision 1 is recognized on Darwin arm64 with the actual
 `/usr/bin/sandbox-exec`. Its production `execute()` always throws an isolation
@@ -38,8 +38,8 @@ write deadline. This fixes the ignored-stdio same-group bug; it does not supply
 detached descendant containment. Normal successful commands retain their
 existing completion behavior.
 
-Native protected execution and the installed end-to-end lifecycle remain
-blocked. This release makes no Linux/Windows sandbox claim and does not install
+Revision-1 native protected execution remains blocked. Revision 2 is described
+below; installed end-to-end acceptance remains a separate gate. This release makes no Linux/Windows sandbox claim and does not install
 a privileged service, change Codex settings or enable network as a substitute.
 
 ## Diagnostic policy compiler
@@ -81,7 +81,7 @@ snapshot. A pure compiler cannot attest that caller-supplied hashes describe
 the current filesystem or prevent a later path replacement. Compiler evidence
 binds the inventory hash to file bytes and executable modes, and records the
 profile hash; it is explicitly marked diagnostic-only. Production native
-execution remains unavailable, so this interface is not a replacement for
+revision-1 execution remains unavailable, so this interface is not a replacement for
 `CheckRunner` snapshot protection or a release claim about race-free checks.
 
 Source reads are exact literals, with exact ancestor metadata needed by Node
@@ -135,6 +135,58 @@ The latter `main` source corroborates the spawn-attribute mechanism rather than
 claiming to match the exact installed kernel revision. Direct syscall denial
 does work for direct calls, but libuv's detached flag uses POSIX_SPAWN_SETSID.
 Blocking `posix_spawn` entirely also blocks required Node/Chromium fixture
-subprocesses. No supported nonprivileged mechanism closing this gap was
-established; a future containment facility requires explicit approval and new
-timeout/cancellation evidence before this backend can become available.
+subprocesses. The original revision-1 investigation established no supported nonprivileged
+mechanism closing this gap. The separately approved revision 2 below uses a
+pinned fork-only runtime and native supervisor; it requires its own actual
+timeout/cancellation evidence and does not enable revision 1.
+
+## Explicit native revision 2
+
+Native revision 2 is a separate opt-in policy:
+`{version:1,backend:'darwin-seatbelt',backendRevision:2,runtimeFingerprint}`.
+The fingerprint is the exact SHA-256 of the configured private artifact manifest.
+Revision 1 remains disabled. Historical goals and Codex revision 1 keep their
+original serialized policies and runtime-null compatibility behavior.
+
+Private settings supply `nativeCheckRuntime` with `schema:1`, an absolute
+`artifactManifestPath`, and `artifactManifestSha256`. The artifact validator
+pins the regular executable files, canonical paths, modes, manifest provenance,
+system sandbox executable and backend implementation bytes. No goal/model input
+can supply executable paths, a policy profile, factory or verification result.
+Checks must explicitly approve the separate artifact Node path in their literal
+argv before preparation; execution never substitutes that path into old checks.
+
+`Coordinator.preflightExecution({goalId,hash})` runs the actual native isolation
+and child-process probes in an owned workspace before activation. The public
+activation surface performs that asynchronous preflight before the synchronous
+approval transaction. Direct JavaScript callers must run it explicitly. The
+receipt binds the goal, runtime, approved source inventory and executable modes,
+dependencies including executable modes, backend source identity, and the
+verified host boot and OS/kernel identity. A new boot requires a fresh actual
+probe even when artifact bytes are unchanged. A missing coding project, changed
+artifact or failed real probe blocks activation and worker/planner/API-review
+POSTs. Ordinary project behavior checks still run during candidate validation;
+preflight does not require an initially broken product to pass its final checks.
+
+Every native check reserves a durable `execution_owner` before spawning the
+helper. The helper's physical IDs are saved before the final GO authority check.
+The private completion receipt must match request/binding/helper/leader identity
+and certify public group ESRCH, exactly one leader reap, and no subsequent
+nonzero group signals. Timeout, cancellation, successful leader exit and loss of
+the coordinator all require the same descendant cleanup proof. Missing or
+ambiguous proof retains task/writer, repository scope and runner-capacity holds;
+ordinary task failure, elapsed time or a dead supervisor cannot clear them.
+
+Restart reconciliation reads only the existing owned private receipt, at most
+once per five seconds while idle. A positively different OS boot identity can
+also retire old process ownership. Reconciliation never infers a passing check
+from a code-only completion receipt: protected checks may run again only after
+quiescence is proven. Saved model responses, request spending, task deadlines and
+approvals remain unchanged. Partial finalization, maintenance and conflicting
+work remain blocked while any execution owner is unresolved. Runtime drift does
+not prevent ordinary stop controls or preservation of partial files; unresolved
+actual check execution still prevents release of its ownership.
+
+This is source-only Darwin arm64 implementation. Its actual native probes,
+Chromium lifecycle acceptance and independent review remain separate evidence;
+no installer, clean-machine, additional OS or runtime compatibility is implied.

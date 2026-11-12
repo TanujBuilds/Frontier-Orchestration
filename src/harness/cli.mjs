@@ -22,6 +22,7 @@ const idleProbeMs=5000;
 async function runStateLoop({c,signal,step,onError,refresh}){
  let revision,nextAt=0;
  while(!signal.aborted){
+  c.executionOwnership?.reconcile();
   const before=c.store.revision(),startedAt=c.now();
   if(before!==revision||startedAt>=nextAt){
    // Record the version before awaiting so concurrent commits cannot be missed.
@@ -38,7 +39,7 @@ async function runStateLoop({c,signal,step,onError,refresh}){
  }
 }
 export async function serve({root,configFile,port,runtimeConfig,headless=false,canStop,verifyCurrentWorker}){
- const raw=runtimeConfig??(configFile?JSON.parse(await readFile(configFile,'utf8')):{}),config={...raw,deepseekBaseUrl:raw.deepseekBaseUrl??raw.DEEPSEEK_BASE_URL,deepseekModelId:raw.deepseekModelId??raw.DEEPSEEK_MODEL_ID},owner=randomUUID(),c=new Coordinator({root,beta:config.beta,workerProfile:config.workerProfile,providerRegistry:config.providerRegistry,selectedHost:config.hostId,hostRegistry:config.hostRegistry,serviceMaxConcurrentTasks:config.serviceMaxConcurrentTasks,executionPolicy:config.executionPolicy,codexPath:config.codexPath,defaultCodexPath:'codex',verifyCurrentWorker});c.acquireWorker(owner);
+ const raw=runtimeConfig??(configFile?JSON.parse(await readFile(configFile,'utf8')):{}),config={...raw,deepseekBaseUrl:raw.deepseekBaseUrl??raw.DEEPSEEK_BASE_URL,deepseekModelId:raw.deepseekModelId??raw.DEEPSEEK_MODEL_ID},owner=randomUUID(),c=new Coordinator({root,beta:config.beta,workerProfile:config.workerProfile,providerRegistry:config.providerRegistry,selectedHost:config.hostId,hostRegistry:config.hostRegistry,serviceMaxConcurrentTasks:config.serviceMaxConcurrentTasks,executionPolicy:config.executionPolicy,codexPath:config.codexPath,nativeCheckRuntime:config.nativeCheckRuntime,defaultCodexPath:'codex',verifyCurrentWorker});c.acquireWorker(owner);
  const provider=config.environment==='fixture'?{complete:async()=>({content:config.fixtureReply??'Fixture answer',model:'fixture-no-model',usage:{}})}:undefined;
  const worker=new Worker({c,owner,config,provider}),dispatcher=new Dispatcher({c,worker,config});const stopWorker=new AbortController();
  for(const task of c.store.all('task').filter(t=>t.status==='uncertain')){try{c.recoverSaved(task.id,owner);}catch{/* Ambiguous model/backend ownership stays held. */}}

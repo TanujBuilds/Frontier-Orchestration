@@ -1,3 +1,4 @@
+import {AsyncLocalStorage} from 'node:async_hooks';
 import path from 'node:path';
 import {access,readFile} from 'node:fs/promises';
 import {canonicalRepository,capacitySnapshot,writeScopeWait,inertUnstartedGoal,repositoryLockId,sharedBaseJournalId} from './scheduling/capacity.mjs';
@@ -88,13 +89,13 @@ async function assertCheckedCommit(workspace,checkpoint,snapshot,modes){
 }
 
 export class Integration {
- constructor({c,checksFactory,config={},signal}){this.signal=signal;this.c=c;this.checksFactory=checksFactory;this.config=config;this.inflight=new Map();this.nativeCandidates=new NativeCandidates(this);}
+ constructor({c,checksFactory,config={},signal}){this.signal=signal;this.c=c;this.checksFactory=checksFactory;this.config=config;this.inflight=new Map();this.executionContext=new AsyncLocalStorage();this.nativeCandidates=new NativeCandidates(this);}
  async effect(key,input,action){
   identifier(key,'idempotencyKey');const hash=digest(input),old=this.c.store.maybe('effect',key);
   if(old&&old.hash!==hash)throw Error('Idempotency key conflict');if(old?.status==='completed')return old.result;
   if(this.inflight.has(key))return this.inflight.get(key);
   if(!old)this.c.store.tx(()=>this.c.store.put('effect',{id:key,hash,status:'pending',input,at:this.c.now()}));
-  const run=(async()=>{const result=await action();this.c.store.tx(()=>this.c.store.put('effect',{id:key,hash,status:'completed',result,at:this.c.now()}));return result;})();
+  const run=(async()=>{const operation=this.c.store.all('operation').find(row=>row.key===key||'effect-'+row.key===key);const result=await this.executionContext.run({operationKey:key,...(operation?{operationId:operation.id}:{})},action);this.c.store.tx(()=>this.c.store.put('effect',{id:key,hash,status:'completed',result,at:this.c.now()}));return result;})();
   this.inflight.set(key,run);try{return await run;}catch(error){if(error.code==='locked')error.retryable=true;throw error;}finally{this.inflight.delete(key);}
  }
  repositoryId(g){return repositoryLockId(g);}
@@ -145,7 +146,7 @@ export class Integration {
   this.c.store.tx(()=>{const current=repairPin?assertPendingRepair(this,repairPin).goal:this.assertPreparationGoal(g,{live:!native||!g.integration});validatePrior?.();if(!current.integration){current.integration={worktree:workspace.root,branch:workspace.branch,baseCommit:p.baseCommit,...(shared?{journalId:journal.id}: {})};this.c.store.put('goal',current);}});
   return {journal,workspace,g:this.c.store.get('goal',goalId),shared};
  }
- checks(workspace){this.c.verifyCurrentWorker?.();return approvedChecks(workspace,{checksFactory:this.checksFactory,config:this.config});}
+ checks(workspace,context={}){this.c.verifyCurrentWorker?.();return approvedChecks(workspace,{checksFactory:this.checksFactory,config:this.config,context:{...context,...this.executionContext.getStore(),c:this.c}});}
  async lockedGoal(goalId,{native=false,refuseLegacy=false,integrationTaskId=null,repairPin}={}){
   if(repairPin){if(repairPin.goal.id!==goalId||repairPin.task.id!==integrationTaskId)throw Error('Pending repair target mismatch');assertPendingRepair(this,repairPin);}
   const g=this.c.store.get('goal',goalId),repository=canonicalRepository(g.manifest.project.repo);
@@ -239,7 +240,7 @@ export class Integration {
    this.currentCandidate(task);
    const {overnightV2:ignored,...manifest}=target.workspace.manifest,workspace=new Workspace({...manifest,permissions:contract.project,...(contract.overnightV2?{overnightV2:true}:{})},target.journal);
    const snapshot=await workspace.snapshot(),modes=await readBehavioralFileModes(workspace,Object.keys(snapshot));
-   const runner=this.checks(workspace);await runner.verify(this.signal);this.currentCandidate(task);const checks=await runner.run(contract.checkSpecs,`integrate-${task.id}-${contract.goalId}`,this.signal);
+   const runner=this.checks(workspace,{goalId:task.goalId,taskId:task.id,operationKey:'integration-proof:'+task.id});await runner.verify(this.signal);this.currentCandidate(task);const checks=await runner.run(contract.checkSpecs,`integrate-${task.id}-${contract.goalId}`,this.signal);
    await workspace.assertSnapshot(snapshot);const afterModes=await readBehavioralFileModes(workspace,Object.keys(snapshot));if(behavioralModeHash(modes)!==behavioralModeHash(afterModes))throw Error('Combined executable bit changed during protected checks');
    const behavioralEvidence=behavioralEvidenceFor(contract.project,contract.checkSpecs,checks,snapshot,modes);
    evidence.push({...contract,checks,...(behavioralEvidence?{behavioralEvidence}:{})});
@@ -310,7 +311,7 @@ export class Integration {
    const project=g.manifest.project,candidateSnapshot=project.behavioralChecks||g.manifest.reviewPolicy?await candidate.workspace.snapshot():null;
    const candidateModes=candidateSnapshot?await checkedFileModes(candidate.workspace,candidateSnapshot):null;
    const checkedSnapshot=candidateSnapshot?await this.checkedCandidateSnapshot(candidate,t,g,candidateSnapshot,candidateModes):null;
-   const checks=this.checks(candidate.workspace),candidateCheckSpecs=candidate.manifest.permissions.checks;
+   const checks=this.checks(candidate.workspace,{goalId:g.id,taskId:t.id,operationKey:'candidate-accept:'+t.id}),candidateCheckSpecs=candidate.manifest.permissions.checks;
    await checks.verify(this.signal);const candidateChecks=await checks.run(candidateCheckSpecs,`accept-${t.id}`,this.signal);
    if(candidateSnapshot){
     await candidate.workspace.assertSnapshot(candidateSnapshot);
@@ -355,7 +356,7 @@ export class Integration {
     const combinedModes=snapshotBeforeChecks?await checkedFileModes(target.workspace,snapshotBeforeChecks):null;
     let results,combinedEvidence,integrationContract;
     if(target.shared){const combined=await this.combinedChecks(target,t,g,checkSpecs);results=combined.results;combinedEvidence=combined.evidence;integrationContract=combined.contract;}
-    else {const runner=this.checks(target.workspace);await runner.verify(this.signal);results=await runner.run(checkSpecs,`integrate-${t.id}`,this.signal);}
+    else {const runner=this.checks(target.workspace,{goalId:g.id,taskId:t.id,operationKey:'integration:'+t.id});await runner.verify(this.signal);results=await runner.run(checkSpecs,`integrate-${t.id}`,this.signal);}
     const snapshot=await target.workspace.snapshot();
     if(snapshotBeforeChecks){
      if(digest(snapshot)!==digest(snapshotBeforeChecks))throw Error('Combined snapshot changed during protected checks');
@@ -420,7 +421,7 @@ export class Integration {
    for(const f of new Set([...Object.keys(snapshot),...Object.keys(before)]))if(snapshot[f]!==before[f]&&(protectedPath(f)||!matches(f,t.spec.permissions.writePaths)))throw Error('Native change outside approved scope or protected checks');
    await target.journal.append('native.adopted',{taskId:t.id,snapshot});
    const project=g.manifest.project,modes=project.behavioralChecks?await checkedFileModes(target.workspace,snapshot):null;
-   const runner=this.checks(target.workspace);await runner.verify(this.signal);const results=await runner.run(project.checks,`native-${t.id}`,this.signal);
+   const runner=this.checks(target.workspace,{goalId:g.id,taskId:t.id,operationKey:'integration:'+t.id});await runner.verify(this.signal);const results=await runner.run(project.checks,`native-${t.id}`,this.signal);
    if(!results.every(x=>x.passed))throw Error('Native checks failed');
    const behavioralEvidence=behavioralEvidenceFor(project,project.checks,results,snapshot,modes);
    if(behavioralEvidence){

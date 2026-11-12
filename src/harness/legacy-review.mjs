@@ -110,7 +110,7 @@ export class LegacyReview {
   try{
    await source.workspace.recover();const snapshot=(await source.workspace.evidence()).snapshot;if(digest(snapshot)!==digest(task.result.snapshot))throw Error('Candidate changed after its passing check receipt; evidence-only retry cannot repair code');
    const executableModesHash=g.manifest.project.behavioralChecks?await snapshotModesHash(source.workspace,snapshot):undefined;
-   const references=await this.referenceFiles(source,task),runner=this.worker.integration.checks(source.workspace);await runner.verify(this.worker.shutdown?.signal);
+   const references=await this.referenceFiles(source,task),runner=this.worker.integration.checks(source.workspace,{goalId:task.goalId,taskId:task.id,operationKey:'legacy-review:'+task.id});await runner.verify(this.worker.shutdown?.signal);
    const declared=source.manifest.permissions.checks,checks=await runner.run(declared,'review-evidence-repair',this.worker.shutdown?.signal);
    if(!checks.every(r=>r.passed))throw Error('Candidate checks failed before evidence re-review');
    assertBehavioralChecks(deriveBehavioralEvidence(g.manifest.project,{checks,checkIds:declared.map(check=>check.id),snapshot,executableModesHash}));
@@ -138,7 +138,7 @@ export class LegacyReview {
     await source.workspace.recover();await source.workspace.assertSnapshot(checkedSnapshot);
     await assertSnapshotModes(source.workspace,scopedSnapshot,executableModesHash);
    };
-   const runner=this.worker.integration.checks(source.workspace),sandbox=await runner.verify(this.worker.shutdown?.signal);
+   const runner=this.worker.integration.checks(source.workspace,{goalId:task.goalId,taskId:task.id,operationKey:'legacy-review:'+task.id}),sandbox=await runner.verify(this.worker.shutdown?.signal);
    const declared=source.manifest.permissions.checks,checks=await runner.run(declared,`legacy-${task.id}-${task.reviews}`,this.worker.shutdown?.signal);
    if(!checks.every(r=>r.passed))throw Error('Legacy review requires passing protected checks');
    const behavioralEvidence=deriveBehavioralEvidence(project,{checks,checkIds:declared.map(check=>check.id),snapshot:scopedSnapshot,executableModesHash});
