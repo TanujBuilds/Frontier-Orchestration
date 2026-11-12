@@ -1,10 +1,11 @@
 import {digest, identifier, integer, keys} from '../contracts.mjs';
 import {isOvernightV2} from '../overnight.mjs';
 import {compileRecipe} from './compile.mjs';
-import {validateParameterPayload, validateRecipeDefinition} from './schema.mjs';
+import {validateParameterPayload, validateRecipeDefinition, normalizeRecipeTaskRouting} from './schema.mjs';
 import {builtins} from './catalog.mjs';
+import {routeDecision} from '../routing/runtime.mjs';
 
-const previewFields = ['goalId', 'recipeId', 'version', 'parameters'];
+const previewFields = ['goalId', 'recipeId', 'version', 'parameters', 'taskRouting'];
 const digestFields = ['expectedGoalHash', 'definitionDigest', 'previewDigest', 'parameterDigest'];
 const submitFields = [...previewFields, ...digestFields, 'submissionId'];
 const definitionKind = 'workflow_recipe_definition';
@@ -59,7 +60,11 @@ export class WorkflowRecipes {
     identifier(goalId, 'goalId');
     const goal = this.c.store.get('goal', goalId);
     const {definition} = this.inspect({id: recipeId, version});
-    const compiled = compileRecipe({definition, parameters, goal, registry: this.c.registry});
+    const compiled = compileRecipe({definition, parameters, taskRouting: input.taskRouting, goal, registry: this.c.registry,
+      // Recipe keys are local graph names, not saved submission identities.
+      // A fresh proposal must not inherit an unrelated task's historical pin.
+      routePreview: spec => ({...routeDecision(this.c, goal, {id: null, spec}),
+        expectedGoalHash: goal.hash, expectedGoalVersion: goal.version})});
     const {definitionDigest, parameterDigest, resolvedDigest, resolvedDefinition} = compiled;
 
     const diagnostics = [];
@@ -122,12 +127,13 @@ export class WorkflowRecipes {
     const {c} = this;
     const {goalId, recipeId, version, submissionId, expectedGoalHash} = input;
     const parameters = validateParameterPayload(input.parameters);
-    const request = {...input, parameters};
+    const taskRouting = normalizeRecipeTaskRouting(input.taskRouting);
+    const request = {...input, parameters, ...(taskRouting === undefined ? {} : {taskRouting})};
     return c.store.command(key, {op: 'workflow.recipe.submit', ...request}, () =>
       c.store.submission('workflow_recipe_run', goalId, submissionId, digest(request), id => {
         const goal = c.store.get('goal', goalId);
         if (goal.hash !== expectedGoalHash) throw Error('Goal approval changed. Preview the recipe again.');
-        const preview = this.preview({goalId, recipeId, version, parameters});
+        const preview = this.preview({goalId, recipeId, version, parameters, ...(taskRouting === undefined ? {} : {taskRouting})});
         for (const field of ['definitionDigest', 'parameterDigest', 'previewDigest']) {
           if (input[field] !== preview[field]) throw Error(`Recipe ${field} mismatch. Preview the recipe again.`);
         }

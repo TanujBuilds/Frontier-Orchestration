@@ -1,7 +1,8 @@
 import {Registry, digest, normalizeTask} from '../contracts.mjs';
 import {isOvernightV2} from '../overnight.mjs';
 import {matches} from '../../project/contracts.mjs';
-import {assertRecipeSize, validateRecipeDefinition, validateRecipeParameters} from './schema.mjs';
+import {assertRecipeSize, validateRecipeDefinition, validateRecipeParameters, normalizeRecipeTaskRouting} from './schema.mjs';
+import {selectRoute} from '../routing/router.mjs';
 
 function resolveTask(task, parameters) {
   const resolve = value => {
@@ -51,9 +52,10 @@ function describeTask(task, mode, project) {
   return {key: task.key, kind: task.kind, actor, permissions: structuredClone(permissions)};
 }
 
-export function compileRecipe({definition, parameters, goal, registry}) {
+export function compileRecipe({definition, parameters, taskRouting, goal, registry, routePreview}) {
   const recipe = validateRecipeDefinition(definition);
   const values = validateRecipeParameters(parameters, recipe.parameters);
+  const routes = normalizeRecipeTaskRouting(taskRouting, recipe.tasks);
   const registered = new Map();
   for (const id of [].concat(recipe.mode)) {
     try {
@@ -65,10 +67,11 @@ export function compileRecipe({definition, parameters, goal, registry}) {
   const manifest = goal.manifest;
   const compatibleMode = registered.has(manifest.mode.id);
   const mode = compatibleMode ? manifest.mode.id : registered.keys().next().value;
-  const definitionDigest = digest(recipe), parameterDigest = digest(values);
+  const definitionDigest = digest(recipe), parameterDigest = digest(routes === undefined ? values : {parameters: values, taskRouting: routes});
   const resolvedDefinition = {
     id: 'recipe-' + digest({definitionDigest, parameterDigest, mode}),
-    version: recipe.version, mode, tasks: recipe.tasks.map(task => resolveTask(task, values)),
+    version: recipe.version, mode, tasks: recipe.tasks.map(task => ({...resolveTask(task, values),
+      ...(routes && Object.hasOwn(routes, task.key) ? {routing: routes[task.key]} : {})})),
   };
   assertRecipeSize(resolvedDefinition, 'Resolved workflow');
   const diagnostics = [];
@@ -106,6 +109,11 @@ export function compileRecipe({definition, parameters, goal, registry}) {
           if (task.kind === 'coding') validateCodingScope(normalized.permissions, manifest.project);
           requirement.actor = normalized.actor;
           requirement.permissions = normalized.permissions;
+          if (normalized.routing) {
+            requirement.routing = normalized.routing;
+            requirement.route = routePreview ? routePreview(normalized)
+              : selectRoute({task: normalized, goal, availability: {budget: {remainingModelCalls: normalized.limits.modelCalls}}});
+          }
         } catch (error) {
           diagnostics.push({code: 'task_contract', taskKey: key, message: error.message});
         }
@@ -113,5 +121,6 @@ export function compileRecipe({definition, parameters, goal, registry}) {
       return requirement;
     }),
   };
-  return {definitionDigest, parameterDigest, resolvedDefinition, resolvedDigest: digest(resolvedDefinition), requirements, diagnostics};
+  return {definitionDigest, parameterDigest, resolvedDefinition, resolvedDigest: digest(resolvedDefinition), requirements, diagnostics,
+    ...(routes === undefined ? {} : {taskRouting: routes})};
 }

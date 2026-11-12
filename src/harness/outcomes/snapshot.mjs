@@ -194,6 +194,9 @@ function readSnapshot(db, { scope, start, end, cursorScope, after }) {
     if (bytes > SNAPSHOT_BYTES) break;
     const goal = selectedGoals.get(task.goalId);
     const version = task.goalVersion;
+    if (Number.isSafeInteger(task.route?.goalVersion) && task.route.goalVersion < goal?.version) {
+      addEvidence('goal_history', `${task.goalId}-${task.route.goalVersion}`);
+    }
     if (!goal || !Number.isSafeInteger(version) || version < 1 || version > goal.version) {
       commits.add(null);
     } else if (version < goal.version) {
@@ -236,6 +239,8 @@ function readSnapshot(db, { scope, start, end, cursorScope, after }) {
       requests.push({ ...request, data: data && {
         reservedAt: data.reservedAt, savedAt: data.savedAt,
         startedAt: data.startedAt, requestOutcome: data.requestOutcome,
+        ...(data.providerBinding ? {providerBinding: data.providerBinding} : {}),
+        ...(data.routeHash ? {routeHash: data.routeHash} : {}),
         error: typeof data.error === 'string' ? data.error.slice(0, 1000) : undefined,
         result: data.result && { model: data.result.model, usage: data.result.usage,
           ...(row.kind === 'apiReview' ? {requestedModel: data.result.requestedModel,

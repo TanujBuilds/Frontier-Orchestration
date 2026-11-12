@@ -77,6 +77,14 @@ export function renderOutcomeMarkdown(report){
   }
   if(report.tasks.length>visibleTasks.length) lines.push('',`JSON includes all ${report.tasks.length} selected tasks.`);
  }
+ const workers = visibleTasks.filter(task=>task.worker);
+ if(workers.length){
+  lines.push('','## Pinned workers','','| Task | Worker | Route provenance |','| --- | --- | --- |');
+  for(const task of workers){
+   const worker=task.worker;
+   lines.push(`| ${cell(task.id)} | ${cell(worker.providerId)} @ ${cell(worker.revision)} | ${cell(worker.routeExplanation??(worker.routeProvenance==='legacy_binding'?'Historical binding; routing reason unavailable':'Routing provenance unverified'))} |`);
+  }
+ }
  if(diagnostics.length) lines.push('','## Data diagnostics','',tally(Object.fromEntries(Object.entries(Object.groupBy(diagnostics,item=>item.code)).map(([code,items])=>[code,items.length]))));
  lines.push('','## Evidence and limits','',report.evidenceExplanation,'',...report.limitations.map(line=>`- ${line}`));
  return lines.join('\n')+'\n';

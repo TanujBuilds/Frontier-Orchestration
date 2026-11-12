@@ -189,3 +189,143 @@ their approved planner binding; host-planned modes keep host planning.
 The routing unit tests use dummy identities and supplied observations. They
 demonstrate deterministic offline behavior; they do not certify live provider
 compatibility or comparative model quality.
+
+## Public preparation and composition
+
+An optional goal `routingPolicy` is normalized with the approved `providerPolicy`
+and approval hash. New worker coding/consult tasks in that goal acquire a
+normalized `task.routing`; explicit host tasks retain host execution. The public
+read-only tool accepts an ordinary task input:
+
+```json
+{
+  "goalId": "approved-goal-id",
+  "task": {
+    "submissionId": "backend-change",
+    "kind": "coding",
+    "objective": "Implement the approved backend change",
+    "acceptance": ["Selected protected checks pass"],
+    "routing": {"version": 1, "category": "backend"}
+  }
+}
+```
+
+`routing_preview` returns the selector result with `expectedGoalHash` and
+`expectedGoalVersion`. It normalizes task authority and reads saved occupancy;
+it performs no probe, write, request reservation or inference. Missing current
+health evidence yields `availability_unknown`; a reserved or ambiguous request
+on the selected resource yields `provider_busy`. Preview bindings describe the
+choice, and become execution pins only after a successful atomic claim.
+`task_submit` accepts those optional hash/version guards alongside `goalId` and
+`task`. Stale supplied guards reject. A route change participates in canonical
+task and submission identity; it cannot reuse a prior submission key.
+
+Backlog item tasks and registered workflow tasks accept the same optional
+`routing` object. Backlog preview includes `routes` for routing-enabled worker
+tasks, and inspection separates the actual `worker` pin from `routingWait`.
+Submission retains the existing whole-group transaction and exact approval
+guards. Planner output uses the same task authority; an outside worker choice
+rejects the whole graph before implementation dispatch.
+
+Recipes accept a separate **optional** `taskRouting` map on
+`workflow_recipe_preview` and `workflow_recipe_submit`, alongside `parameters`:
+
+```json
+{
+  "goalId": "approved-goal-id",
+  "recipeId": "feature",
+  "version": 1,
+  "parameters": {
+    "brief": "Implement the approved backend change",
+    "acceptance": "The protected checks pass",
+    "readPaths": ["src/"],
+    "writePaths": ["src/backend.mjs"],
+    "checks": ["verify"]
+  },
+  "taskRouting": {
+    "implement": {"version": 1, "category": "backend"}
+  }
+}
+```
+
+The map has at most 10 entries and may reference only keys already present in
+the trusted recipe (`implement` for feature, `fix` for bugfix). Values are strict
+task-routing objects; they cannot add tasks, permissions, checks, endpoints or
+provider snapshots. Preview includes normalized routing and the read-only route
+result in each affected task's requirements. Unknown keys and malformed values
+reject. Routing ineligible under the exact goal makes the preview unlaunchable.
+Submit also requires `submissionId`, `expectedGoalHash`, `definitionDigest`,
+`parameterDigest`, `previewDigest` and the mutation `idempotencyKey`, copied from
+the preview. The normalized map contributes to parameter/resolved/submission
+digests only when supplied. Absent maps preserve historical built-in output and
+catalog identities. Changing a map under the same submission identity conflicts;
+identical replay returns the existing task IDs.
+
+## Saved pins and outcome attribution
+
+Claim persists `task.providerBinding`, `task.route` and `task.routeHash` together.
+The route records the original goal hash/version, task hash and selected
+decision. Worker request receipts carry the same binding and route hash.
+Repair, reconnect, restart and supported scope narrowing keep that original
+worker and reason. A current preference or preview never replaces attribution.
+Readiness waiting is a separate `routingWait` with a selected identity and
+reason, without an inference reservation or proof of execution.
+
+Already-started legacy assignments may retain their actual provider binding
+while routing fields remain absent, even after a later approved routing policy
+revision. Their preview explains the legacy pin without inventing a historical
+rule. `task_rebind_required` is a waiting preview reason for a stale task version
+or scope. Legacy exhausted-budget preview retains its binding as historical
+identity while returning `ineligible/budget_exhausted`.
+
+Outcome task rows and beta observer rows expose `worker` from the saved binding
+and its exact approved profile. `routeProvenance` is `recorded`,
+`legacy_binding`, or `unverified`; missing legacy reason/matched rule stays null.
+Unverified binding identity stays null. Recorded worker request usage exposes
+`providerBinding`, `routeHash`, `role`, `requestedModel` and `reportedModel` with
+binding provenance; API reviewer identity remains separate. Known token totals
+include only recorded valid values, with known/eligible request coverage. Host
+token totals remain unknown. Acceptance still requires exact protected-check,
+review and integration evidence; routing adds no quality score or learning
+family.
+
+Task `worker.requestedModel` comes from the approved profile;
+`worker.resolvedModel` is the saved pre-dispatch identity. A task-level
+`reportedModel` is null when its result does not retain a model field (as with a
+coding candidate); actual response model labels remain on the request usage
+rows. A resolved alias is never relabeled as a provider-reported identity.
+
+## Repeatable offline composition demo
+
+From the source checkout on the supported Mac with the existing Codex protected
+sandbox available, run either command with a fresh disposable root:
+
+```sh
+node scripts/demo-routing-composition.mjs --root /tmp/mosaic-routing-host-demo --review host
+node scripts/demo-routing-composition.mjs --root /tmp/mosaic-routing-api-demo --review api
+```
+
+The developer script uses a trusted two-task fixture recipe and two distinct
+dynamic-loopback worker identities, with strictly sequential requests. The
+backend worker fails a real protected check, retains its original pin across a
+restart and repairs the failure. The frontend worker then reuses the checked
+parser. Production sandbox denial probes, candidate checks, host/API review
+bindings, combined checks and Git integration produce exactly two useful
+accepted outcomes. Model replies and assessments are scripted fixtures. One
+worker omits token usage so the result demonstrates partial usage coverage.
+
+The script refuses an existing root and preserves the disposable state and
+`composition-result.json`. Inspect the saved result without opening a
+coordinator or resubmitting work:
+
+```sh
+node scripts/demo-routing-composition.mjs --root /tmp/mosaic-routing-host-demo --inspect
+```
+
+The JSON records task IDs, pins/reasons, check-repair evidence, request order,
+review source, integration commits and known/eligible usage coverage. All owned
+servers and processes are closed. There are no hosted provider calls, personal
+credentials/settings, installed-service changes, performance claims or model
+rankings. The current protected backend still uses Codex; an independent
+execution backend is a later release gate. Offline success is not live host or
+provider certification.

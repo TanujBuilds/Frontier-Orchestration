@@ -106,12 +106,13 @@ export class Registry {
  snapshot(){return {capabilities:clone([...this.capabilities.values()]),modes:clone([...this.modes.values()]),workflows:clone([...this.workflows.values()])};}
  registerWorkflow(raw){
   keys(raw,['id','version','mode','tasks'],'workflow');identifier(raw.id);integer(raw.version,'version',1,10000);const mode=this.mode(raw.mode);
-  if(!Array.isArray(raw.tasks)||!raw.tasks.length||raw.tasks.length>10)throw Error('Invalid workflow tasks');const tasks=new Map();
+  if(!Array.isArray(raw.tasks)||!raw.tasks.length||raw.tasks.length>10)throw Error('Invalid workflow tasks');const tasks=new Map(),routes=new Map();
   for(const t of raw.tasks){
-   keys(t,['key','kind','dependsOn','objective','acceptance','context','permissions'],'workflow task');
+   keys(t,['key','kind','dependsOn','objective','acceptance','context','permissions','routing'],'workflow task');
    identifier(t.key);if(tasks.has(t.key))throw Error('Duplicate workflow task');if(!mode.capabilities.includes(t.kind))throw Error('Mode prohibits workflow capability');
    text(t.objective,'objective');strings(t.acceptance,'acceptance');strings(t.dependsOn??[],'dependencies',{empty:true});
    if(Object.hasOwn(t,'context')&&t.context!=='')text(t.context,'context',40000);
+   if(Object.hasOwn(t,'routing')){const routing=normalizeTaskRouting(t.routing);if(!routing)throw Error('Workflow routing requires a versioned object');routes.set(t.key,routing);}
    if(Object.hasOwn(t,'permissions')){
     keys(t.permissions,['readPaths','writePaths','checks'],'workflow task permissions');
     for(const name of ['readPaths','writePaths']){
@@ -122,7 +123,7 @@ export class Registry {
    tasks.set(t.key,t);
   }
   const visited=new Set(),visiting=new Set(),visit=key=>{if(visiting.has(key))throw Error('Workflow dependency cycle');if(visited.has(key))return;const task=tasks.get(key);if(!task)throw Error('Unknown workflow dependency');visiting.add(key);for(const dep of task.dependsOn??[])visit(dep);visiting.delete(key);visited.add(key);};for(const key of tasks.keys())visit(key);
-  const key=`${raw.id}@${raw.version}`;if(this.workflows.has(key))throw Error('Workflow already exists');this.workflows.set(key,clone(raw));return clone(raw);
+  const key=`${raw.id}@${raw.version}`;if(this.workflows.has(key))throw Error('Workflow already exists');const workflow=clone(raw);for(const t of workflow.tasks)if(routes.has(t.key))t.routing=routes.get(t.key);this.workflows.set(key,workflow);return clone(workflow);
  }
 }
 export function sourceScope(raw={}) {

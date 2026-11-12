@@ -3,6 +3,8 @@ import {digest} from '../contracts.mjs';
 import {classifyTaskOutcome} from './classify.mjs';
 
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+const sameIdentity=(a,b)=>{try{return a!==undefined&&b!==undefined&&digest(a)===digest(b);}catch{return false;}};
+const approvedHash=goal=>{try{return goal.hash===digest(goal.manifest);}catch{return false;}};
 const nonnegative = value => Number.isSafeInteger(value) && value >= 0;
 const countBy = (rows,key) => {
  const counts = new Map();
@@ -76,7 +78,7 @@ function tokenTotals(eligible,field){
  return {knownRequests:known.length,eligibleRequests:eligible.length,knownTokens:exact?sum:null,missingRequests:eligible.length-known.length,reason};
 }
 
-function summarizeUsage({requests,events,tasks,evidence,diagnostics}){
+function summarizeUsage({requests,events,tasks,evidence,diagnostics,workerByTask,goals}){
  const starts = groupBy(events.filter(e=>e.type==='model.request.started'),e=>e.data?.requestId);
  const held = groupBy(events.filter(e=>['task.uncertain','task.interrupted'].includes(e.type)),e=>e.data?.requestId);
  const heldTasks = new Map(tasks.filter(task=>task.status==='uncertain').map(task=>[task.id,task]));
@@ -91,6 +93,7 @@ function summarizeUsage({requests,events,tasks,evidence,diagnostics}){
   reservedAt:data?.reservedAt, savedAt:data?.savedAt, outcome:data?.requestOutcome,
   model:data?.result?.model, usage:data?.result?.usage,
   requestedModel:data?.result?.requestedModel,reportedModel:data?.result?.reportedModel,
+  providerBinding:data?.providerBinding,routeHash:data?.routeHash,
  });
  for(const [id,observations] of groupBy(requests,row=>row.id)){
   if(typeof id!=='string'||!id.length){
@@ -122,6 +125,19 @@ function summarizeUsage({requests,events,tasks,evidence,diagnostics}){
    :conflict?'conflicting_request_rows':!providerRequest?'not_a_provider_model_request':'request_not_completed';
   const [knownInputTokens,input] = missing?[null,missing]:readToken(raw,['prompt_tokens','input_tokens',...(row.kind==='apiReview'?['inputTokens']:[])]);
   const [knownOutputTokens,output] = missing?[null,missing]:readToken(raw,['completion_tokens','output_tokens',...(row.kind==='apiReview'?['outputTokens']:[])]);
+  let attribution;
+  if(row.kind==='model'&&row.data?.providerBinding){
+   const worker=workerByTask.get(row.task_id),task=tasks.find(task=>task.id===row.task_id);
+   const plannerGoal=goals.find(goal=>goal.id===row.task_id&&approvedHash(goal)),plannerBinding=plannerGoal?.manifest?.plannerBinding;
+   const expected=worker?.bindingProvenance==='pinned'?{version:1,providerId:worker.providerId,revision:worker.revision,profileHash:worker.profileHash,policyHash:worker.policyHash}:plannerBinding;
+   const routeMatches=worker?worker.routeProvenance==='recorded'?row.data.routeHash===worker.routeHash:worker.routeProvenance==='legacy_binding'&&row.data.routeHash===undefined:row.data.routeHash===undefined;
+   const verified=!conflict&&sameIdentity(expected,row.data.providerBinding)&&routeMatches;
+   const requested=worker?.requestedModel??plannerGoal?.manifest?.providerPolicy?.workers?.find(profile=>profile.id===plannerBinding?.providerId)?.model;
+   attribution={role:task?'worker':plannerGoal?'planner':null,providerBinding:verified?row.data.providerBinding:null,
+    routeHash:verified?row.data.routeHash??null:null,bindingProvenance:verified?'pinned':'unverified',
+    requestedModel:verified&&typeof requested==='string'?requested.slice(0,200):null,
+    reportedModel:eligible&&typeof row.data?.result?.model==='string'?row.data.result.model.slice(0,200):null};
+  }
   rows.push({
    id,ownerId:conflict?null:row.task_id,kind:conflict?null:row.kind,status,
    providerOutcome:outcome,uncertain,
@@ -133,6 +149,7 @@ function summarizeUsage({requests,events,tasks,evidence,diagnostics}){
    ...(row.kind==='apiReview'?{role:'reviewer',
     requestedModel:!conflict&&typeof row.data?.result?.requestedModel==='string'?row.data.result.requestedModel.slice(0,200):null,
     reportedModel:!conflict&&typeof row.data?.result?.reportedModel==='string'?row.data.result.reportedModel.slice(0,200):null}:{}),
+   ...attribution,
    knownInputTokens,knownOutputTokens,missingReasons:{input,output},
    ...(missing?{providerRaw:null,providerRawReason:missing}:retainProviderRaw(raw)),
   });
@@ -354,7 +371,7 @@ export function summarizeOutcomes(snapshot){
   reason:e.type==='task.blocked'&&e.data?.category==='no_progress'?'no_progress':failureReasons.get(e.type),
  }));
  const usage = {
-  ...summarizeUsage({requests,events,tasks,evidence,diagnostics}),
+  ...summarizeUsage({requests,events,tasks,evidence,diagnostics,goals,workerByTask:new Map(classified.filter(row=>row.worker).map(row=>[row.id,row.worker]))}),
   planning:planningCoverage(scope),remoteResearch:summarizeRemoteResearch(tasks),
  };
  const storedDiagnostics = Array.isArray(snapshot.diagnostics)?snapshot.diagnostics.length:0;

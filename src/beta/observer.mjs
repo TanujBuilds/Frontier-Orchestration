@@ -42,8 +42,10 @@ export function actorRows(state){
   const captured=task.provenance==='captured';
   const nativeActive=native&&task.status==='codex_active',reported=report?.lastReport;
   const stateName=nativeActive?(reported&&!report.stale?reported.status:'uncertain'):task.status==='legacy_reviewing'?'awaiting_legacy_review':task.status;
-  rows.push({id:task.id,actor:native?'Codex':task.workerProfile?.displayName??workerName,role:report?.role==='explorer'?'Explorer':report?.role==='supervisor'?'Supervisor':'Implementer',assignment:task.objective,
-   status:checksFailed(task)&&task.status==='blocked'?'Checks failed':nativeActive&&stateName==='uncertain'?'Native owner · activity unknown':status(stateName),
+  const wait=task.routingWait?.decision,worker=task.worker;
+  const routeExplanation=worker?.routeExplanation??(worker?.routeProvenance==='legacy_binding'?'Pinned '+worker.providerId+' · historical routing reason unavailable':null)??wait?.explanation??null;
+  rows.push({id:task.id,actor:native?'Codex':worker?.bindingProvenance==='unverified'?'API worker · identity unverified':worker?.displayName??task.workerProfile?.displayName??(wait?.binding?'Selected '+wait.binding.providerId:workerName),role:report?.role==='explorer'?'Explorer':report?.role==='supervisor'?'Supervisor':'Implementer',assignment:task.objective,routeExplanation,
+   status:checksFailed(task)&&task.status==='blocked'?'Checks failed':wait&&['queued','suspended'].includes(task.status)?'Waiting · '+String(wait.reasonCode).replaceAll('_',' '):nativeActive&&stateName==='uncertain'?'Native owner · activity unknown':status(stateName),
    state:stateName,at:reported?.at??task.lastActivityAt??task.updatedAt,evidence:task.evidenceRef,provenance:native?(reported?'reported':'coordinator'):captured?'captured':'coordinator'});
  }
  const planning=snapshot.planning?.find(p=>p.goalId===goal.id);
@@ -112,7 +114,7 @@ function compactMain(state,goal,{width,height,color,selected,offset}){
     const joined=lines(`${marker}${row.actor} · ${row.status}`,width);
     const identity=joined.length===1?joined:[first(marker+row.actor),...lines(row.status,width)];
     const heading=color?identity.map(line=>statusColor(line,row.state)):identity;
-    const detail=height>=18?[first(`  ${row.provenance} · updated ${clock(row.at)}`)]:[];
+    const detail=height>=18?[...(row.routeExplanation?[first('  '+row.routeExplanation)]:[]),first(`  ${row.provenance} · updated ${clock(row.at)}`)]:[];
     return [...heading,first(row.assignment),...detail];
    });
    let start=index,after=index+1,used=blocks[index].length;
@@ -164,6 +166,7 @@ function polishedMain(state,goal,{width,height,color,selected,offset}){
    const head=gap>=2?[identity+' '.repeat(gap)+tone(badge,row.state)]:[identity,...lines(badge,space-2).map(line=>'  '+tone(line,row.state))];
    const assignment=lines(row.assignment,space-2);
    return [...head,...assignment.slice(0,2).map((line,j)=>'  '+(j===1&&assignment.length>2?clip(line+' …',space-2):line)),
+    ...(row.routeExplanation?['  '+quiet(clip(row.routeExplanation,space-2))]:[]),
     '  '+quiet(clip(`${row.provenance}  updated ${clock(row.at)}`,space-2))];
   });
   if(!blocks.length)out.push(quiet('No assignments recorded.'));

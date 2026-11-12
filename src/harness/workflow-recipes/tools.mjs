@@ -1,4 +1,5 @@
 import {WorkflowRecipes} from './service.mjs';
+import {taskRoutingInputSchema} from '../contracts.mjs';
 
 const id = {type: 'string', maxLength: 120};
 const version = {type: 'integer', minimum: 1, maximum: 10000};
@@ -11,14 +12,15 @@ const parameters = {
 
 export function registerWorkflowRecipeTools({add, c}) {
   const recipes = new WorkflowRecipes({c});
-  const preview = {goalId: id, recipeId: id, version, parameters};
+  const taskRouting = {type: 'object', maxProperties: 10, propertyNames: {pattern: '^[a-zA-Z0-9][a-zA-Z0-9_-]{0,75}$'}, additionalProperties: taskRoutingInputSchema};
+  const preview = {goalId: id, recipeId: id, version, parameters, taskRouting};
   const submit = {...preview, expectedGoalHash: hash, definitionDigest: hash, previewDigest: hash,
     parameterDigest: hash, submissionId: id};
   add('workflow_recipe_list', 'List the available versioned workflow recipes.', {}, [], false, () => recipes.list());
   add('workflow_recipe_inspect', 'Read the exact recipe definition and digest.', {id, version}, ['id', 'version'],
     false, input => recipes.inspect(input));
   add('workflow_recipe_preview', 'Resolve a recipe against the saved goal and show eligibility without creating tasks.',
-    preview, Object.keys(preview), false, input => recipes.preview(input));
+    preview, Object.keys(preview).filter(key => key !== 'taskRouting'), false, input => recipes.preview(input));
   add('workflow_recipe_submit', 'Create the exact previewed workflow inside an active approved goal.',
-    submit, Object.keys(submit), true, (input, key) => recipes.submit(input, key));
+    submit, Object.keys(submit).filter(key => key !== 'taskRouting'), true, (input, key) => recipes.submit(input, key));
 }
