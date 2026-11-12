@@ -62,7 +62,10 @@ Its coordinator-owned specification contains:
 - `readPaths` and `inventory`: approved relative scopes and exact input entries
   `{path, realPath, hash, mode}`. Hashes are SHA-256; modes are `100644` or
   `100755`. Duplicates, secrets, undisclosed files, canonical escapes and
-  conflicting deny targets are rejected. At most 10,000 inputs and 2 MiB of
+  conflicting deny targets are rejected. Original inventory excludes `dist`,
+  `.overnight-output` and dependency trees, consistent with `Workspace.inventory`;
+  staged copies use the separate read-only staging contract below. At most
+  10,000 inputs and 2 MiB of
   serializable compilation data are accepted; emitted profiles are capped at
   4 MiB.
 - `stagedInputs`: at most ten canonical `approved-inputs-*` roots with exact

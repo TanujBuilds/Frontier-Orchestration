@@ -87,6 +87,9 @@ export function compileDarwinSeatbeltPolicy(spec) {
   if ([root, executable, ...dependencies, ...outputs, ...RUNTIME_READ_ROOTS].some(file => denied.some(item => within(item, file) || within(file, item) && !within(root, item)))) throw isolation('Native deny overlaps a required runtime or writable root');
   const inputs = inputInventory(spec.inventory, root, readPaths, denied);
   if (!inputs.length) throw isolation('Native policy requires an exact approved input inventory');
+  // Workspace.inventory excludes generated output roots. Do not accept a
+  // contradictory immutable input that the profile grants output writes to.
+  if (inputs.some(file => outputs.some(output => within(output, file.realPath)))) throw isolation('Native original input inventory must exclude generated output roots');
   const staged = list(spec.stagedInputs, 'staged input roots', 10).map(stage => {
     if (!record(stage)) throw isolation('Invalid native staged inputs');
     const stagedRoot = canonical(stage.root);

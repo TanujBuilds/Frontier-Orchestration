@@ -45,6 +45,21 @@ test('native compiler requires coordinator bounds and refuses unsafe aliases and
   assert.throws(() => compile(deniedAlias), error => error.code === 'isolation');
 });
 
+for (const generated of [
+  'dist/approved-input.txt',
+  '.overnight-output/approved-input.txt',
+  '.overnight-output/approved-inputs-existing/approved-input.txt',
+  'node_modules/approved-input.txt',
+]) test(`native compiler rejects original inventory in generated or dependency path ${generated}`, async t => {
+  const { compileDarwinSeatbeltPolicy: compile } = await nativeApi();
+  const { spec, root } = await fixture(t);
+  await mkdir(path.dirname(path.join(root, generated)), { recursive: true });
+  await writeFile(path.join(root, generated), 'approved-original');
+  spec.readPaths.push(generated.split('/')[0] + '/');
+  spec.inventory.push(await input(root, generated));
+  assert.throws(() => compile(spec), error => error.code === 'isolation', 'generated files cannot be original immutable approved inputs');
+});
+
 test('native backend is recognized but no option, identity or argv enables production checks', { skip: !darwin }, async t => {
   const api = await nativeApi();
   const { spec, root, parent } = await fixture(t);
