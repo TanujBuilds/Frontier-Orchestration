@@ -1,4 +1,4 @@
-import {digest,normalizeTask} from '../contracts.mjs';
+import {digest,normalizeTask,isStartedLegacyTask} from '../contracts.mjs';
 import {selectRoute} from './router.mjs';
 import {codingModelReplayEligible} from '../coding.mjs';
 
@@ -55,7 +55,19 @@ export function routeDecision(c,goal,task,observation){
 export function previewRoute(c,{goalId,task}){
  const goal=c.store.get('goal',goalId);assertRoutingApproval(goal);
  const saved=c.store.all('task').find(t=>t.goalId===goalId&&t.spec.submissionId===task.submissionId);
- const spec=normalizeTask(task,saved?taskRoutingManifest(c,goal,saved):goal.manifest,c.registry,{checkRoutingEligibility:false});
+ const spec=normalizeTask(task,saved?taskRoutingManifest(c,goal,saved):goal.manifest,c.registry,{checkRoutingEligibility:false,existingTask:saved});
+ if(isStartedLegacyTask(saved)){
+  // Validate the proposed current scope and exact old provider without updating
+  // its saved version. Preview never grants the explicit rebind still required.
+  if(!goal.manifest.providerPolicy)throw Error('Persisted legacy provider pin requires its approved pool');
+  c.verifyWorkerBinding(goal,{...saved,spec,goalVersion:goal.version});
+  const binding=structuredClone(saved.providerBinding),prefix='Persisted legacy binding to '+binding.providerId+'; no historical routing decision was added. ';
+  let status='waiting',reasonCode='availability_unknown',explanation='No current availability observation proves this worker ready.';
+  if(saved.goalVersion!==goal.version||saved.hash!==digest(spec)){reasonCode='task_rebind_required';explanation='Explicit rebind to the current approved task scope/version is required.';}
+  else if(remainingCalls(c,saved)===0){status='ineligible';reasonCode='budget_exhausted';explanation='The original model-call budget is exhausted; the persisted binding is historical identity, not new inference authority.';}
+  else if(busy(c,goal,binding)){reasonCode='provider_busy';explanation='An existing reserved or uncertain request occupies this profile/group; wait without fallback.';}
+  return {status,binding,reasonCode,explanation:prefix+explanation,matchedRule:null,expectedGoalHash:goal.hash,expectedGoalVersion:goal.version};
+ }
  const candidate={id:saved?.id??'preview',spec};
  let selectionGoal=goal;
  if(saved?.route&&saved.hash===digest(spec)){assertRoutePin(c,goal,saved);selectionGoal=routeOrigin(c,goal,saved);}

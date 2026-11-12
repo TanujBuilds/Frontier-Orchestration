@@ -280,8 +280,9 @@ export class Coordinator {
  submitTask(input,key){const {goalId,expectedGoalHash,expectedGoalVersion,...raw}=input;return this.store.command(key,{op:'task.submit',...input},()=>{
   const g=this.store.get('goal',goalId);this.liveGoal(g);assertRoutingApproval(g);
   if(expectedGoalHash!==undefined&&expectedGoalHash!==g.hash||expectedGoalVersion!==undefined&&expectedGoalVersion!==g.version)throw Error('Goal approval hash/version changed');
-  const spec=normalizeTask(raw,g.manifest,this.registry),hash=digest(spec);
-  const duplicate=this.store.db.prepare('SELECT * FROM submissions WHERE kind=? AND scope=? AND key=?').get('task',goalId,spec.submissionId);
+  const duplicate=typeof raw.submissionId==='string'?this.store.db.prepare('SELECT * FROM submissions WHERE kind=? AND scope=? AND key=?').get('task',goalId,raw.submissionId):null;
+  const existingTask=duplicate?this.store.get('task',duplicate.id):undefined;
+  const spec=normalizeTask(raw,g.manifest,this.registry,{existingTask}),hash=digest(spec);
   if(duplicate){if(duplicate.hash!==hash)throw Error('Submission conflict');return this.getTask(duplicate.id);}
   const existing=this.store.all('task').filter(t=>t.goalId===goalId);
   if(existing.length>=g.manifest.limits.maxTasks)throw Error('Goal task cap reached');

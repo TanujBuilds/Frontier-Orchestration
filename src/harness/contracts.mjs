@@ -201,12 +201,24 @@ export function normalizeGoal(raw,registry=new Registry(),providerRegistry){
  if(routingPolicy){manifest.routingPolicy=routingPolicy;manifest.routingPolicyHash=digest(routingPolicy);}
  return manifest;
 }
-export function normalizeTask(raw,goal,registry=new Registry(),{checkRoutingEligibility=true}={}) {
+export function isStartedLegacyTask(task){
+ return Boolean(task&&task.startedAt!=null&&task.providerBinding&&task.spec?.actor==='deepseek'&&!Object.hasOwn(task.spec,'routing')&&!Object.hasOwn(task,'route')&&!Object.hasOwn(task,'routeHash'));
+}
+export function normalizeTask(raw,goal,registry=new Registry(),{checkRoutingEligibility=true,existingTask}={}) {
  keys(raw,['submissionId','kind','actor','objective','context','acceptance','dependsOn','priority','permissions','scope','limits','researchPolicy','role','routing'],'task');
+ // Only internal rebind/preview callers supply a saved record. Caller omission
+ // on a fresh routing-enabled task still receives the new versioned defaults.
+ const legacy=isStartedLegacyTask(existingTask);
+ if(legacy){
+  if(digest(existingTask.spec)!==existingTask.hash)throw Error('Persisted legacy task hash changed');
+  if(raw.submissionId!==existingTask.spec.submissionId||raw.kind!==existingTask.spec.kind)throw Error('Started legacy task identity/kind cannot change');
+  if(Object.hasOwn(raw,'routing'))throw Error('Started legacy task retains absent routing; do not replace its original provider provenance');
+ }
  if(!goal.mode.capabilities.includes(raw.kind)||!TASK_LIMITS[raw.kind])throw Error('Mode prohibits capability');
- const actor=raw.actor??(goal.mode.actors.includes('deepseek')?'deepseek':'codex');if(!goal.mode.actors.includes(actor))throw Error('Mode prohibits actor');
+ const actor=raw.actor??(legacy?existingTask.spec.actor:goal.mode.actors.includes('deepseek')?'deepseek':'codex');if(!goal.mode.actors.includes(actor))throw Error('Mode prohibits actor');
+ if(legacy&&actor!==existingTask.spec.actor)throw Error('Started legacy task retains its execution actor');
  if(Object.hasOwn(raw,'routing')&&(!goal.routingPolicy||actor!=='deepseek'||!['coding','consult'].includes(raw.kind)))throw Error('Task routing requires an approved routed worker task');
- const routing=goal.routingPolicy&&actor==='deepseek'&&['coding','consult'].includes(raw.kind)?normalizeTaskRouting(Object.hasOwn(raw,'routing')?raw.routing:{version:1}):undefined;
+ const routing=!legacy&&goal.routingPolicy&&actor==='deepseek'&&['coding','consult'].includes(raw.kind)?normalizeTaskRouting(Object.hasOwn(raw,'routing')?raw.routing:{version:1}):undefined;
  if(Object.hasOwn(raw,'routing')&&!routing)throw Error('Explicit task routing requires a versioned object');
  if(actor==='deepseek'&&goal.providerPolicy&&!routing){
   const worker=goal.providerPolicy.workers.find(profile=>profile.id===goal.providerPolicy.defaultWorkerId);

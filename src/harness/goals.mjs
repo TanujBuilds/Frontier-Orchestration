@@ -38,7 +38,7 @@ export class Goals {
   const t=this.c.getTask(input.taskId),g=this.c.store.get('goal',t.goalId);this.c.liveGoal(g);
   if(t.owner||t.native?.writerActive||g.integrationPending?.taskId===t.id||['codex_active','legacy_reviewing','accepted'].includes(t.status)||(t.status==='partial'&&!(t.native?.layout==='candidate_v1'&&t.goalVersion<g.version)))throw Error('Task must be quiescent and unfinished');
   if(isOvernightV2(g.manifest))throw Error('Overnight v2 stage graph changes require a separately validated plan; preserve original IDs and spending');
-  const spec=normalizeTask(input.spec??t.spec,taskRoutingManifest(this.c,g,t),this.c.registry);if(spec.submissionId!==t.spec.submissionId||spec.kind!==t.spec.kind)throw Error('Task identity/kind cannot change');
+  const spec=normalizeTask(input.spec??t.spec,taskRoutingManifest(this.c,g,t),this.c.registry,{existingTask:t});if(spec.submissionId!==t.spec.submissionId||spec.kind!==t.spec.kind)throw Error('Task identity/kind cannot change');
   if(t.workerProfile&&digest(t.workerProfile)!==digest(g.manifest.workerProfile??null))throw Error('Started assignments retain their approved worker profile');
   const providerBinding=spec.actor==='deepseek'?(t.startedAt&&t.providerBinding?t.providerBinding:spec.routing?undefined:this.c.providerBinding(g,g.manifest.providerPolicy?.defaultWorkerId)):undefined;
   if(t.startedAt&&digest(t.providerBinding??null)!==digest(providerBinding??null))throw Error('Started assignments retain their approved provider binding');
