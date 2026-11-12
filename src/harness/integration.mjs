@@ -2,7 +2,7 @@ import path from 'node:path';
 import {access,readFile} from 'node:fs/promises';
 import {canonicalRepository,capacitySnapshot,writeScopeWait,inertUnstartedGoal,repositoryLockId,sharedBaseJournalId} from './scheduling/capacity.mjs';
 import {effectiveIntegrationChecks,isOvernightV2} from './overnight.mjs';
-import { repairIntegration } from './integration-repair.mjs';
+import { repairIntegration,assertPendingRepair } from './integration-repair.mjs';
 import { NativeCandidates } from './native-candidates.mjs';
 import { Journal } from '../project/journal.mjs';
 import { Workspace,inspectRepository } from '../project/workspace.mjs';
@@ -124,21 +124,30 @@ export class Integration {
   if(current.hash!==expected.hash||current.version!==expected.version||digest(current.manifest.project)!==digest(expected.manifest.project))throw Error('Goal approval or project version changed during integration preparation');
   return current;
  }
- async goalWorkspace(goalId,{native=false,journal:lockedJournal,validatePrior}={}){
+ async goalWorkspace(goalId,{native=false,journal:lockedJournal,validatePrior,repairPin}={}){
   const g=this.c.store.get('goal',goalId);if(g.integrationSealed)throw Error('Preserved partial integration workspace is retired; use a separately approved goal');if(!g.manifest.project)throw Error('Goal has no coding project');
+  if(repairPin)assertPendingRepair(this,repairPin);
   const journal=lockedJournal??await this.integrationJournal(g),p=g.manifest.project;
   const shared=journal.id!==g.id,origin=journal.last('integration.repository');
   if(shared&&origin&&(origin.baseCommit!==p.baseCommit||origin.repository!==canonicalRepository(p.repo)))throw Error('Incompatible approved repository base; preserve candidate for a separately approved integration');
   const manifest={repo:p.repo,baseCommit:p.baseCommit,permissions:p,...(isOvernightV2(g.manifest)?{overnightV2:true}:{})};
-  if(!journal.last('workspace.created')){const inspected=await inspectRepository(p.repo,p);if(inspected.baseCommit!==p.baseCommit)throw Error('Approved source revision changed');}
-  const workspace=new Workspace(manifest,journal);await workspace.initialize();
+  if(!repairPin&&!journal.last('workspace.created')){const inspected=await inspectRepository(p.repo,p);if(inspected.baseCommit!==p.baseCommit)throw Error('Approved source revision changed');}
+  const workspace=new Workspace(manifest,journal);
+  if(repairPin){
+   // Inverse import can only open its already initialized, pinned target.
+   if(!journal.last('workspace.created')||workspace.root!==g.integration.worktree||workspace.branch!==g.integration.branch||p.baseCommit!==g.integration.baseCommit||shared&&!origin)throw Error('Pending repair requires the original initialized integration workspace');
+   await access(journal.file);await access(path.join(workspace.root,'.git'));
+   if(await git(workspace.root,'branch','--show-current')!==workspace.branch)throw Error('Pending repair integration branch changed');
+   assertPendingRepair(this,repairPin,journal);
+  }else await workspace.initialize();
   if(shared&&!origin)await journal.append('integration.repository',{repository:canonicalRepository(p.repo),baseCommit:p.baseCommit});
   if(!native)await workspace.recover();
-  this.c.store.tx(()=>{const current=this.assertPreparationGoal(g,{live:!native||!g.integration});validatePrior?.();if(!current.integration){current.integration={worktree:workspace.root,branch:workspace.branch,baseCommit:p.baseCommit,...(shared?{journalId:journal.id}: {})};this.c.store.put('goal',current);}});
+  this.c.store.tx(()=>{const current=repairPin?assertPendingRepair(this,repairPin).goal:this.assertPreparationGoal(g,{live:!native||!g.integration});validatePrior?.();if(!current.integration){current.integration={worktree:workspace.root,branch:workspace.branch,baseCommit:p.baseCommit,...(shared?{journalId:journal.id}: {})};this.c.store.put('goal',current);}});
   return {journal,workspace,g:this.c.store.get('goal',goalId),shared};
  }
  checks(workspace){return this.checksFactory?.(workspace)??new CheckRunner(workspace,{codex:this.config.codexPath??'codex'});}
- async lockedGoal(goalId,{native=false,refuseLegacy=false,integrationTaskId=null}={}){
+ async lockedGoal(goalId,{native=false,refuseLegacy=false,integrationTaskId=null,repairPin}={}){
+  if(repairPin){if(repairPin.goal.id!==goalId||repairPin.task.id!==integrationTaskId)throw Error('Pending repair target mismatch');assertPendingRepair(this,repairPin);}
   const g=this.c.store.get('goal',goalId),repository=canonicalRepository(g.manifest.project.repo);
   // Lock order is canonical repository then integration journal. Journal's
   // random token is the lock generation; only verified ESRCH permits recovery.
@@ -151,7 +160,8 @@ export class Integration {
     if(other.integrationOwner&&(other.id!==goalId||refuseLegacy))throw Error('Native legacy owner holds integration workspace');
    }
    const journal=await this.integrationJournal(g),verifiedJournals=new Set(),verifiedHeads=new Set(),inertProofs=new Set(),snapshot=capacitySnapshot(this.c);
-   for(const other of snapshot.goals){
+   // Reversing an existing pinned import does not admit a new lineage.
+   for(const other of repairPin?[]:snapshot.goals){
     if(other.id===g.id||!other.manifest.project||canonicalRepository(other.manifest.project.repo)!==repository)continue;
     // Historical private targets never join a shared lineage. Universal locks,
     // pending imports, native owners and write-scope fences still apply.
@@ -164,9 +174,9 @@ export class Integration {
     if(snapshot.tasks.some(t=>t.goalId===other.id&&t.status==='accepted'&&t.integration))throw Error('Incompatible independent integration state; source must incorporate finalized accepted heads before a newly approved successor base');
    }
    const validatePrior=()=>{for(const id of inertProofs)if(!inertUnstartedGoal(this.c,this.c.store.get('goal',id),{allowDraft:true}))throw Error('Prior inert authority changed during integration preparation');};
-   this.c.store.tx(()=>{this.assertPreparationGoal(g,{live:!native||!g.integration});validatePrior();});
+   this.c.store.tx(()=>{if(repairPin)assertPendingRepair(this,repairPin);else this.assertPreparationGoal(g,{live:!native||!g.integration});validatePrior();});
    releaseJournal=await journal.lock();
-   const target=await this.goalWorkspace(goalId,{native,journal,validatePrior});
+   const target=await this.goalWorkspace(goalId,{native,journal,validatePrior,repairPin});
    const release=async()=>{try{await releaseJournal();}finally{await releaseRepository();}};
    return {...target,release};
   }catch(error){try{await releaseJournal?.();}finally{await releaseRepository();}throw error;}

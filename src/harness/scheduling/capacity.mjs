@@ -92,15 +92,36 @@ export function assertCapacityConfiguration(c,manifest,{excludeGoalId}={}){
 function requestData(raw){
  try{const value=JSON.parse(raw);return value&&typeof value==='object'&&!Array.isArray(value)?value:null;}catch{return null;}
 }
-function requestResource(data,goals){
+function requestResource(data,row,approvals,tasks){
  if(!data)return null;
  const binding=data.providerBinding??data.reviewerBinding,hasBinding=Object.hasOwn(data,'providerBinding')||Object.hasOwn(data,'reviewerBinding');
+ if(Object.hasOwn(data,'providerBinding')&&Object.hasOwn(data,'reviewerBinding'))return null;
+ if(hasBinding&&(!binding||typeof binding!=='object'||Array.isArray(binding)||binding.version!==1||
+    Object.keys(binding).length!==5||!['version','providerId','revision','profileHash','policyHash'].every(key=>Object.hasOwn(binding,key))))return null;
+ // A profile may survive many approvals with different group ceilings. Resolve
+ // its exact policy within the request owner's current/history records first;
+ // another goal containing that profile is not evidence of this receipt's limit.
+ const goalId=tasks.find(t=>t.id===row.task_id)?.goalId??(approvals.some(g=>(g.goalId??g.id)===row.task_id)?row.task_id:null);
+ const sources=goalId?approvals.filter(g=>(g.goalId??g.id)===goalId):approvals;
  const matches=p=>hasBinding?binding&&p.id===binding.providerId&&p.revision===binding.revision&&digest(p)===binding.profileHash:digest(p)===data.capacityResource?.profileHash;
- const source=goals.find(g=>profiles(g).some(matches));
- const profile=source&&profiles(source).find(matches);
- if(!profile)return null;
- const expected={profileHash:digest(profile),capacityGroup:profile.capacityGroup,baseUrl:profile.baseUrl,profileLimit:profile.concurrency,
-  groupLimit:source.manifest.providerPolicy?.capacityGroups.find(g=>g.id===profile.capacityGroup)?.limit??1};
+ const resources=new Map();
+ for(const source of sources){
+  if(digest(source.manifest)!==source.hash)continue;
+  const manifest=source.manifest,policyMatches=(policy,hash)=>policy&&hash===binding.policyHash&&digest(policy)===hash;
+  const candidates=hasBinding?[
+   ...(policyMatches(manifest.providerPolicy,manifest.providerPolicyHash)?manifest.providerPolicy.workers:[]),
+   ...(policyMatches(manifest.reviewPolicy,manifest.reviewPolicyHash)&&manifest.reviewPolicy.reviewer?[manifest.reviewPolicy.reviewer]:[]),
+  ]:profiles(source);
+  for(const profile of candidates.filter(matches)){
+   const expected={profileHash:digest(profile),capacityGroup:profile.capacityGroup,baseUrl:profile.baseUrl,profileLimit:profile.concurrency,
+    groupLimit:manifest.providerPolicy?.capacityGroups.find(g=>g.id===profile.capacityGroup)?.limit??1};
+   resources.set(digest(expected),expected);
+  }
+ }
+ // Legacy orphan receipts can still resolve an exact immutable binding, but
+ // missing/conflicting policy provenance must retain the global uncertain hold.
+ if(resources.size!==1)return null;
+ const expected=resources.values().next().value;
  // Old receipts without resource metadata can use their exact immutable binding.
  // Present but incomplete/inconsistent metadata is uncertainty, not a new group.
  if(!Object.hasOwn(data,'capacityResource'))return expected;
@@ -112,15 +133,16 @@ function requestResource(data,goals){
  return resource;
 }
 export function capacitySnapshot(c){
- const goals=c.store.all('goal'),tasks=c.store.all('task');
+ const goals=c.store.all('goal'),tasks=c.store.all('task'),approvals=[...goals,...c.store.all('goal_history')];
  const requests=c.store.db.prepare("SELECT * FROM requests WHERE kind IN ('model','apiReview','codexReview') AND ("+heldRequest+")").all().map(row=>{
   const data=requestData(row.data);
-  return {...data,...row,resource:requestResource(data,goals)};
+  return {...data,...row,resource:requestResource(data,row,approvals,tasks)};
  });
- return {serviceLimit:c.store.maybe('capacity_config','service')?.limit??c.serviceMaxConcurrentTasks??1,activeTasks:tasks.filter(t=>slots.has(t.status)&&t.spec.actor==='deepseek'&&t.executionActor!=='codex'),tasks,goals,planning:c.store.all('planning').filter(p=>['running','uncertain'].includes(p.status)),requests};
+ return {serviceLimit:c.store.maybe('capacity_config','service')?.limit??c.serviceMaxConcurrentTasks??1,autonomousParallelBusy:c.autonomousParallelBusy===true,activeTasks:tasks.filter(t=>slots.has(t.status)&&t.spec.actor==='deepseek'&&t.executionActor!=='codex'),tasks,goals,planning:c.store.all('planning').filter(p=>['running','uncertain'].includes(p.status)),requests};
 }
 export function canClaim({task,goal,route,snapshot}){
  const active=snapshot.activeTasks,policy=goal.manifest.providerPolicy;
+ if(!policy&&snapshot.autonomousParallelBusy)return {allowed:false,reasonCode:'legacy_global_slot',explanation:'Historical work waits for parallel process lanes to settle'};
  if(!policy||active.some(t=>!snapshot.goals.find(g=>g.id===t.goalId)?.manifest.providerPolicy)||snapshot.planning.some(p=>!snapshot.goals.find(g=>g.id===p.goalId)?.manifest.providerPolicy)){
   if(active.length||snapshot.planning.length)return {allowed:false,reasonCode:'legacy_global_slot',explanation:'Historical work retains its single global autonomous slot'};
  }

@@ -1,6 +1,6 @@
 import {claimAvailable,holdPinnedResource} from './routing/runtime.mjs';
 import {digest} from './contracts.mjs';
-import {capacitySnapshot,CapacityWaitError} from './scheduling/capacity.mjs';
+import {capacitySnapshot,CapacityWaitError,canClaim} from './scheduling/capacity.mjs';
 import { randomUUID } from 'node:crypto';
 import { CodingAdapter } from './coding.mjs';
 import { LocalProvider } from './provider.mjs';
@@ -147,9 +147,13 @@ export class Worker {
  }
  nextIdleCheck(startedAt){
   const {store}=this.c;
+  if(this.finished.length)return startedAt;
   let next=Infinity;
   const consider=at=>{if(at>startedAt)next=Math.min(next,at);};
   consider(this.nextProbeAt);
+  // The CLI also waits outside this worker. A lane may finish without a DB
+  // write (for example a legacy check error), so keep its outer wake bounded.
+  if(this.runners.size||this.auxiliary.size)consider(startedAt+5000);
   for(const goal of store.all('goal'))consider(goal.deadline);
   for(const task of store.all('task')){
    if(!['accepted','failed','partial','cancelled'].includes(task.status))consider(task.deadline);
@@ -167,8 +171,37 @@ export class Worker {
  }
  async tick(){await this.overnight.tick();try{return await this.executeTick();}finally{await this.overnight.tick();}}
  async executeTick(){
-  if(capacitySnapshot(this.c).serviceLimit>1)return this.executeParallel();
+  if(capacitySnapshot(this.c).serviceLimit>1){
+   if(this.shutdown.signal.aborted)return {waiting:true,reasonCode:'service_stopping'};
+   if(this.auxiliary.has('legacy'))return this.waitParallel();
+   if(this.legacyWorkPending()){
+    // Finish already admitted portable steps before entering the historical
+    // global lane. Preparation/checks belong to that lane, not just inference.
+    if(this.runners.size||this.auxiliary.size||this.c.store.all('task').some(t=>t.status==='running'&&
+     (t.owner===this.owner||this.runnerContexts.has(t.id)||this.c.workerLease&&t.ownerLease===this.c.workerLease.generation)))return this.executeParallel({draining:true});
+    this.launch(this.auxiliary,'legacy',()=>this.executeSequential());
+    return this.waitParallel();
+   }
+   return this.executeParallel();
+  }
   return this.executeSequential();
+ }
+ legacyWorkPending(){
+  const c=this.c,snapshot=capacitySnapshot(c),legacy=id=>!c.store.get('goal',id).manifest.providerPolicy;
+  if(snapshot.activeTasks.some(t=>legacy(t.goalId))||snapshot.planning.some(p=>legacy(p.goalId)))return true;
+  // Uncertain portable ownership is not an executable legacy turn. Keep its
+  // durable holds, while allowing independent portable groups to make progress.
+  if(snapshot.activeTasks.some(t=>t.status!=='running')||snapshot.planning.some(p=>p.status==='uncertain'))return false;
+  if(snapshot.goals.some(g=>legacy(g.id)&&this.planner.schedulable(g)))return true;
+  return snapshot.tasks.some(t=>{
+   if(!legacy(t.goalId)||!c.eligible(t))return false;
+   const goal=c.store.get('goal',t.goalId);
+   if(t.status==='ready_to_integrate'&&['checks','legacy'].includes(goal.manifest.mode.review))return true;
+   if(['awaiting_legacy_review','legacy_reviewing'].includes(t.status))return true;
+   if(this.legacyReview.schedulable(t))return true;
+   return ['queued','suspended'].includes(t.status)&&t.spec.actor==='deepseek'&&t.executionActor!=='codex'&&
+    canClaim({task:t,goal,snapshot:{...snapshot,activeTasks:[],planning:[],autonomousParallelBusy:false}}).allowed;
+  });
  }
  async executeSequential(){
   this.c.expireQuiescent();
@@ -232,12 +265,13 @@ export class Worker {
   },error=>{this.finished.push({error});this.notify();}).finally(()=>{if(map.get(key)===entry)map.delete(key);if(entry.taskId){const context=this.runnerContexts.get(entry.taskId),current=this.c.store.maybe('task',entry.taskId);if(context&&(!current||current.owner!==context.owner||current.status!=='running'))this.runnerContexts.delete(entry.taskId);}});
   return entry;
  }
- async executeParallel(){
+ async executeParallel({draining=false}={}){
   if(this.shutdown.signal.aborted)return {waiting:true,reasonCode:'service_stopping'};
   this.c.expireQuiescent();this.nextProbeAt=null;
   const limit=capacitySnapshot(this.c).serviceLimit;
   // Separate bounded lanes keep a slow planner/reviewer/import from holding the
   // autonomous dispatch loop. Their own durable reservation guards remain final.
+  if(!draining){
   const automatic=this.c.store.all('task').find(t=>t.status==='ready_to_integrate'&&this.c.eligible(t)&&['checks','legacy'].includes(this.c.store.get('goal',t.goalId).manifest.mode.review));
   if(automatic&&!this.auxiliary.has('integration'))this.launch(this.auxiliary,'integration',async()=>{
    try{return await this.integration.accept({taskId:automatic.id,feedback:'Trusted checks passed; no automatic host review'},`auto-integrate-${automatic.id}`);}
@@ -258,6 +292,7 @@ export class Worker {
    if(!this.auxiliary.has(key))this.launch(this.auxiliary,key,()=>this.legacyReview.tick({taskId:candidate.id}));
   }
   if(!reviews.length&&!this.auxiliary.has('review'))this.launch(this.auxiliary,'review',()=>this.legacyReview.tick({legacyOnly:true}));
+  }
   for(const [id,context] of this.runnerContexts){const current=this.c.store.maybe('task',id);if(!current||current.owner!==context.owner||current.status!=='running')this.runnerContexts.delete(id);}
   const mapped=new Set([...this.runners.values()].map(entry=>entry.taskId));
   for(const running of this.c.store.all('task').filter(t=>t.status==='running'&&!mapped.has(t.id)&&
@@ -266,13 +301,20 @@ export class Worker {
    const savedContext=this.runnerContexts.get(running.id),context=savedContext?.owner===running.owner?savedContext:this.taskContext(running.owner);this.runnerContexts.set(running.id,context);
    const entry=this.launch(this.runners,`${running.id}:${running.runnerGeneration??0}`,()=>context.executeTask(this.c.getTask(running.id)),{task:true});entry.taskId=running.id;
   }
-  for(let n=this.runners.size;n<limit;n++){
-   const context=this.taskContext(`runner-${randomUUID()}`),task=await claimAvailable(context);
+  for(let n=this.runners.size;!draining&&n<limit;n++){
+   const context=this.taskContext(`runner-${randomUUID()}`),previous=this.c.autonomousParallelBusy;let task;
+   // A legacy submission can arrive during the selected endpoint's readiness
+   // await. Its eventual transactional claim must still see occupied lanes.
+   this.c.autonomousParallelBusy=Boolean(this.runners.size||this.auxiliary.size);
+   try{task=await claimAvailable(context);}finally{this.c.autonomousParallelBusy=previous;}
    if(task?.retryAt)this.nextProbeAt=task.retryAt;
    if(!task||task.waiting)break;
    this.runnerContexts.set(task.id,context);
    const entry=this.launch(this.runners,`${task.id}:${task.runnerGeneration??0}`,()=>context.executeTask(task),{task:true});entry.taskId=task.id;
   }
+  return this.waitParallel();
+ }
+ async waitParallel(){
   // Let immediate no-work lanes settle before deciding whether there is useful
   // work to await. Completion and database commits both wake this supervisor.
   await Promise.resolve();
