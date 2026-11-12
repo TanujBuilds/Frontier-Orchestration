@@ -14,7 +14,7 @@ import { Learning } from './learning.mjs';
 import {workerProfile as normalizeWorkerProfile} from './worker-profile.mjs';
 import {recordFailedGate} from './repair-progress.mjs';
 import {matches} from '../project/contracts.mjs';
-import {assertRoutingApproval,assertRoutePin,isRoutedTask,routeDecision,recordRoutingWait,pinnedResourceWait} from './routing/runtime.mjs';
+import {assertRoutingApproval,assertRoutePin,isRoutedTask,routeDecision,recordRoutingWait,pinnedResourceWait,taskRoutingManifest} from './routing/runtime.mjs';
 
 const TERMINAL=new Set(['accepted','failed','partial','cancelled']);
 const SLOT=new Set(['running','uncertain','taking_over']);
@@ -282,7 +282,10 @@ export class Coordinator {
   if(expectedGoalHash!==undefined&&expectedGoalHash!==g.hash||expectedGoalVersion!==undefined&&expectedGoalVersion!==g.version)throw Error('Goal approval hash/version changed');
   const duplicate=typeof raw.submissionId==='string'?this.store.db.prepare('SELECT * FROM submissions WHERE kind=? AND scope=? AND key=?').get('task',goalId,raw.submissionId):null;
   const existingTask=duplicate?this.store.get('task',duplicate.id):undefined;
-  const spec=normalizeTask(raw,g.manifest,this.registry,{existingTask}),hash=digest(spec);
+  // Exact retries retain a started task's original routing policy, while
+  // current mode/scope and submission identity remain authoritative.
+  const manifest=existingTask?taskRoutingManifest(this,g,existingTask):g.manifest;
+  const spec=normalizeTask(raw,manifest,this.registry,{existingTask}),hash=digest(spec);
   if(duplicate){if(duplicate.hash!==hash)throw Error('Submission conflict');return this.getTask(duplicate.id);}
   const existing=this.store.all('task').filter(t=>t.goalId===goalId);
   if(existing.length>=g.manifest.limits.maxTasks)throw Error('Goal task cap reached');

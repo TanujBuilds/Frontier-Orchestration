@@ -56,6 +56,23 @@ test('preview guards reject stale approved versions and routing participates in 
  const saved=await f.submit(g,spec);await assert.rejects(f.submit(g,task('stale','frontend')),/conflict/i);await assert.rejects(f.submit(g,task('stale','frontend'),'other-command'),/conflict/i);assert.equal(f.c.getTask(saved.id).spent.model,0);
 });
 
+test('exact submission replay after a routing revision retains the original worker eligibility',async t=>{
+ const a=await endpoint(t,'a'),b=await endpoint(t,'b'),pb=profile('b',b.baseUrl);pb.capabilities.taskKinds=['coding'];
+ const f=await fixture(t,{profiles:[profile('a',a.baseUrl),pb]}),g=await f.prepare(),spec=task('repeat','backend'),saved=await f.submit(g,spec);
+ await f.worker.tick();const original=f.c.getTask(saved.id);
+ const goals=new Goals(f.c),next=structuredClone(f.raw);next.routingPolicy.rules[0].providerId='worker-b';
+ const rev=goals.prepareRevision({goalId:g.id,expectedHash:g.hash,manifest:next},'replay-revision');goals.activateRevision({revisionId:rev.id,hash:rev.hash},'replay-activate');
+ const rebound=goals.rebind({taskId:saved.id},'replay-rebind');assert.equal(rebound.goalVersion,2);assert.equal(rebound.providerBinding.providerId,'worker-a');
+ const before=counts(f.c),guards={expectedGoalHash:rev.hash,expectedGoalVersion:2};
+ const replay=await f.submit(g,spec,'fresh-replay-command',guards);
+ assert.deepEqual(replay,rebound);assert.deepEqual(replay.providerBinding,original.providerBinding);assert.equal(replay.routeHash,original.routeHash);assert.equal(replay.deadline,original.deadline);assert.deepEqual(replay.spent,original.spent);
+ const after=counts(f.c);for(const key of ['records','submissions','events','requests'])assert.equal(after[key],before[key]);
+ await assert.rejects(f.submit(g,task('repeat','backend',{routing:{version:1,category:'backend',preferredProviderId:'worker-a'}}),'changed-replay',guards),/conflict/i);
+ await assert.rejects(f.submit(g,task('new-submission','backend'),'new-submission',guards),/capability_unsupported/);
+ await assert.rejects(f.submit(g,spec,'stale-replay',{expectedGoalHash:g.hash,expectedGoalVersion:1}),/approval|version|hash/i);
+ assert.equal(a.posts().length,1);assert.equal(b.posts().length,0);
+});
+
 test('unsupported requirements and mutated approved routing send zero requests without fallback',async t=>{
  const a=await endpoint(t,'a'),b=await endpoint(t,'b'),f=await fixture(t,{profiles:[profile('a',a.baseUrl),profile('b',b.baseUrl)]}),g=await f.prepare();
  for(const routing of [{version:1,preferredProviderId:'outside'},{version:1,minContextTokens:16001},{version:1,maxOutputTokens:4001}])await assert.rejects(f.submit(g,task('invalid','backend',{routing})),/routing|provider|context|output/i);
