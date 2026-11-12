@@ -322,6 +322,12 @@ coordinator or resubmitting work:
 node scripts/demo-routing-composition.mjs --root /tmp/mosaic-routing-host-demo --inspect
 ```
 
+Execution rejects inherited repository-local Git environment overrides (including
+`GIT_DIR`, `GIT_WORK_TREE`, index/common/object and local config overrides) before
+creating its root. Clear the named override and rerun. Read-only `--inspect`
+does not execute Git or open a coordinator and remains available under those
+overrides.
+
 The JSON records task IDs, pins/reasons, check-repair evidence, request order,
 review source, integration commits and known/eligible usage coverage. All owned
 servers and processes are closed. There are no hosted provider calls, personal

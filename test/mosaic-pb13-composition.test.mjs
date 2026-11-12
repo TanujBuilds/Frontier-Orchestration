@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import {mkdtempSync,rmSync} from 'node:fs';
+import {mkdir,readFile,readdir,writeFile} from 'node:fs/promises';
+import {fileURLToPath,pathToFileURL} from 'node:url';
 import {Coordinator} from '../src/harness/coordinator.mjs';
 import {Dispatcher} from '../src/harness/tools.mjs';
 import {Registry,normalizeGoal,digest,canonical,providerBinding} from '../src/harness/contracts.mjs';
@@ -15,6 +17,7 @@ import {readOutcomeSnapshotFromDatabase} from '../src/harness/outcomes/snapshot.
 import {actorRows} from '../src/beta/observer.mjs';
 import {Goals} from '../src/harness/goals.mjs';
 import {runComposition} from './fixtures/mosaic-pb13/composition.mjs';
+import {command} from '../src/project/process.mjs';
 
 const project={repo:'/tmp/legacy-recipe',baseCommit:'a'.repeat(40),readPaths:['src/'],writePaths:['src/'],checks:[{id:'verify',argv:['node','checks/verify.mjs']}]};
 const profile=id=>({schema:1,id:'worker-'+id,revision:'r1',displayName:'Fixture '+id,transport:'openai-chat',baseUrl:'http://127.0.0.1:'+(id==='a'?1:2)+'/v1',model:'model-'+id,roles:['worker'],capabilities:{workerProtocol:'mosaic-structured-v1',transports:['json'],modelDiscovery:'manual',taskKinds:['coding','consult']},maxContextTokens:32000,maxOutputTokens:2048,concurrency:1,capacityGroup:'group-'+id,credentialRef:null,streaming:false});
@@ -146,4 +149,56 @@ for(const [review,beta] of [['host',true],['api',false]])test(`two sequential ro
  const parent=mkdtempSync(path.join(os.tmpdir(),'pb13-routed-integration-'));t.after(()=>rmSync(parent,{recursive:true,force:true}));
  const result=await runComposition({root:path.join(parent,'composition'),review,beta});
  assert.equal(result.usefulAccepted,2);assert.deepEqual(result.tasks.map(task=>task.worker.providerId),['worker-a','worker-b']);assert.deepEqual(result.tasks.map(task=>task.attemptCount),[2,1]);assert.equal(result.usage.known,result.usage.eligible-1);assert.equal(result.maxSimultaneousFixtureRequests,1);
+});
+
+test('composition demo rejects inherited Git repository overrides before writes through CLI and exported entry', {timeout:120000},async t=>{
+ const parent=mkdtempSync(path.join(os.tmpdir(),'pb13-git-boundary-'));t.after(()=>rmSync(parent,{recursive:true,force:true}));
+ const cli=fileURLToPath(new URL('../scripts/demo-routing-composition.mjs',import.meta.url));
+ const safeEnv={PATH:process.env.PATH,TMPDIR:process.env.TMPDIR??os.tmpdir(),GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_TERMINAL_PROMPT:'0'};
+ const snapshot=async(directory,prefix='')=>{
+  const result={};for(const entry of (await readdir(directory,{withFileTypes:true})).sort((a,b)=>a.name.localeCompare(b.name))){
+   const name=prefix+entry.name,file=path.join(directory,entry.name);
+   if(entry.isDirectory())Object.assign(result,await snapshot(file,name+'/'));else result[name]=digest((await readFile(file)).toString('base64'));
+  }return result;
+ };
+ const cases=[
+  ['directory-and-worktree',root=>({GIT_DIR:path.join(root,'external','.git'),GIT_WORK_TREE:path.join(root,'demo','repo')})],
+  ['new-directory',root=>({GIT_DIR:path.join(root,'redirected.git')})],
+  ['worktree',root=>({GIT_WORK_TREE:path.join(root,'external')})],
+  ['index',root=>({GIT_INDEX_FILE:path.join(root,'external','.git','index')})],
+  ['common-directory',root=>({GIT_COMMON_DIR:path.join(root,'external','.git')})],
+  ['object-directory',root=>({GIT_OBJECT_DIRECTORY:path.join(root,'external','.git','objects')})],
+  ['alternate-objects',root=>({GIT_ALTERNATE_OBJECT_DIRECTORIES:path.join(root,'external','.git','objects')})],
+  ['config-file',root=>({GIT_CONFIG:path.join(root,'external','.git','config')})],
+  ['config-count',root=>({GIT_CONFIG_COUNT:'1',GIT_CONFIG_KEY_0:'core.worktree',GIT_CONFIG_VALUE_0:path.join(root,'external')})],
+  ['config-parameters',root=>({GIT_CONFIG_PARAMETERS:"'core.worktree="+path.join(root,'external')+"'"})],
+  ['present-empty-directory',()=>({GIT_DIR:''})],
+  ['exported-entry',root=>({GIT_DIR:path.join(root,'external','.git'),GIT_WORK_TREE:path.join(root,'demo','repo')})],
+ ];
+ for(const [name,overrides] of cases)await t.test(name,async()=>{
+  const root=path.join(parent,name),external=path.join(root,'external');await mkdir(external,{recursive:true});
+  await writeFile(path.join(external,'owner.txt'),'Disposable owner baseline\n');
+  const git=async(...args)=>{const result=await command(['git','-c','core.hooksPath=/dev/null','-c','commit.gpgsign=false',...args],{cwd:external,env:safeEnv});assert.equal(result.code,0,result.stderr);return result.stdout.trim();};
+  await git('init','-q');await git('add','.');await git('-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-qm','Owner baseline');
+  await writeFile(path.join(external,'staged.txt'),'Disposable staged owner change\n');await git('add','staged.txt');await writeFile(path.join(external,'owner.txt'),'Disposable unstaged owner change\n');
+  const before={head:await git('rev-parse','HEAD'),files:await snapshot(external)},env={...safeEnv,...overrides(root)},destination=path.join(root,'demo');
+  const code="import {runComposition} from "+JSON.stringify(pathToFileURL(fileURLToPath(new URL('./fixtures/mosaic-pb13/composition.mjs',import.meta.url))).href)+"; await runComposition({root:process.argv[1]});";
+  const argv=name==='exported-entry'?[process.execPath,'--input-type=module','-e',code,destination]:[process.execPath,cli,'--root',destination,'--review','host'];
+  const result=await command(argv,{env,timeoutMs:20000});
+  const after={head:await git('rev-parse','HEAD'),files:await snapshot(external)};
+  assert.deepEqual(after,before,'External HEAD, index, object/config files and staged/unstaged working files must be unchanged');
+  assert.deepEqual((await readdir(root)).sort(),['external'],'Reject before creating either the requested root or a redirected Git directory');
+  assert.equal(result.code,1);assert.match(result.stderr,/Git repository override/);
+  const listed=['GIT_DIR','GIT_WORK_TREE','GIT_INDEX_FILE','GIT_COMMON_DIR','GIT_OBJECT_DIRECTORY','GIT_ALTERNATE_OBJECT_DIRECTORIES','GIT_CONFIG','GIT_CONFIG_COUNT','GIT_CONFIG_PARAMETERS'];
+  assert.ok(listed.some(variable=>Object.hasOwn(env,variable)&&result.stderr.includes(variable)),result.stderr);
+ });
+});
+
+test('composition CLI keeps inspection read-only under Git overrides and refuses an existing execution root',async t=>{
+ const parent=mkdtempSync(path.join(os.tmpdir(),'pb13-inspect-boundary-'));t.after(()=>rmSync(parent,{recursive:true,force:true}));
+ const cli=fileURLToPath(new URL('../scripts/demo-routing-composition.mjs',import.meta.url)),root=path.join(parent,'saved');await mkdir(root);
+ const saved={fixtureOnly:true,taskIds:['saved-one','saved-two'],usefulAccepted:2};await writeFile(path.join(root,'composition-result.json'),JSON.stringify(saved));
+ const env={PATH:process.env.PATH,TMPDIR:process.env.TMPDIR??os.tmpdir(),GIT_DIR:path.join(parent,'must-stay-absent.git'),GIT_WORK_TREE:path.join(parent,'must-stay-absent-worktree')};
+ const inspected=await command([process.execPath,cli,'--root',root,'--inspect'],{env});assert.equal(inspected.code,0,inspected.stderr);assert.deepEqual(JSON.parse(inspected.stdout),saved);assert.deepEqual(await readdir(parent),['saved']);
+ const refused=await command([process.execPath,cli,'--root',root],{env:{PATH:process.env.PATH,TMPDIR:process.env.TMPDIR??os.tmpdir()}});assert.equal(refused.code,1);assert.match(refused.stderr,/EEXIST/);assert.deepEqual(JSON.parse(await readFile(path.join(root,'composition-result.json'),'utf8')),saved);assert.deepEqual(await readdir(parent),['saved']);
 });
