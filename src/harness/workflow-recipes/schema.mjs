@@ -1,5 +1,6 @@
 import {canonical, identifier, integer, keys, text} from '../contracts.mjs';
 import {relativePath} from '../../project/contracts.mjs';
+import {normalizeTaskRouting} from '../routing/contracts.mjs';
 
 const MAX_PARAMETERS = 20;
 const MAX_ITEMS = 100;
@@ -70,6 +71,27 @@ export function validateParameterPayload(raw) {
   }
   assertRecipeSize(raw, 'Recipe parameters');
   return structuredClone(raw);
+}
+
+// Routing is an explicit task-key map, separate from permission/template values.
+// Absence must preserve every historical recipe identity and output byte.
+export function normalizeRecipeTaskRouting(raw, tasks) {
+  if (raw === undefined) return undefined;
+  record(raw, 'recipe taskRouting');
+  if (Object.keys(raw).length > 10) throw Error('Too many recipe taskRouting entries');
+  // Submission identity can normalize before the saved receipt is replayed.
+  // New submissions additionally validate keys against their trusted definition.
+  const known = tasks && new Set(tasks.map(task => task.key));
+  const entries = Object.entries(raw).map(([key, value]) => {
+    identifier(key, 'routing task key');
+    if (key.length > MAX_TASK_KEY || known && !known.has(key)) throw Error('Unknown recipe routing task key ' + key);
+    const routing = normalizeTaskRouting(value);
+    if (!routing) throw Error('Recipe task routing requires a versioned object');
+    return [key, routing];
+  });
+  const normalized = Object.fromEntries(entries);
+  assertRecipeSize(normalized, 'Recipe taskRouting');
+  return normalized;
 }
 
 export function validateRecipeParameters(raw, descriptors) {

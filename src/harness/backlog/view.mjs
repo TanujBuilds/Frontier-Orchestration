@@ -2,6 +2,7 @@ import {identifier} from '../contracts.mjs';
 import {isOvernightV2} from '../overnight.mjs';
 import {retainedProgress} from '../recovery-diagnostics.mjs';
 import {MAX_BACKLOG_ITEMS} from './contract.mjs';
+import {storedWorkerAttribution} from '../outcomes/attribution.mjs';
 
 const prioritiesByRank = ['background', 'normal', 'blocking'];
 const queued = new Set(['queued','suspended']);
@@ -82,6 +83,12 @@ function taskState(task, {goal, byId, hostState, request, researchReview, now, d
   }
   if (task.checkpoint?.phase === 'no_progress' && ['blocked','running','queued','suspended'].includes(status)) {
     return state('blocked','no_progress','No progress on repeated protected-check failures. Inspect the saved candidate and check evidence.');
+  }
+  if (task.routingWait && queued.has(status)) {
+    const wait = task.routingWait;
+    if (wait.goalHash === goal.hash && wait.goalVersion === goal.version && wait.taskHash === task.hash && wait.decision?.status === 'waiting') {
+      return state('waiting_provider', wait.decision.reasonCode, short(wait.decision.explanation));
+    }
   }
   const wait = task.providerWait;
   if (wait && (queued.has(status) || status === 'running' || status === 'blocked')) {
@@ -212,6 +219,8 @@ function projectTask(ref, context) {
     priorityExplanation:effectivePriority && prioritiesByRank.indexOf(effectivePriority) > prioritiesByRank.indexOf(priority)
       ? 'An unfinished dependent raises this task’s effective priority.' : null,
     spent:task.spent??null, integrationCommit:task.integration?.commit??null,
+    ...(goal?.manifest.providerPolicy ? {worker: context.store ? storedWorkerAttribution(context.store,task) : null,
+      routing: task.spec.routing??null, route: task.route??null, routingWait: task.routingWait??null} : {}),
     questionId:projected.status === 'waiting_answer' ? task.questions.at(-1).id : null,
     recovery:{
       outcome:request?.outcome??null, requestId:request?.id??null, requestKind:request?.kind??null,
@@ -243,14 +252,14 @@ function groupState(items, groupIssue) {
   return state(next.status,next.reasonCode,next.explanation);
 }
 
-export function projectBacklog({group,tasks,goal,priorities=new Map(),hostState={},evidence=new Map(),now=Date.now()}) {
+export function projectBacklog({group,tasks,goal,priorities=new Map(),hostState={},evidence=new Map(),now=Date.now(),store}) {
   // Ordinary workflow receipts pin a goal version, but do not save its hash.
   // Keep that absence visible instead of inventing a historical hash.
   const versionOnly = group.origin?.kind === 'workflow_run' && group.goalHash === null;
   const groupIssue = !goal || goal.id !== group.goalId ? 'goal_missing' :
     group.goalVersion !== goal.version || !versionOnly && group.goalHash !== goal.hash ? 'stale_group_approval' : null;
   const byId = tasks instanceof Map ? tasks : new Map(tasks.map(task => [task.id,task]));
-  const items = (group.items??[]).slice(0,MAX_BACKLOG_ITEMS).map(ref => projectTask(ref,{group,goal,byId,priorities,hostState,evidence,now}));
+  const items = (group.items??[]).slice(0,MAX_BACKLOG_ITEMS).map(ref => projectTask(ref,{group,goal,byId,priorities,hostState,evidence,now,store}));
   return {
     id:group.id,goalId:group.goalId,goalVersion:group.goalVersion,goalHash:group.goalHash,submissionId:group.submissionId,at:group.at,
     origin:group.origin??{kind:'backlog_group'},
@@ -371,7 +380,7 @@ function readBacklogSnapshot({c,worker,filter,before,limit}) {
       }
     }
     const evidence = groupEvidence(store,goal,members);
-    return projectBacklog({group,tasks,goal,priorities,hostState,evidence,now:generatedAt});
+    return projectBacklog({group,tasks,goal,priorities,hostState,evidence,now:generatedAt,store});
   });
   const sourceRevision = groups.every(group => group.sourceRevision === groups[0]?.sourceRevision) ? groups[0]?.sourceRevision??null : null;
   const queriedGoal = !groups.length && goalId ? store.maybe('goal',goalId) : null;

@@ -1,4 +1,5 @@
 import path from 'node:path';
+import {readFileSync} from 'node:fs';
 import {isOvernightV2,effectiveIntegrationChecks,infrastructureCheckFailure} from './overnight.mjs';
 import {parseOvernightReply,overnightSystem} from './overnight-protocol.mjs';
 import { Journal } from '../project/journal.mjs';
@@ -20,6 +21,44 @@ Do not run shell commands. Use only allowed paths, at most two edited files and 
 const freshReadRequired='Stale edit context requires fresh read_files before submitting edits';
 const codeKey=cp=>`code-${cp.attempt}-${cp.exchange}`;
 const checkKey=cp=>`harness-attempt-${cp.attempt}/checks`;
+
+function codingPermissions(c,task,goal){
+ return {readPaths:task.spec.permissions.readPaths,writePaths:task.spec.permissions.writePaths,checks:isOvernightV2(goal.manifest)?effectiveIntegrationChecks(c,task,goal.manifest):goal.manifest.project.checks.filter(x=>task.spec.permissions.checks.includes(x.id))};
+}
+// Both execution and the read-only busy-resource exemption use this exact
+// scope transition. A completed request can still be discarded after rebind.
+export function codingScopeRecovery(checkpoint,{permissions,events,hasModelRequest}){
+ let cp={...checkpoint},phase=cp.phase??'attempt';
+ const permissionsHash=digest(permissions),manifests=events.filter(event=>event.type==='harness.manifest'),previousPermissions=manifests.length>1,scopeSequence=manifests.at(-1).sequence;
+ const boundToEarlierScope=cp.repairPermissionsHash&&cp.repairPermissionsHash!==permissionsHash;
+ if(boundToEarlierScope||!cp.repairPermissionsHash&&previousPermissions){
+  const key=codeKey(cp),context=events.findLast(event=>event.type==='harness.context'&&event.data.key===key),oldContext=context&&context.sequence<scopeSequence;
+  const pendingResult=phase==='apply'||phase==='checks',discardPendingResult=pendingResult&&(boundToEarlierScope||oldContext),discardPendingModel=phase==='model'&&(oldContext||boundToEarlierScope&&hasModelRequest);
+  if(phase==='no_progress'||discardPendingResult||discardPendingModel){phase='attempt';cp={...cp,phase,reply:null,requestId:null,previousAction:null};}
+  cp={...cp,repairFailure:null,failedGate:null,repairEvidence:null,stalePaths:[]};
+ }
+ cp.repairPermissionsHash=permissionsHash;
+ return {checkpoint:cp,phase,permissionsHash,previousPermissions};
+}
+/** Predict only the adapter's persisted scope transition, without opening or
+ * changing its journal/workspace. Unknown evidence cannot exempt busy work. */
+export function codingModelReplayEligible(c,task){
+ try{
+  if(task.checkpoint.phase!=='model'||!/^[a-f0-9-]{36}$/.test(task.id))return false;
+  const goal=c.store.get('goal',task.goalId),permissions=codingPermissions(c,task,goal);
+  let raw='',events;
+  try{raw=readFileSync(path.join(c.store.root,'coding','jobs',task.id+'.jsonl'),'utf8');}catch(error){if(error.code!=='ENOENT')throw error;}
+  events=raw.slice(0,raw.lastIndexOf('\n')+1).split('\n').filter(Boolean).map(JSON.parse);
+  if(events.some((event,index)=>event.jobId!==task.id||event.sequence!==index+1))return false;
+  const manifest=events.findLast(event=>event.type==='harness.manifest');
+  // open() appends the first/current scope manifest before step() recovers.
+  if(!manifest||digest(manifest.data.permissions)!==digest(permissions)){
+   if(manifest&&!task.history?.some(h=>h.goalVersion<task.goalVersion))return false;
+   events.push({sequence:events.length+1,type:'harness.manifest',data:{permissions}});
+  }
+  return codingScopeRecovery(task.checkpoint,{permissions,events,hasModelRequest:Boolean(c.store.request(task.id,codeKey(task.checkpoint)))}).phase==='model';
+ }catch{return false;}
+}
 
 class CodingWorkspace extends Workspace {
  async recover(){
@@ -53,7 +92,7 @@ export class CodingAdapter {
  async open(task){
   const {c}=this.worker,g=c.store.get('goal',task.goalId),root=path.join(c.store.root,'coding');
   const journal=await new Journal(root,task.id).load();
-  const permissions={readPaths:task.spec.permissions.readPaths,writePaths:task.spec.permissions.writePaths,checks:isOvernightV2(g.manifest)?effectiveIntegrationChecks(c,task,g.manifest):g.manifest.project.checks.filter(x=>task.spec.permissions.checks.includes(x.id))};
+  const permissions=codingPermissions(c,task,g);
   let manifest=journal.last('harness.manifest');
   if(!manifest){manifest={repo:g.manifest.project.repo,baseCommit:task.checkpoint.executionBase??g.manifest.project.baseCommit,permissions,...(isOvernightV2(g.manifest)?{overnightV2:true}:{})};await journal.append('harness.manifest',manifest);}
   else if(digest(manifest.permissions)!==digest(permissions)){
@@ -89,26 +128,8 @@ export class CodingAdapter {
   const {c}=this.worker,g=c.store.get('goal',task.goalId),v2=isOvernightV2(g.manifest),policy=c.store.get('goal',task.goalId).manifest.overnightPolicy,{journal,workspace,manifest}=await this.open(task),release=await journal.lock();
   let cp={...task.checkpoint},phase=cp.phase??'attempt',modelDispatch=false;
   try{
-   const permissionsHash=digest(manifest.permissions);
-   const manifests=journal.events.filter(event=>event.type==='harness.manifest');
-   const previousPermissions=manifests.length>1;
-   const scopeSequence=manifests.at(-1).sequence;
-   const boundToEarlierScope=cp.repairPermissionsHash&&cp.repairPermissionsHash!==permissionsHash;
-   if(boundToEarlierScope||!cp.repairPermissionsHash&&previousPermissions){
-    // Prior diagnostics stay in the journal. Pending actions cannot use the old approval.
-    const key=codeKey(cp);
-    const context=journal.events.findLast(event=>event.type==='harness.context'&&event.data.key===key);
-    const oldContext=context&&context.sequence<scopeSequence;
-    const pendingResult=phase==='apply'||phase==='checks';
-    const discardPendingResult=pendingResult&&(boundToEarlierScope||oldContext);
-    const discardPendingModel=phase==='model'&&(oldContext||boundToEarlierScope&&c.store.request(task.id,key));
-    if(phase==='no_progress'||discardPendingResult||discardPendingModel){
-     phase='attempt';
-     cp={...cp,phase,reply:null,requestId:null,previousAction:null};
-    }
-    cp={...cp,repairFailure:null,failedGate:null,repairEvidence:null,stalePaths:[]};
-   }
-   cp.repairPermissionsHash=permissionsHash;
+   const recovered=codingScopeRecovery(cp,{permissions:manifest.permissions,events:journal.events,hasModelRequest:Boolean(c.store.request(task.id,codeKey(cp)))}),{permissionsHash,previousPermissions}=recovered;
+   cp=recovered.checkpoint;phase=recovered.phase;
    await workspace.initialize();await workspace.recover();
    if(phase==='no_progress')return this.stopNoProgress(task,owner);
    const checks=this.worker.checksFactory?.(workspace)??new CheckRunner(workspace,{codex:this.worker.config.codexPath??'codex'});

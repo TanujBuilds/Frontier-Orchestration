@@ -3,6 +3,7 @@ import {digest, normalizeResearchPolicy} from '../contracts.mjs';
 import {deriveBehavioralEvidence} from '../behavioral-validation.mjs';
 import {isOvernightV2} from '../overnight.mjs';
 import {verifyLocalAcceptance, verifyReviewVerdict, verifySubmitAck} from '../research-review.mjs';
+import {workerAttribution} from './attribution.mjs';
 
 // Match the coordinator's terminal set. Stopped and blocked tasks can resume.
 const terminalStatuses = new Set(['accepted', 'failed', 'partial', 'cancelled']);
@@ -312,6 +313,7 @@ export function classifyTaskOutcome({task, goal, events = [], requests = [], evi
     usefulAccepted: false, reason: queued ? 'awaiting_first_execution' : 'task_not_accepted',
     evidenceRefs: started ? [ref(started)] : completedRequest ? [{kind: 'request', id: completedRequest.id}] : [],
   };
+  if(task.providerBinding)row.worker=workerAttribution(task,approval,version=>historicalGoal(evidence,task.goalId,version));
   const latestReview = history.findLast(event => reviewEvents.has(event.type));
   if (sourceStatus === 'partial' && history.some(event => event.type === 'task.expired')) row.disposition = 'expired';
   if (queuedStatuses.has(sourceStatus) && latestReview?.data?.decision === 'revise') {

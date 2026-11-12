@@ -2,6 +2,7 @@ import { digest, identifier, keys, normalizeTask } from '../contracts.mjs';
 import { isOvernightV2 } from '../overnight.mjs';
 import { validateBacklogIdentity, validateBacklogInput } from './contract.mjs';
 import { inspectBacklog } from './view.mjs';
+import {previewRoute} from '../routing/runtime.mjs';
 
 const GROUP = 'backlog_group';
 const diagnostic = (code, message, key) => ({ code, message: message.slice(0, 400), ...(key ? { key } : {}) });
@@ -106,6 +107,8 @@ export class Backlog {
       taskKeys: ordered.map(item => item.key),
       edges: ordered.flatMap(item => item.dependsOnKeys.map(from => ({ from, to: item.key }))),
       errors,
+      ...(goal?.manifest.routingPolicy && errors.length === 0 ? {routes: ordered.filter(item => item.task.actor !== 'codex' && ['coding','consult'].includes(item.task.kind))
+        .map(item => ({key: item.key, route: previewRoute(this.c, {goalId: goal.id, task: taskInput(input, item, item.dependsOnKeys)})}))} : {}),
     };
   }
 

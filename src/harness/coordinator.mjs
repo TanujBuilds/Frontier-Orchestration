@@ -14,6 +14,7 @@ import { Learning } from './learning.mjs';
 import {workerProfile as normalizeWorkerProfile} from './worker-profile.mjs';
 import {recordFailedGate} from './repair-progress.mjs';
 import {matches} from '../project/contracts.mjs';
+import {assertRoutingApproval,assertRoutePin,isRoutedTask,routeDecision,recordRoutingWait,pinnedResourceWait} from './routing/runtime.mjs';
 
 const TERMINAL=new Set(['accepted','failed','partial','cancelled']);
 const SLOT=new Set(['running','uncertain','taking_over']);
@@ -178,7 +179,7 @@ export class Coordinator {
   return raw;
  }
  preparePortableGoal(raw,key){return this.prepareGoal(raw,key,{portable:true});}
- prepareLegacyGoal(raw,key){if(this.beta||raw.providerPolicy||raw.reviewPolicy)throw Error('Legacy preparation cannot select portable policy');return this.prepareGoal(raw,key,{legacy:true});}
+ prepareLegacyGoal(raw,key){if(this.beta||raw.providerPolicy||raw.reviewPolicy||raw.routingPolicy)throw Error('Legacy preparation cannot select portable policy');return this.prepareGoal(raw,key,{legacy:true});}
  goalManifest(raw,providerRegistry=this.providerRegistry,{historic=false}={}){
   if(!historic)raw=this.reviewPreparation(raw);
   if(!this.beta)return normalizeGoal(raw,this.registry,providerRegistry);
@@ -196,6 +197,11 @@ export class Coordinator {
  }
  providerBinding(goal,providerId){return manifestProviderBinding(goal.manifest,providerId);}
  verifyWorkerBinding(goal,taskOrBinding){
+  assertRoutingApproval(goal);
+  const task=taskOrBinding&&Object.hasOwn(taskOrBinding,'spec')?taskOrBinding:null;
+  // A routed task cannot fall through to legacy transport if approval fields
+  // disappear. Its original route remains authoritative on every call path.
+  if(task&&(task.route||task.spec?.routing))assertRoutePin(this,goal,task);
   if(goal.manifest.providerPolicy){
    const manifest=goal.manifest,policy=manifest.providerPolicy;
    if(!manifest.mode.actors.includes('deepseek'))throw Error('Mode prohibits API worker dispatch');
@@ -204,12 +210,11 @@ export class Coordinator {
    // Validate the entire approved pool, including members not selected for this
    // request. A changed catalog never silently narrows the original approval.
    if(digest(normalizeProviderPolicy(policy,this.providerRegistry))!==manifest.providerPolicyHash)throw Error('Approved provider policy changed');
-   const task=taskOrBinding&&Object.hasOwn(taskOrBinding,'spec')?taskOrBinding:null;
    if(task&&(task.goalId!==goal.id||task.goalVersion!==goal.version||task.spec.actor!=='deepseek'))throw Error('Task provider binding has stale goal version or prohibited actor');
    const binding=task?task.providerBinding:taskOrBinding??this.providerBinding(goal,policy.defaultWorkerId);
    keys(binding,['version','providerId','revision','profileHash','policyHash'],'provider binding');
    const expected=this.providerBinding(goal,binding.providerId);
-   if(binding.version!==1||digest(binding)!==digest(expected)||task&&binding.providerId!==policy.defaultWorkerId)throw Error('Task or planner provider binding differs from approved identity');
+   if(binding.version!==1||digest(binding)!==digest(expected)||task&&!task.route&&binding.providerId!==policy.defaultWorkerId)throw Error('Task or planner provider binding differs from approved identity');
    const profile=policy.workers.find(worker=>worker.id===binding.providerId);
    if(task&&!profile.capabilities.taskKinds.includes(task.spec.kind))throw Error('Approved provider lacks task kind capability');
    return structuredClone(profile);
@@ -272,15 +277,18 @@ export class Coordinator {
   if(t.spec.kind==='learning'&&(!lessons.length||lessons.some(l=>l.status==='candidate')||!this.store.all('evaluation').some(e=>lessons.some(l=>l.id===e.lessonId))))throw Error('Native learning needs a protected evaluation and finalized procedure decision');
   text(input.content,'native result',20000);t.result={content:input.content,actor:'codex',accounting:'native host; token totals unavailable',...(lessons.length?{lessons:lessons.map(l=>({id:l.id,status:l.status,recipeHash:l.recipeHash}))}:{})};t.status=this.store.get('goal',t.goalId).manifest.reviewPolicy&&t.spec.kind==='consult'?'awaiting_review':'accepted';this.store.put('task',t);this.emit('task.native_finished',t.goalId,t.id,{status:t.status,actor:'codex'});return this.getTask(t.id);
  });}
- submitTask(input,key){const {goalId,...raw}=input;return this.store.command(key,{op:'task.submit',...input},()=>{
-  const g=this.store.get('goal',goalId);this.liveGoal(g);const spec=normalizeTask(raw,g.manifest,this.registry),hash=digest(spec);
-  const duplicate=this.store.db.prepare('SELECT * FROM submissions WHERE kind=? AND scope=? AND key=?').get('task',goalId,spec.submissionId);
+ submitTask(input,key){const {goalId,expectedGoalHash,expectedGoalVersion,...raw}=input;return this.store.command(key,{op:'task.submit',...input},()=>{
+  const g=this.store.get('goal',goalId);this.liveGoal(g);assertRoutingApproval(g);
+  if(expectedGoalHash!==undefined&&expectedGoalHash!==g.hash||expectedGoalVersion!==undefined&&expectedGoalVersion!==g.version)throw Error('Goal approval hash/version changed');
+  const duplicate=typeof raw.submissionId==='string'?this.store.db.prepare('SELECT * FROM submissions WHERE kind=? AND scope=? AND key=?').get('task',goalId,raw.submissionId):null;
+  const existingTask=duplicate?this.store.get('task',duplicate.id):undefined;
+  const spec=normalizeTask(raw,g.manifest,this.registry,{existingTask}),hash=digest(spec);
   if(duplicate){if(duplicate.hash!==hash)throw Error('Submission conflict');return this.getTask(duplicate.id);}
   const existing=this.store.all('task').filter(t=>t.goalId===goalId);
   if(existing.length>=g.manifest.limits.maxTasks)throw Error('Goal task cap reached');
   if(spec.kind==='learning'&&existing.some(t=>t.spec.kind==='learning'))throw Error('Learning assignment limit reached');
   for(const id of spec.dependsOn){const dep=this.store.get('task',id);if(dep.goalId!==goalId)throw Error('Dependency outside goal');}
-  const providerBinding=spec.actor==='deepseek'?this.providerBinding(g,g.manifest.providerPolicy?.defaultWorkerId):undefined;
+  const providerBinding=spec.actor==='deepseek'&&!spec.routing?this.providerBinding(g,g.manifest.providerPolicy?.defaultWorkerId):undefined;
   if(providerBinding)this.verifyWorkerBinding(g,{goalId,goalVersion:g.version,spec,providerBinding});
   const t=this.store.submission('task',goalId,spec.submissionId,hash,id=>({id,goalId,goalVersion:g.version,spec,hash,...(providerBinding?{providerBinding}:{}),status:spec.actor==='codex'?'codex_ready':'queued',sequence:this.store.all('task').length+1,createdAt:this.now(),startedAt:null,deadline:null,owner:null,checkpoint:{},attempts:0,reviews:0,questions:[],answers:[],feedback:[],yieldRequested:false,pauseRequested:false,stopRequested:false,reviewed:false,result:null}));
   this.emit('task.submitted',goalId,t.id,{actor:spec.actor,kind:spec.kind,hash});this.requestUrgentYield();return this.getTask(t.id);
@@ -305,7 +313,7 @@ export class Coordinator {
   while(changed){changed=false;for(const t of tasks)if(!TERMINAL.has(t.status))for(const id of t.spec.dependsOn)if(p.get(id)<p.get(t.id)){p.set(id,p.get(t.id));changed=true;}}
   return p;
  }
- eligible(t){const g=this.store.get('goal',t.goalId),now=this.now();return !(isOvernightV2(g.manifest)&&t.providerWait&&(t.providerWait.retryAt>now||t.providerWait.until<=now))&&g.status==='active'&&g.deadline>now&&(!t.deadline||t.deadline>now)&&!(g.integrationSealed&&t.spec.kind==='coding')&&!t.pauseRequested&&!t.stopRequested&&t.goalVersion===g.version&&t.spec.dependsOn.every(id=>this.store.get('task',id).status==='accepted');}
+ eligible(t){const g=this.store.get('goal',t.goalId),now=this.now();return !(t.routingWait&&t.routingWait.retryAt>now)&&!(isOvernightV2(g.manifest)&&t.providerWait&&(t.providerWait.retryAt>now||t.providerWait.until<=now))&&g.status==='active'&&g.deadline>now&&(!t.deadline||t.deadline>now)&&!(g.integrationSealed&&t.spec.kind==='coding')&&!t.pauseRequested&&!t.stopRequested&&t.goalVersion===g.version&&t.spec.dependsOn.every(id=>this.store.get('task',id).status==='accepted');}
  settleTask(t,status,reason,event='task.'+status,data={}){
   const overnight=isOvernightV2(this.store.get('goal',t.goalId).manifest);
   if(status==='blocked'&&overnight)t.firstBlocker??={reason,at:this.now()};
@@ -325,24 +333,39 @@ export class Coordinator {
   }
  });}
  requestUrgentYield(){const tasks=this.store.all('task'),p=this.effectivePriorities();for(const active of tasks.filter(t=>t.status==='running'&&t.spec.actor==='deepseek'))if(tasks.some(t=>['queued','suspended'].includes(t.status)&&this.eligible(t)&&p.get(t.id)>p.get(active.id))){active.yieldRequested=true;this.store.put('task',active);this.emit('task.yield_requested',active.goalId,active.id);}}
- claimNext(owner){identifier(owner,'owner');return this.store.tx(()=>{
+ claimNext(owner,readiness){identifier(owner,'owner');return this.store.tx(()=>{
   const lease=this.store.maybe('lease','coordinator');
   if(lease)this.currentLease(lease.token);
   if(this.store.all('planning').some(p=>['running','uncertain'].includes(p.status)))return null;
   const tasks=this.store.all('task');if(tasks.some(t=>SLOT.has(t.status)&&t.spec.actor==='deepseek'))return null;
+  if(readiness){const target=this.store.get('task',readiness.taskId),goal=this.store.get('goal',target.goalId);if(target.hash!==readiness.taskHash||digest(target.spec)!==readiness.taskHash||goal.hash!==readiness.goalHash||goal.version!==readiness.goalVersion||target.goalVersion!==goal.version||(this.workerLease?.generation??null)!==readiness.lease||!this.eligible(target))return null;}
   const priorities=this.effectivePriorities();const candidates=tasks.filter(t=>['queued','suspended'].includes(t.status)&&t.spec.actor==='deepseek'&&t.executionActor!=='codex'&&this.eligible(t)).sort((a,b)=>priorities.get(b.id)-priorities.get(a.id)||a.sequence-b.sequence);
   for(const t of candidates){
    const g=this.store.get('goal',t.goalId);
+   let routed=false;
+   if(isRoutedTask(g,t)&&!t.providerBinding){
+    let decision;try{decision=routeDecision(this,g,t,readiness?.taskId===t.id?readiness.observation:undefined);}
+    catch(error){this.settleTask(t,'blocked',String(error.message).slice(0,500));continue;}
+    if(decision.status==='ineligible'){this.settleTask(t,'blocked',decision.explanation);continue;}
+    if(decision.status!=='selected'){if(readiness?.taskId===t.id)recordRoutingWait(this,t,g,decision);return null;}
+    const route={version:1,goalHash:g.hash,goalVersion:g.version,taskHash:t.hash,decision},pin={providerBinding:decision.binding,route,routeHash:digest(route)};
+    try{this.verifyWorkerBinding(g,{...t,...pin});}
+    catch(error){this.settleTask(t,'blocked','Approved API worker binding cannot be used: '+String(error.message).slice(0,500));continue;}
+    Object.assign(t,pin);delete t.routingWait;routed=true;
+   }
    if(g.manifest.providerPolicy){
     try{this.verifyWorkerBinding(g,t);}catch(error){
      this.settleTask(t,'blocked','Approved API worker binding cannot be used: '+String(error?.message??error).slice(0,500)+'. Restore the approved provider configuration, or prepare and approve a new goal with the current catalog.');
      continue;
     }
    }
+   const wait=pinnedResourceWait(this,g,t);
+   if(wait){recordRoutingWait(this,t,g,wait);return null;}
+   delete t.routingWait;
    t.startedAt??=this.now();t.deadline??=Math.min(g.deadline,t.startedAt+t.spec.limits.seconds*1000);t.owner=owner;t.status='running';t.yieldRequested=false;
    delete t.interruptedOwner;
    if(lease)t.ownerLease=lease.generation;else delete t.ownerLease;
-   this.store.put('task',t);this.learning.pin(t.id);this.emit('task.claimed',t.goalId,t.id,{owner});return this.getTask(t.id);
+   this.store.put('task',t);if(routed)this.emit('task.routed',t.goalId,t.id,{routeHash:t.routeHash,route:t.route});this.learning.pin(t.id);this.emit('task.claimed',t.goalId,t.id,{owner});return this.getTask(t.id);
   }
   return null;
  });}
@@ -364,7 +387,7 @@ export class Coordinator {
   if(t.spec.actor!=='deepseek'||!g.manifest.mode.actors.includes('deepseek'))throw Error('Mode prohibits model actor');
   if(kind==='model'&&g.manifest.providerPolicy){
    this.verifyWorkerBinding(g,t);
-   if(saved&&digest(saved.providerBinding??null)!==digest(t.providerBinding))throw Error('Saved request provider binding differs from the task');
+   if(saved&&(digest(saved.providerBinding??null)!==digest(t.providerBinding)||saved.routeHash!==t.routeHash))throw Error('Saved request provider binding differs from the task');
   }
   if(saved)return {...saved,cached:true};
   const wait=kind==='model'?t.providerWait:null;
@@ -377,7 +400,7 @@ export class Coordinator {
   if(kind==='model'&&!g.manifest.providerPolicy)this.verifyWorkerBinding(g);
   const profile=kind==='model'?g.manifest.workerProfile:null;
   if(profile&&!t.workerProfile){t.workerProfile=profile;this.store.put('task',t);}
-  const id=randomUUID(),data={owner,reservedAt:this.now(),...(profile?{workerProfile:profile}:{}),...(kind==='model'&&t.providerBinding?{providerBinding:t.providerBinding}:{}),...(wait?{reconnectUntil:wait.until}:{})};this.store.db.prepare('INSERT INTO requests VALUES(?,?,?,?,?,?)').run(id,taskId,key,kind,'reserved',JSON.stringify(data));
+  const id=randomUUID(),data={owner,reservedAt:this.now(),...(profile?{workerProfile:profile}:{}),...(kind==='model'&&t.providerBinding?{providerBinding:t.providerBinding}:{}),...(kind==='model'&&t.routeHash?{routeHash:t.routeHash}:{}),...(wait?{reconnectUntil:wait.until}:{})};this.store.db.prepare('INSERT INTO requests VALUES(?,?,?,?,?,?)').run(id,taskId,key,kind,'reserved',JSON.stringify(data));
   this.emit('request.reserved',t.goalId,taskId,{id,key,kind});return {id,task_id:taskId,key,kind,status:'reserved',...data,cached:false};
  });}
  ownedRequest(id,owner){

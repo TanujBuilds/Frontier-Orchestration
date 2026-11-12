@@ -11,6 +11,7 @@ import {Agents} from './agents.mjs';
 import {Artifacts} from './artifacts.mjs';
 import {Observer} from './observer.mjs';
 import {assignmentManifestSchema,prepareAssignment} from './assignment-intake.mjs';
+import {registerRoutingTools} from './routing/tools.mjs';
 import {registerOutcomeTools} from './outcomes/tools.mjs';
 import {registerBacklogTools} from './backlog/tools.mjs';
 import {registerWorkflowRecipeTools} from './workflow-recipes/tools.mjs';
@@ -52,6 +53,7 @@ export class Dispatcher {
   const {researchPolicy:parkedTaskPolicy,...codingTask}=taskDispatchInputSchema.properties;
   const goalSchema=config.beta?{...goalDispatchInputSchema,properties:codingGoal}:goalDispatchInputSchema;
   const taskSchema=config.beta?{...taskDispatchInputSchema,properties:{...codingTask,kind:{...codingTask.kind,enum:['coding','consult','learning']}}}:taskDispatchInputSchema;
+  registerRoutingTools({add,c,taskSchema});
   add('goal_prepare','Prepare an exact reviewable goal manifest. Does not activate.',{manifest:goalSchema},['manifest'],true,(i,k)=>c.preparePortableGoal(i.manifest,k));
   if(!config.beta)add('legacy_goal_prepare','Explicit compatibility preparation for a historical nonportable workflow.',{manifest:goalSchema},['manifest'],true,(i,k)=>c.prepareLegacyGoal(i.manifest,k));
   add('assignment_prepare','Check explicit coding prerequisites and prepare a reviewable draft without activating or running work.',{manifest:assignmentManifestSchema},[],true,(i,k)=>prepareAssignment(c,i.manifest,k));
@@ -62,7 +64,7 @@ export class Dispatcher {
   add('goal_revision_prepare','Prepare a changed goal version without resetting spending.',{goalId:str,expectedHash:str,manifest:goalSchema},['goalId','expectedHash','manifest'],true,(i,k)=>this.goals.prepareRevision(i,k));
   add('goal_revision_activate','Activate the exact changed version after quiescence.',{revisionId:str,hash:str},['revisionId','hash'],true,(i,k)=>this.goals.activateRevision(i,k));
   add('goal_finalize','Finalize accepted work, or explicitly partial stopped work, with a hashed receipt.',{goalId:str,summary:str,partial:bool},['goalId','summary'],true,(i,k)=>this.goals.finalize(i,k));
-  add('task_submit','Submit a narrower assignment within the active approved goal. Collaborative consult/coding candidates wait for supervisor review; DeepSeek-only uses checks without Codex.',{goalId:str,task:taskSchema},['goalId','task'],true,(i,k)=>{if(isOvernightV2(c.store.get('goal',i.goalId).manifest))throw Error('Overnight v2 stages require an atomically validated planner graph');return c.submitTask({...i.task,goalId:i.goalId},k);});
+  add('task_submit','Submit a narrower assignment within the active approved goal. Collaborative consult/coding candidates wait for supervisor review; DeepSeek-only uses checks without Codex.',{goalId:str,task:taskSchema,expectedGoalHash:str,expectedGoalVersion:{...number,minimum:1}},['goalId','task'],true,(i,k)=>{if(isOvernightV2(c.store.get('goal',i.goalId).manifest))throw Error('Overnight v2 stages require an atomically validated planner graph');return c.submitTask({...i.task,goalId:i.goalId,...(i.expectedGoalHash!==undefined?{expectedGoalHash:i.expectedGoalHash}:{}),...(i.expectedGoalVersion!==undefined?{expectedGoalVersion:i.expectedGoalVersion}:{})},k);});
   add('task_get','Inspect a task, its checkpoint and counters.',{taskId:str},['taskId'],false,i=>({...c.getTask(i.taskId),observerCursor:Number(c.store.db.prepare('SELECT COALESCE(MAX(seq),0) AS n FROM events').get().n)}));
   add('artifacts_list','List only saved allowlisted artifacts with checksums; no arbitrary paths.',{taskId:str},['taskId'],false,i=>this.artifacts.list(i.taskId));
   add('observer_snapshot','Read bounded model/task/agent overviews. No execution controls.',{goalId:str,actor:{...str,enum:['codex','deepseek']}},[],false,i=>this.observer.snapshot(i));

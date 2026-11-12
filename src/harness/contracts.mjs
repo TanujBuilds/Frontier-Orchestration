@@ -5,6 +5,8 @@ import {behavioralChecksSchema,normalizeBehavioralChecks} from './behavioral-val
 import { matches, relativePath, validatePermissions } from '../project/contracts.mjs';
 import {normalizeProviderPolicy,profileIdentity} from './providers/contracts.mjs';
 import {normalizeReviewPolicy,assertReviewMode} from './review/contracts.mjs';
+import {normalizeRoutingPolicy,normalizeTaskRouting} from './routing/contracts.mjs';
+import {selectRoute} from './routing/router.mjs';
 
 export function canonical(value) {
  if (value===null||typeof value!=='object') {
@@ -55,8 +57,10 @@ export const providerSnapshotSchema=objectSchema({
 },['schema','id','revision','displayName','transport','baseUrl','model','roles','capabilities','maxContextTokens','maxOutputTokens','concurrency','capacityGroup','streaming']);
 export const providerPolicyInputSchema=objectSchema({version:{type:'integer',enum:[1]},workers:{type:'array',maxItems:16,items:providerSnapshotSchema},plannerWorkerId:stringSchema,defaultWorkerId:stringSchema,maxConcurrentTasks:{type:'integer',minimum:1,maximum:4},capacityGroups:{type:'array',maxItems:16,items:objectSchema({id:stringSchema,limit:{type:'integer',minimum:1,maximum:4}},['id','limit'])}},['version','workers','plannerWorkerId','defaultWorkerId','capacityGroups']);
 export const reviewPolicyInputSchema=objectSchema({version:{type:'integer',enum:[1]},source:{type:'string',enum:['host','api']},hostId:{type:'string',enum:['codex','claude-code','cursor','antigravity']},reviewer:providerSnapshotSchema,fallback:{type:'string',enum:['wait']}},['version','source','fallback']);
-export const goalDispatchInputSchema={...goalInputSchema,properties:{...goalInputSchema.properties,project:projectDispatchInputSchema,researchPolicy:researchPolicyInputSchema,providerPolicy:providerPolicyInputSchema,reviewPolicy:reviewPolicyInputSchema,overnightPolicy:objectSchema({preflightCheckIds:stringsSchema,finalOnlyCheckIds:stringsSchema,launchCheckIds:stringsSchema,maxBatches:{type:'integer',minimum:1,maximum:20},maxExchanges:{type:'integer',minimum:1,maximum:40},maxCorrections:{type:'integer',minimum:0,maximum:2},reconnectMs:{type:'integer',minimum:1,maximum:1800000}},['preflightCheckIds','finalOnlyCheckIds'])}};
-export const taskDispatchInputSchema={...taskInputSchema,properties:{...taskInputSchema.properties,researchPolicy:researchPolicyInputSchema,role:{type:'string',enum:['implementation','final']}}};
+export const routingPolicyInputSchema=objectSchema({version:{type:'integer',enum:[1]},rules:{type:'array',maxItems:32,items:objectSchema({id:stringSchema,category:{type:'string',enum:['general','backend','frontend','tests','docs','design']},providerId:stringSchema},['id','category','providerId'])},defaultWorkerId:stringSchema},['version','rules','defaultWorkerId']);
+export const taskRoutingInputSchema=objectSchema({version:{type:'integer',enum:[1]},category:{type:'string',enum:['general','backend','frontend','tests','docs','design']},requiredCapabilities:{type:'array',maxItems:2,items:{type:'string',enum:['coding','consult']}},minContextTokens:{anyOf:[{type:'null'},{type:'integer',minimum:1}]},maxOutputTokens:{anyOf:[{type:'null'},{type:'integer',minimum:1}]},preferredProviderId:stringSchema},['version']);
+export const goalDispatchInputSchema={...goalInputSchema,properties:{...goalInputSchema.properties,project:projectDispatchInputSchema,researchPolicy:researchPolicyInputSchema,providerPolicy:providerPolicyInputSchema,reviewPolicy:reviewPolicyInputSchema,routingPolicy:routingPolicyInputSchema,overnightPolicy:objectSchema({preflightCheckIds:stringsSchema,finalOnlyCheckIds:stringsSchema,launchCheckIds:stringsSchema,maxBatches:{type:'integer',minimum:1,maximum:20},maxExchanges:{type:'integer',minimum:1,maximum:40},maxCorrections:{type:'integer',minimum:0,maximum:2},reconnectMs:{type:'integer',minimum:1,maximum:1800000}},['preflightCheckIds','finalOnlyCheckIds'])}};
+export const taskDispatchInputSchema={...taskInputSchema,properties:{...taskInputSchema.properties,researchPolicy:researchPolicyInputSchema,routing:taskRoutingInputSchema,role:{type:'string',enum:['implementation','final']}}};
 const baseModes=[
  {id:'collaborative',version:1,planner:'codex',actors:['codex','deepseek'],review:'operator',capabilities:['coding','research','consult','learning']},
  {id:'deepseek_only',version:1,planner:'deepseek',actors:['deepseek'],review:'checks',capabilities:['coding','research','consult','learning']},
@@ -102,12 +106,13 @@ export class Registry {
  snapshot(){return {capabilities:clone([...this.capabilities.values()]),modes:clone([...this.modes.values()]),workflows:clone([...this.workflows.values()])};}
  registerWorkflow(raw){
   keys(raw,['id','version','mode','tasks'],'workflow');identifier(raw.id);integer(raw.version,'version',1,10000);const mode=this.mode(raw.mode);
-  if(!Array.isArray(raw.tasks)||!raw.tasks.length||raw.tasks.length>10)throw Error('Invalid workflow tasks');const tasks=new Map();
+  if(!Array.isArray(raw.tasks)||!raw.tasks.length||raw.tasks.length>10)throw Error('Invalid workflow tasks');const tasks=new Map(),routes=new Map();
   for(const t of raw.tasks){
-   keys(t,['key','kind','dependsOn','objective','acceptance','context','permissions'],'workflow task');
+   keys(t,['key','kind','dependsOn','objective','acceptance','context','permissions','routing'],'workflow task');
    identifier(t.key);if(tasks.has(t.key))throw Error('Duplicate workflow task');if(!mode.capabilities.includes(t.kind))throw Error('Mode prohibits workflow capability');
    text(t.objective,'objective');strings(t.acceptance,'acceptance');strings(t.dependsOn??[],'dependencies',{empty:true});
    if(Object.hasOwn(t,'context')&&t.context!=='')text(t.context,'context',40000);
+   if(Object.hasOwn(t,'routing')){const routing=normalizeTaskRouting(t.routing);if(!routing)throw Error('Workflow routing requires a versioned object');routes.set(t.key,routing);}
    if(Object.hasOwn(t,'permissions')){
     keys(t.permissions,['readPaths','writePaths','checks'],'workflow task permissions');
     for(const name of ['readPaths','writePaths']){
@@ -118,7 +123,7 @@ export class Registry {
    tasks.set(t.key,t);
   }
   const visited=new Set(),visiting=new Set(),visit=key=>{if(visiting.has(key))throw Error('Workflow dependency cycle');if(visited.has(key))return;const task=tasks.get(key);if(!task)throw Error('Unknown workflow dependency');visiting.add(key);for(const dep of task.dependsOn??[])visit(dep);visiting.delete(key);visited.add(key);};for(const key of tasks.keys())visit(key);
-  const key=`${raw.id}@${raw.version}`;if(this.workflows.has(key))throw Error('Workflow already exists');this.workflows.set(key,clone(raw));return clone(raw);
+  const key=`${raw.id}@${raw.version}`;if(this.workflows.has(key))throw Error('Workflow already exists');const workflow=clone(raw);for(const t of workflow.tasks)if(routes.has(t.key))t.routing=routes.get(t.key);this.workflows.set(key,workflow);return clone(workflow);
  }
 }
 export function sourceScope(raw={}) {
@@ -151,13 +156,15 @@ export function providerBinding(manifest,providerId){
  return {version:1,providerId:profile.id,revision:profile.revision,profileHash:digest(profileIdentity(profile)),policyHash:manifest.providerPolicyHash};
 }
 export function normalizeGoal(raw,registry=new Registry(),providerRegistry){
- keys(raw,['submissionId','objective','acceptance','project','mode','modeVersion','scope','limits','environment','researchPolicy','overnightPolicy','providerPolicy','reviewPolicy'],'goal');
+ keys(raw,['submissionId','objective','acceptance','project','mode','modeVersion','scope','limits','environment','researchPolicy','overnightPolicy','providerPolicy','reviewPolicy','routingPolicy'],'goal');
  if(raw.providerPolicy!==undefined&&!providerRegistry)throw Error('Configured provider registry required for a provider policy');
  const providerPolicy=normalizeProviderPolicy(raw.providerPolicy,providerRegistry);
  const environment=raw.environment??'live';if(!['live','fixture'].includes(environment))throw Error('Invalid execution environment');
  const reviewPolicy=normalizeReviewPolicy(raw.reviewPolicy);
  const mode=registry.mode(raw.mode,raw.modeVersion),policy=Object.hasOwn(raw,'researchPolicy')?normalizeResearchPolicy(raw.researchPolicy):undefined;
  assertReviewMode(mode,reviewPolicy);
+ const routingPolicy=normalizeRoutingPolicy(raw.routingPolicy,providerPolicy);
+ if(routingPolicy&&!mode.actors.includes('deepseek'))throw Error('Routing policy requires API worker authority');
  if(reviewPolicy?.source==='api'){if(!providerRegistry||digest(providerRegistry.get(reviewPolicy.reviewer.id,reviewPolicy.reviewer.revision))!==digest(reviewPolicy.reviewer))throw Error('Reviewer identity differs from configured registry');}
  if(policy?.version===3&&mode.id!=='collaborative')throw Error('Reviewed research requires collaborative mode');
  if(policy&&(!mode.capabilities.includes('research')||!mode.actors.includes('deepseek')))throw Error('Research policy requires autonomous research capability');
@@ -192,13 +199,29 @@ export function normalizeGoal(raw,registry=new Registry(),providerRegistry){
   manifest.providerPolicy=providerPolicy;manifest.providerPolicyHash=digest(providerPolicy);
   if(mode.planner==='deepseek')manifest.plannerBinding=providerBinding(manifest,providerPolicy.plannerWorkerId);
  }
+ if(routingPolicy){manifest.routingPolicy=routingPolicy;manifest.routingPolicyHash=digest(routingPolicy);}
  return manifest;
 }
-export function normalizeTask(raw,goal,registry=new Registry()) {
- keys(raw,['submissionId','kind','actor','objective','context','acceptance','dependsOn','priority','permissions','scope','limits','researchPolicy','role'],'task');
+export function isStartedLegacyTask(task){
+ return Boolean(task&&task.startedAt!=null&&task.providerBinding&&task.spec?.actor==='deepseek'&&!Object.hasOwn(task.spec,'routing')&&!Object.hasOwn(task,'route')&&!Object.hasOwn(task,'routeHash'));
+}
+export function normalizeTask(raw,goal,registry=new Registry(),{checkRoutingEligibility=true,existingTask}={}) {
+ keys(raw,['submissionId','kind','actor','objective','context','acceptance','dependsOn','priority','permissions','scope','limits','researchPolicy','role','routing'],'task');
+ // Only internal rebind/preview callers supply a saved record. Caller omission
+ // on a fresh routing-enabled task still receives the new versioned defaults.
+ const legacy=isStartedLegacyTask(existingTask);
+ if(legacy){
+  if(digest(existingTask.spec)!==existingTask.hash)throw Error('Persisted legacy task hash changed');
+  if(raw.submissionId!==existingTask.spec.submissionId||raw.kind!==existingTask.spec.kind)throw Error('Started legacy task identity/kind cannot change');
+  if(Object.hasOwn(raw,'routing'))throw Error('Started legacy task retains absent routing; do not replace its original provider provenance');
+ }
  if(!goal.mode.capabilities.includes(raw.kind)||!TASK_LIMITS[raw.kind])throw Error('Mode prohibits capability');
- const actor=raw.actor??(goal.mode.actors.includes('deepseek')?'deepseek':'codex');if(!goal.mode.actors.includes(actor))throw Error('Mode prohibits actor');
- if(actor==='deepseek'&&goal.providerPolicy){
+ const actor=raw.actor??(legacy?existingTask.spec.actor:goal.mode.actors.includes('deepseek')?'deepseek':'codex');if(!goal.mode.actors.includes(actor))throw Error('Mode prohibits actor');
+ if(legacy&&actor!==existingTask.spec.actor)throw Error('Started legacy task retains its execution actor');
+ if(Object.hasOwn(raw,'routing')&&(!goal.routingPolicy||actor!=='deepseek'||!['coding','consult'].includes(raw.kind)))throw Error('Task routing requires an approved routed worker task');
+ const routing=!legacy&&goal.routingPolicy&&actor==='deepseek'&&['coding','consult'].includes(raw.kind)?normalizeTaskRouting(Object.hasOwn(raw,'routing')?raw.routing:{version:1}):undefined;
+ if(Object.hasOwn(raw,'routing')&&!routing)throw Error('Explicit task routing requires a versioned object');
+ if(actor==='deepseek'&&goal.providerPolicy&&!routing){
   const worker=goal.providerPolicy.workers.find(profile=>profile.id===goal.providerPolicy.defaultWorkerId);
   if(!worker?.capabilities.taskKinds.includes(raw.kind))throw Error('Approved default provider lacks task kind capability');
  }
@@ -232,5 +255,9 @@ export function normalizeTask(raw,goal,registry=new Registry()) {
  const scope=sourceScope(raw.scope??goal.scope);
  if(goal.scope.includeDomains.length&&(!scope.includeDomains.length||scope.includeDomains.some(d=>!goal.scope.includeDomains.includes(d))))throw Error('Task expands source scope');
  if(goal.scope.excludeDomains.some(d=>!scope.excludeDomains.includes(d)))throw Error('Task removes source exclusion');
- return {submissionId:identifier(raw.submissionId,'submissionId'),kind:raw.kind,actor,objective:text(raw.objective,'objective'),context:raw.context===undefined||raw.context===''?'':text(raw.context,'context',40000),acceptance:strings(raw.acceptance,'acceptance'),dependsOn:strings(raw.dependsOn??[],'dependencies',{empty:true,max:100}),priority,permissions,scope,limits,...(isOvernightV2(goal)?{role:raw.role}:{}),...(policy?{researchPolicy:policy}:{})};
+ const spec={submissionId:identifier(raw.submissionId,'submissionId'),kind:raw.kind,actor,objective:text(raw.objective,'objective'),context:raw.context===undefined||raw.context===''?'':text(raw.context,'context',40000),acceptance:strings(raw.acceptance,'acceptance'),dependsOn:strings(raw.dependsOn??[],'dependencies',{empty:true,max:100}),priority,permissions,scope,limits,...(isOvernightV2(goal)?{role:raw.role}:{}),...(policy?{researchPolicy:policy}:{}),...(routing?{routing}:{})};
+ // Preview still validates task authority/scope, but returns unmet worker
+ // requirements as a route result. Every submission uses the strict default.
+ if(routing&&checkRoutingEligibility){const route=selectRoute({task:spec,goal,availability:{budget:{remainingModelCalls:limits.modelCalls}}});if(route.status==='ineligible')throw Error('Task routing '+route.reasonCode+': '+route.explanation);}
+ return spec;
 }

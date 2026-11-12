@@ -1,3 +1,5 @@
+import {claimAvailable,holdPinnedResource} from './routing/runtime.mjs';
+import {digest} from './contracts.mjs';
 import { randomUUID } from 'node:crypto';
 import { CodingAdapter } from './coding.mjs';
 import { LocalProvider } from './provider.mjs';
@@ -39,7 +41,7 @@ export class Worker {
  question(task,question,checkpoint,owner){
   const state=this.c.ask(task.id,question,checkpoint,owner);this.activity(task,'coding.question',{operationId:state.questions.at(-1).id,requestId:checkpoint.requestId??null,questionId:state.questions.at(-1).id});return state;
  }
- pinModel(task,owner,model,dispatchUntil,dispatch=false){
+ pinModel(task,owner,model,dispatchUntil,dispatch=false,reservation){
   if(model==null&&dispatchUntil===undefined)return;
   if(typeof model!=='string'||!model.trim()||model.length>200)throw Error('Invalid resolved DeepSeek model identity');
   this.c.store.tx(()=>{
@@ -50,6 +52,11 @@ export class Worker {
      this.c.liveTask(current);
      if(current.status!=='running')throw Error('Task is no longer running');
      if(dispatchUntil!==undefined&&this.c.now()>=dispatchUntil)throw Error('Original provider reconnect window exhausted');
+     if(current.routeHash){
+      const request=reservation&&this.c.store.request(current.id,reservation.key);
+      if(!request||request.id!==reservation.id||request.status!=='reserved'||request.owner!==owner||request.routeHash!==current.routeHash||digest(request.providerBinding)!==digest(current.providerBinding))throw Error('Original routed request reservation changed');
+      if((this.c.store.spent(current.id).model??0)>current.spec.limits.modelCalls)throw Error('Original model request budget exhausted before dispatch');
+     }
     }catch(error){
      error.requestOutcome='not_dispatched';
      error.dispatchStopped=true;
@@ -94,8 +101,8 @@ export class Worker {
    expectedModel=this.c.getTask(task.id).providerModel??profile?.model;
    this.activity(task,'model.request.started',{requestId:reservation.id,key});
    invoked=true;
-   result=await provider.complete(messages,{maxTokens:profile?Math.min(maxTokens,profile.maxOutputTokens):maxTokens,streaming:profile?.streaming??this.c.workerProfile?.streaming??this.config.deepseekStreaming??false,signal:AbortSignal.timeout(remaining),expectedModel,onModel:model=>{
-    try{this.pinModel(task,owner,model,reservation.reconnectUntil,true);}
+   result=await provider.complete(messages,{maxTokens:Math.min(maxTokens,profile?.maxOutputTokens??maxTokens,task.spec.routing?.maxOutputTokens??maxTokens),streaming:profile?.streaming??this.c.workerProfile?.streaming??this.config.deepseekStreaming??false,signal:AbortSignal.timeout(remaining),expectedModel,onModel:model=>{
+    try{this.pinModel(task,owner,model,reservation.reconnectUntil,true,reservation);}
     catch(error){dispatchFailure=error;throw error;}
     this.activity(task,'model.request.resolved',{operationId:reservation.id,requestId:reservation.id,model});
     reachedDispatch=true;
@@ -145,6 +152,7 @@ export class Worker {
    if(!['accepted','failed','partial','cancelled'].includes(task.status))consider(task.deadline);
    if(['suspended','queued'].includes(task.status)){
     consider(task.providerWait?.retryAt);
+    consider(task.routingWait?.retryAt);
     consider(task.providerWait?.until);
    }
   }
@@ -161,12 +169,14 @@ export class Worker {
   if(automatic){try{return await this.integration.accept({taskId:automatic.id,feedback:'Trusted checks passed; no Codex review'},`auto-integrate-${automatic.id}`);}catch(error){this.c.store.tx(()=>{const t=this.c.store.get('task',automatic.id);if(t.status==='ready_to_integrate'){t.status='blocked';t.reason=error.message;this.c.store.put('task',t);this.c.emit('task.blocked',t.goalId,t.id,{reason:t.reason});}});return this.c.getTask(automatic.id);}}
   const planning=await this.planner.tick();if(planning)return planning;
   let task=this.c.store.all('task').find(t=>t.status==='running'&&t.owner===this.owner);
-  if(task)task=this.c.getTask(task.id);else task=this.c.claimNext(this.owner);
+  if(task)task=this.c.getTask(task.id);else task=await claimAvailable(this);
+  if(task?.waiting)return task;
   if(!task)return this.legacyReview.tick();
   try{
    if(task.spec.kind!=='research'){task=this.c.boundary(task.id,task.checkpoint,this.owner);if(task.status!=='running')return task;}
    if(this.c.store.get('goal',task.goalId).manifest.environment!==(this.config.environment??'live'))throw Error('Approved environment differs from configured providers');
    this.c.verifyWorkerBinding(this.c.store.get('goal',task.goalId),task);
+   const resourceHold=holdPinnedResource(this,task);if(resourceHold)return resourceHold;
    if(task.spec.kind==='coding'&&!task.checkpoint.executionBase){const executionBase=await this.integration.executionBase(task.goalId);if(typeof executionBase!=='string'||!/^[a-f0-9]{40}$/.test(executionBase))throw Error('Integration execution base must be a committed SHA');task=this.c.boundary(task.id,{...task.checkpoint,executionBase},this.owner);if(task.status!=='running')return task;}
    if(task.spec.kind==='consult'){
     if(!task.attempts)this.c.beginAttempt(task.id,this.owner);
@@ -186,6 +196,7 @@ export class Worker {
     this.c.verifyWorkerBinding(this.c.store.get('goal',task.goalId),this.c.getTask(task.id));
     task=this.c.finishProviderProbe(task.id,this.owner,available);
     if(task.status!=='running')return task;
+    const resourceHold=holdPinnedResource(this,task);if(resourceHold)return resourceHold;
    }
    const adapter=this.adapters[task.spec.kind];if(!adapter)throw Error(`Capability ${task.spec.kind} is not configured`);
    return await adapter.step(task,this.owner);

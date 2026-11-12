@@ -1,6 +1,7 @@
 import {createHash} from 'node:crypto';
 import {keys,identifier,integer} from './contracts.mjs';
 import {normalizeObserverQuery,normalizeActivityEvent,OBSERVER_LIMITS} from './collaboration-contracts.mjs';
+import {storedWorkerAttribution} from './outcomes/attribution.mjs';
 
 export const OBSERVER_TOOLS=new Set(['tools_list','observer_snapshot','observer_timeline','observer_evidence','observer_artifacts']);
 const terminal=new Set(['accepted','failed','partial','cancelled']);
@@ -21,6 +22,10 @@ const label=type=>({
 const trim=value=>String(value).slice(0,2000);
 const snapshotCacheLimit=8;
 function taskProfile(store,task) {
+ if(task.providerBinding){
+  const worker=storedWorkerAttribution(store,task);
+  return worker?.bindingProvenance==='pinned'?{displayName:worker.displayName,model:worker.requestedModel,revision:worker.revision}:null;
+ }
  if(task.workerProfile)return task.workerProfile;
  const goal=store.get('goal',task.goalId);
  return (task.goalVersion===goal.version?goal:store.maybe('goal_history',`${goal.id}-${task.goalVersion}`))?.manifest.workerProfile;
@@ -143,6 +148,12 @@ export class Observer {
     }
     if(row.actor==='deepseek'){
      row.workerProfile=taskProfile(this.c.store,task)??null;
+     if(task.providerBinding||task.spec.routing){
+      row.worker=storedWorkerAttribution(this.c.store,task);
+      row.routing=task.spec.routing??null;
+      row.routingWait=task.routingWait??null;
+      if(row.worker?.bindingProvenance==='pinned')row.model.requested=row.worker.requestedModel;
+     }
      if(!row.lastActivityAt)row.provenance='coordinator';
     }
    }
