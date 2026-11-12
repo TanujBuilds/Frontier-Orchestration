@@ -164,12 +164,12 @@ test('approved policy uses trusted credential-free snapshots and preserves absen
  assert.equal(catalog.get('worker-a','revision-1').model,'fixture-model');
 });
 
-test('pool identities, canonical endpoint capacity groups and sequential stage limits are enforced',()=>{
+test('pool identities, canonical endpoint capacity groups and bounded concurrency limits are enforced',()=>{
  const one=profileIdentity(profile()),two=profileIdentity(profile({id:'worker-b',baseUrl:'https://other.invalid/v1'}));
  const invalid=[{workers:[]},{workers:Array(17).fill(one)},{workers:[one,one]},
   {workers:[one,{...one,revision:'revision-2'}]},
   {workers:[one,{...two,capacityGroup:'unknown'}]},
-  {defaultWorkerId:'missing'},{plannerWorkerId:'missing'},{maxConcurrentTasks:2},
+  {defaultWorkerId:'missing'},{plannerWorkerId:'missing'},{maxConcurrentTasks:5},
   {maxConcurrentTasks:Infinity},{maxConcurrentTasks:null},{maxConcurrentTasks:undefined},{capacityGroups:[{id:'fixture-service',limit:0}]},
   {capacityGroups:[{id:'fixture-service',limit:5}]},{capacityGroups:[{id:'fixture-service',limit:1.5}]},
   {capacityGroups:[{id:'fixture-service',limit:1},{id:'fixture-service',limit:1}]},

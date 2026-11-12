@@ -23,7 +23,7 @@ export async function repairIntegration(i,input,key){
    let repair=journal.events.findLast(e=>e.type==='integration.repair.intent'&&e.data.key===rollbackKey)?.data;
    if(!repair){
     const snapshot=await workspace.snapshot();if(digest(snapshot)!==digest(checked.snapshot))throw Error('Failed target snapshot changed before repair');
-    const edits=[];for(const change of intent.changes){const current=await workspace.content(change.path);if(current.hash!==change.afterHash)throw Error('Pending import preimage changed');edits.push({path:change.path,action:change.before.content===null?'delete':'write',content:change.before.content,baseHash:current.hash});}
+    const edits=[];for(const change of intent.changes){const current=await workspace.content(change.path);if(current.hash!==change.afterHash||Object.hasOwn(change,'afterMode')&&await workspace.fileMode(change.path)!==change.afterMode)throw Error('Pending import preimage changed');edits.push({path:change.path,action:change.before.content===null?'delete':'write',content:change.before.content,baseHash:current.hash,...(Object.hasOwn(change,'beforeMode')?{mode:change.beforeMode}: {})});}
     repair={key:rollbackKey,importKey,taskId:t.id,candidateCommit:pending.candidateCommit,reason:input.reason,failedSnapshot:snapshot,checks:checked.checks,edits,snapshotBefore:intent.snapshotBefore,baseCommit:intent.baseCommit};
     await journal.append('integration.repair.intent',repair);
    }

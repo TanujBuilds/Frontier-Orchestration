@@ -10,9 +10,9 @@ import {Integration} from '../src/harness/integration.mjs';
 import {Goals} from '../src/harness/goals.mjs';
 import {spawn} from 'node:child_process';
 
-async function fixture(t,mode='collaborative'){
+async function fixture(t,mode='collaborative',{initialAnswer=0}={}){
  const root=await mkdtemp(path.join(os.tmpdir(),'harness-integrate-')),repo=path.join(root,'repo');await mkdir(path.join(repo,'src'),{recursive:true});await mkdir(path.join(repo,'checks'));
- await writeFile(path.join(repo,'src/answer.mjs'),'export const answer=0;\n');await writeFile(path.join(repo,'checks/verify.mjs'),"import {answer} from '../src/answer.mjs';if(answer!==42)process.exit(1);\n");
+ await writeFile(path.join(repo,'src/answer.mjs'),`export const answer=${initialAnswer};\n`);await writeFile(path.join(repo,'checks/verify.mjs'),"import {answer} from '../src/answer.mjs';if(answer!==42)process.exit(1);\n");
  for(const a of [['init','-q'],['config','user.email','fixture@example.invalid'],['config','user.name','Fixture'],['add','.'],['commit','-qm','base']])await git(repo,...a);
  const c=new Coordinator({root:path.join(root,'state')});t.after(async()=>{c.close();await rm(root,{recursive:true,force:true});});
  const g=c.prepareGoal({submissionId:'g',objective:'Implement42',acceptance:['All checks pass'],mode,environment:'fixture',project:{repo,baseCommit:await git(repo,'rev-parse','HEAD'),readPaths:['src/','checks/'],writePaths:['src/'],checks:[{id:'verify',argv:[process.execPath,'checks/verify.mjs']}]}},'p');c.activateGoal({goalId:g.id,hash:g.hash},'a');
@@ -21,10 +21,11 @@ async function fixture(t,mode='collaborative'){
 }
 async function saveReceipt(name,value){if(!process.env.HARNESS_NATIVE_EVIDENCE_DIR)return;await mkdir(process.env.HARNESS_NATIVE_EVIDENCE_DIR,{recursive:true});await writeFile(path.join(process.env.HARNESS_NATIVE_EVIDENCE_DIR,name+'.json'),JSON.stringify(value,null,2));}
 const task={submissionId:'code',kind:'coding',objective:'Implement42',acceptance:['Protected check passes']};
+const scoped=writePaths=>({readPaths:['src/','checks/'],writePaths,checks:['verify']});
 const provider=(value=42)=>({complete:async messages=>{const input=JSON.parse(messages.at(-1).content),file=input.files.find(x=>x.path==='src/answer.mjs');return {content:JSON.stringify({type:'submit_changes',paths:[],edits:[{path:file.path,action:'write',baseHash:file.hash,content:`export const answer=${value};\n`}],summary:'Candidate'})};}});
 
 test('candidate_v1 isolates two native writers and separates finish from acceptance',async t=>{
- const f=await fixture(t),a=f.c.submitTask({goalId:f.g.id,...task,actor:'codex'},'s1'),b=f.c.submitTask({goalId:f.g.id,...task,submissionId:'b',actor:'codex'},'s2');
+ const f=await fixture(t),a=f.c.submitTask({goalId:f.g.id,...task,actor:'codex',permissions:scoped(['src/answer.mjs'])},'s1'),b=f.c.submitTask({goalId:f.g.id,...task,submissionId:'b',actor:'codex',permissions:scoped(['src/other.mjs'])},'s2');
  const first=await f.integration.startNative({taskId:a.id,layout:'candidate_v1'},'n1'),second=await f.integration.startNative({taskId:b.id,layout:'candidate_v1'},'n2');
  assert.notEqual(first.native.worktree,second.native.worktree);assert.equal(first.native.baseCommit,second.native.baseCommit);assert.equal(f.c.getGoal(f.g.id).integrationOwner??null,null);
  assert.notEqual(first.native.worktree,f.c.getGoal(f.g.id).integration.worktree);assert.equal(await f.integration.executionBase(f.g.id),first.native.baseCommit);
@@ -54,8 +55,8 @@ test('candidate release preserves its partial without retiring independent integ
  const released=await f.integration.releaseNative({taskId:a.id,reason:'Main host confirmed child interrupted'},'release');assert.equal(released.status,'partial');assert.equal(released.native.writerActive,false);assert.equal(f.c.getGoal(f.g.id).integrationSealed,undefined);assert.equal(await f.integration.executionBase(f.g.id),n.native.baseCommit);
 });
 test('failed combined check retains integration intent and rejects another candidate or base',async t=>{
- const f=await fixture(t),a=f.c.submitTask({goalId:f.g.id,...task,actor:'codex'},'submit-a'),b=f.c.submitTask({goalId:f.g.id,...task,actor:'codex',submissionId:'b'},'b');
- for(const [id,key]of [[a.id,'a'],[b.id,'b']]){const n=await f.integration.startNative({taskId:id,layout:'candidate_v1'},'n'+key);await writeFile(path.join(n.native.worktree,'src/answer.mjs'),'export const answer=42;\n');await f.integration.finishNative({taskId:id,summary:'Candidate'},'f'+key);}
+ const f=await fixture(t,'collaborative',{initialAnswer:42}),a=f.c.submitTask({goalId:f.g.id,...task,actor:'codex',permissions:scoped(['src/answer.mjs'])},'submit-a'),b=f.c.submitTask({goalId:f.g.id,...task,actor:'codex',submissionId:'b',permissions:scoped(['src/other.mjs'])},'b');
+ for(const [id,key]of [[a.id,'a'],[b.id,'b']]){const n=await f.integration.startNative({taskId:id,layout:'candidate_v1'},'n'+key);await writeFile(path.join(n.native.worktree,key==='a'?'src/answer.mjs':'src/other.mjs'),'export const answer=42;\n');await f.integration.finishNative({taskId:id,summary:'Candidate'},'f'+key);}
  const failing=new Integration({c:f.c,checksFactory:w=>w.root.includes('/integration/')?{verify:async()=>({fixture:true}),run:async()=>[{id:'verify',passed:false}]}:f.checksFactory(w)});
  await assert.rejects(failing.accept({taskId:a.id,feedback:'Reviewed'},'accept-a'),/Integrated checks failed/);assert.equal(f.c.getGoal(f.g.id).integrationPending.taskId,a.id);
  await assert.rejects(f.integration.executionBase(f.g.id),/pending|recover/i);await assert.rejects(f.integration.accept({taskId:b.id,feedback:'Reviewed'},'accept-b'),/pending|another/i);
@@ -92,15 +93,20 @@ test('linked help uses normal task cap, prevents cycles and blocks answer until 
 });
 test('overlapping candidates conflict without poisoning target and can revise same native task',async t=>{
  const f=await fixture(t),a=f.c.submitTask({goalId:f.g.id,...task,actor:'codex'},'s1'),b=f.c.submitTask({goalId:f.g.id,...task,actor:'codex',submissionId:'b'},'s2');
- for(const [id,label]of [[a.id,'first'],[b.id,'second']]){const n=await f.integration.startNative({taskId:id,layout:'candidate_v1'},'n-'+label);await writeFile(path.join(n.native.worktree,'src/answer.mjs'),`// ${label}\nexport const answer=42;\n`);await f.integration.finishNative({taskId:id,summary:label},'f-'+label);}
- const accepted=await f.integration.accept({taskId:a.id,feedback:'Reviewed first'},'accept-first');await assert.rejects(f.integration.accept({taskId:b.id,feedback:'Reviewed second'},'accept-second'),/conflict/);
+ const base=f.g.manifest.project.baseCommit;let accepted;
+ for(const [id,label]of [[a.id,'first'],[b.id,'second']]){
+  // A persisted pre-stage14 candidate can retain its original base even after
+  // a competing result integrates. New overlapping starts no longer do this.
+  const executionBase=f.integration.executionBase.bind(f.integration);if(label==='second')f.integration.executionBase=async()=>base;
+  const n=await f.integration.startNative({taskId:id,layout:'candidate_v1'},'n-'+label);f.integration.executionBase=executionBase;await writeFile(path.join(n.native.worktree,'src/answer.mjs'),`// ${label}\nexport const answer=42;\n`);await f.integration.finishNative({taskId:id,summary:label},'f-'+label);if(label==='first')accepted=await f.integration.accept({taskId:a.id,feedback:'Reviewed first'},'accept-first');}
+ await assert.rejects(f.integration.accept({taskId:b.id,feedback:'Reviewed second'},'accept-second'),/conflict/);
  assert.equal(await f.integration.executionBase(f.g.id),accepted.integration.commit);assert.match(await readFile(path.join(accepted.integration.worktree,'src/answer.mjs'),'utf8'),/first/);
  const before=f.c.getTask(b.id),rev=f.c.review({taskId:b.id,decision:'revise',feedback:'Resolve overlap preserving first accepted result'},'rev-overlap');assert.equal(rev.status,'codex_ready');assert.equal(rev.deadline,before.deadline);
 });
 test('candidate startup is registered before dispatch and refuses implicit legacy migration',async t=>{
- const f=await fixture(t,'codex_only'),a=f.c.submitTask({goalId:f.g.id,...task},'s');const n=await f.integration.startNative({taskId:a.id,layout:'candidate_v1'},'start');
+ const f=await fixture(t,'codex_only'),a=f.c.submitTask({goalId:f.g.id,...task,permissions:scoped(['src/answer.mjs'])},'s');const n=await f.integration.startNative({taskId:a.id,layout:'candidate_v1'},'start');
  const agents=f.c.store.all('agent');assert.equal(agents.length,1);assert.equal(agents[0].taskId,a.id);assert.equal(n.native.agentId,agents[0].id);assert.equal(agents[0].modelSource,'inherited');
- const b=f.c.submitTask({goalId:f.g.id,...task,submissionId:'b'},'b');await f.integration.startNative({taskId:b.id},'legacy');await assert.rejects(f.integration.startNative({taskId:b.id,layout:'candidate_v1'},'migrate'),/layout/);
+ const b=f.c.submitTask({goalId:f.g.id,...task,submissionId:'b',permissions:scoped(['src/other.mjs'])},'b');await f.integration.startNative({taskId:b.id},'legacy');await assert.rejects(f.integration.startNative({taskId:b.id,layout:'candidate_v1'},'migrate'),/layout/);
 });
 test('native candidate refuses protected/untracked out-of-scope files and mode/dependency/deadline violations',async t=>{
  const f=await fixture(t,'codex_only'),a=f.c.submitTask({goalId:f.g.id,...task,limits:{seconds:1}},'s'),n=await f.integration.startNative({taskId:a.id,layout:'candidate_v1'},'n');
@@ -152,13 +158,13 @@ for(const boundary of [
 });
 
 test('two actual native writer processes run beside one DeepSeek fixture with distinct checkouts',async t=>{
- const f=await fixture(t),first=f.c.submitTask({goalId:f.g.id,...task,actor:'codex'},'n1'),second=f.c.submitTask({goalId:f.g.id,...task,actor:'codex',submissionId:'second'},'n2'),local=f.c.submitTask({goalId:f.g.id,...task,submissionId:'local'},'local');
+ const f=await fixture(t,'collaborative',{initialAnswer:42}),first=f.c.submitTask({goalId:f.g.id,...task,actor:'codex',permissions:scoped(['src/native-one.mjs'])},'n1'),second=f.c.submitTask({goalId:f.g.id,...task,actor:'codex',submissionId:'second',permissions:scoped(['src/native-two.mjs'])},'n2'),local=f.c.submitTask({goalId:f.g.id,...task,submissionId:'local',permissions:scoped(['src/answer.mjs'])},'local');
  const natives=[];
  for(const item of [first,second])natives.push(await f.integration.startNative({taskId:item.id,layout:'candidate_v1'},'start-'+item.id));
  let modelStarted,releaseModel;const started=new Promise(r=>modelStarted=r),gate=new Promise(r=>releaseModel=r),fixtureProvider=provider();
  const worker=new Worker({...f,provider:{complete:async messages=>{modelStarted();await gate;return fixtureProvider.complete(messages);}}});await worker.tick();const running=worker.tick();await started;
  assert.equal(f.c.getTask(local.id).status,'running');assert.equal(f.c.claimNext('competing-worker'),null);
- const children=natives.map(n=>spawn(process.execPath,['--input-type=module','-e',"import {writeFile} from 'node:fs/promises';await writeFile('src/answer.mjs','export const answer=42;\\n');console.log('saved');process.stdin.resume();process.stdin.once('data',()=>process.exit(0));"],{cwd:n.native.worktree,stdio:['pipe','pipe','pipe']}));
+ const children=natives.map(n=>spawn(process.execPath,['--input-type=module','-e',"import {writeFile} from 'node:fs/promises';await writeFile(process.argv[1],'export const answer=42;\\n');console.log('saved');process.stdin.resume();process.stdin.once('data',()=>process.exit(0));",n.spec.permissions.writePaths[0]],{cwd:n.native.worktree,stdio:['pipe','pipe','pipe']}));
  t.after(()=>children.forEach(c=>{if(c.exitCode===null)c.kill('SIGKILL');}));await Promise.all(children.map(child=>new Promise((resolve,reject)=>{child.stdout.once('data',resolve);child.once('error',reject);})));
  const coding=await worker.adapters.coding.open(f.c.getTask(local.id));assert.equal(new Set([...natives.map(n=>n.native.worktree),coding.workspace.root,f.c.getGoal(f.g.id).integration.worktree]).size,4);
  await Promise.all(children.map(child=>new Promise(resolve=>{child.once('exit',resolve);child.stdin.end('host confirms done');})));releaseModel();await running;await worker.drain();
@@ -226,7 +232,7 @@ test('stale native start cannot resurrect an accepted task after execution-base 
 async function combinedFixture(t,limits={}){
  const f=await fixture(t,'codex_only');await writeFile(path.join(f.repo,'src/a.mjs'),'export const a=0;\n');await writeFile(path.join(f.repo,'src/b.mjs'),'export const b=0;\n');await writeFile(path.join(f.repo,'checks/verify.mjs'),"import {a} from '../src/a.mjs';import {b} from '../src/b.mjs';if(a+b>1)process.exit(1);\n");await git(f.repo,'add','.');await git(f.repo,'commit','-qm','combined fixture');
  const g=f.c.prepareGoal({submissionId:'combined',objective:'Combined condition',acceptance:['a+b<=1'],mode:'codex_only',environment:'fixture',project:{...f.g.manifest.project,baseCommit:await git(f.repo,'rev-parse','HEAD')}},'combined');f.c.activateGoal({goalId:g.id,hash:g.hash},'activate-combined');f.g=g;
- const tasks=[];for(const name of ['a','b']){const a=f.c.submitTask({goalId:g.id,...task,submissionId:name,limits},'task-'+name),n=await f.integration.startNative({taskId:a.id,layout:'candidate_v1'},'start-'+name);await writeFile(path.join(n.native.worktree,'src/'+name+'.mjs'),`export const ${name}=1;\n`);tasks.push(await f.integration.finishNative({taskId:a.id,summary:name},'finish-'+name));}
+ const tasks=[];for(const name of ['a','b']){const a=f.c.submitTask({goalId:g.id,...task,submissionId:name,limits,permissions:scoped(['src/'+name+'.mjs'])},'task-'+name),n=await f.integration.startNative({taskId:a.id,layout:'candidate_v1'},'start-'+name);await writeFile(path.join(n.native.worktree,'src/'+name+'.mjs'),`export const ${name}=1;\n`);tasks.push(await f.integration.finishNative({taskId:a.id,summary:name},'finish-'+name));}
  await f.integration.accept({taskId:tasks[0].id,feedback:'Reviewed a'},'accept-a');await assert.rejects(f.integration.accept({taskId:tasks[1].id,feedback:'Reviewed b'},'accept-b'),/Integrated checks failed/);return {...f,first:tasks[0],second:tasks[1]};
 }
 test('supervised failed-import repair restores only pending edits and corrects the same native task',async t=>{
@@ -271,6 +277,9 @@ for(const event of ['workspace.created','edits.applied','generation.transferred'
 });
 test('approved generation preimage conflict never overwrites newer accepted integration',async t=>{
  const f=await fixture(t,'codex_only'),a=f.c.submitTask({goalId:f.g.id,...task,permissions:{readPaths:['src/answer.mjs','checks/'],writePaths:['src/answer.mjs'],checks:['verify']}},'s'),old=await f.integration.startNative({taskId:a.id,layout:'candidate_v1'},'start');await writeFile(path.join(old.native.worktree,'src/answer.mjs'),'export const answer=42;\n');const done=await f.integration.finishNative({taskId:a.id,summary:'Old candidate'},'finish');
+ // End the first writer through supported revision/stop/release before
+ // accepting a conflicting independent task; the frozen checked commit stays.
+ f.c.review({taskId:a.id,decision:'revise',feedback:'Preserve this candidate before independently accepted work'},'hold-old-review');await f.integration.startNative({taskId:a.id,layout:'candidate_v1'},'hold-old-start');f.c.control({taskId:a.id,action:'stop'},'hold-old-stop');await f.integration.releaseNative({taskId:a.id,reason:'Host confirmed frozen partial writer ended'},'hold-old-release');
  const other=f.c.submitTask({goalId:f.g.id,...task,submissionId:'other'},'other'),n=await f.integration.startNative({taskId:other.id,layout:'candidate_v1'},'start-other');await writeFile(path.join(n.native.worktree,'src/answer.mjs'),'// accepted other\nexport const answer=42;\n');await f.integration.finishNative({taskId:other.id,summary:'Other'},'finish-other');const accepted=await f.integration.accept({taskId:other.id,feedback:'Reviewed other'},'accept-other');
  approvedNativeRebind(f,a.id,f.g.manifest.project,{readPaths:['src/','checks/'],writePaths:['src/'],checks:['verify']},'wide');await assert.rejects(f.integration.startNative({taskId:a.id,layout:'candidate_v1'},'conflict'),/conflict/);assert.equal(f.c.getTask(a.id).native.baseCommit,accepted.integration.commit);assert.equal(f.c.getTask(a.id).status,'blocked');assert.equal(await f.integration.executionBase(f.g.id),accepted.integration.commit);assert.equal(await git(old.native.worktree,'rev-parse','HEAD'),done.native.commit);
 });

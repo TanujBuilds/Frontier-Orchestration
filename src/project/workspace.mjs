@@ -1,4 +1,4 @@
-import { lstat, readFile, writeFile, mkdir, rename, unlink, cp, realpath } from 'node:fs/promises';
+import { lstat, readFile, writeFile, mkdir, rename, unlink, cp, realpath, chmod } from 'node:fs/promises';
 import path from 'node:path';
 import { digest, relativePath, matches, protectedPath, secretPath, Pause, AttemptError } from './contracts.mjs';
 import { git, command } from './process.mjs';
@@ -47,6 +47,10 @@ export class Workspace {
       if (bytes.length > 128 * 1024) throw new Pause(`File exceeds context limit: ${file}`, 'context');
       return { path: file, hash: digest(bytes), content: bytes.toString('utf8') };
     } catch (e) { if (e.code === 'ENOENT') return { path: file, hash: null, content: null }; throw e; }
+  }
+  async fileMode(file) {
+    try { const stat=await lstat(await this.file(file));if(!stat.isFile())throw new Pause('Expected a regular file: '+file,'scope');return stat.mode&0o100?'100755':'100644'; }
+    catch(error){if(error.code==='ENOENT')return null;throw error;}
   }
   async readFiles(paths) {
     const files = [];
@@ -116,7 +120,9 @@ export class Workspace {
       const before = await this.content(edit.path);
       if (edit.baseHash !== before.hash) throw new AttemptError(`Stale edit hash for ${edit.path}; request current file`);
       if (edit.action === 'write' && (typeof edit.content !== 'string' || Buffer.byteLength(edit.content) > 128 * 1024 || edit.content.includes('\0'))) throw new AttemptError('Write must contain UTF-8 text up to 128 KiB');
-      changes.push({ path: edit.path, before: before.hash, after: edit.action === 'delete' ? null : digest(edit.content), content: edit.action === 'delete' ? null : edit.content });
+      const beforeMode=await this.fileMode(edit.path),afterMode=edit.action==='delete'?null:edit.mode??beforeMode??'100644';
+      if(afterMode!==null&&!['100644','100755'].includes(afterMode))throw new AttemptError('Invalid internal executable mode');
+      changes.push({ path: edit.path, before: before.hash, after: edit.action === 'delete' ? null : digest(edit.content), content: edit.action === 'delete' ? null : edit.content, beforeMode, afterMode });
     }
     const intent = { key, changes, snapshotBefore: await this.snapshot() };
     await this.journal.append('edits.intent', intent);
@@ -130,16 +136,20 @@ export class Workspace {
     for (const change of intent.changes) {
       const actual = (await this.content(change.path)).hash;
       if (actual !== change.before && actual !== change.after) throw new Pause(`Cannot reconcile interrupted edit: ${change.path}`, 'workspace_changed');
+      if(Object.hasOwn(change,'afterMode')){const mode=await this.fileMode(change.path);if(mode!==change.beforeMode&&mode!==change.afterMode)throw new Pause('Cannot reconcile interrupted executable mode: '+change.path,'workspace_changed');}
     }
     for (const change of intent.changes) {
       const file = await this.file(change.path);
-      if ((await this.content(change.path)).hash === change.after) continue;
+      if ((await this.content(change.path)).hash === change.after) {
+        if(change.afterMode)await chmod(file,change.afterMode==='100755'?0o700:0o600);
+        continue;
+      }
       if (change.content === null) await unlink(file);
       else {
         await mkdir(path.dirname(file), { recursive: true });
         // Staging lives outside the editable tree, so an interrupted temp file is not mistaken for user work.
         const temp = path.join(this.journal.dir, 'pending-edit');
-        await writeFile(temp, change.content, { mode: 0o600 });
+        await writeFile(temp, change.content, { mode: change.afterMode==='100755'?0o700:0o600 });
         await rename(temp, file);
       }
     }

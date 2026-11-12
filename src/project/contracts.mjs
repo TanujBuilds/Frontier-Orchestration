@@ -124,6 +124,6 @@ export function stageAssignment({ stage, plan, acceptedStages = [], priorAttempt
 export function validateReply(reply) {
   if (reply?.type === 'needs_approval') throw new Pause(reply.summary || 'Worker requests expanded scope', 'scope');
   if (reply?.type === 'read_files' && Array.isArray(reply.paths) && reply.paths.length > 0 && reply.paths.length <= 20 && reply.paths.every(file => typeof file === 'string' && file.trim())) return reply;
-  if (reply?.type === 'submit_changes' && Array.isArray(reply.edits) && reply.edits.length <= 30 && typeof reply.summary === 'string' && reply.edits.every(edit => edit && typeof edit.path === 'string' && ['write', 'delete'].includes(edit.action) && (edit.baseHash === null || typeof edit.baseHash === 'string'))) return reply;
+  if (reply?.type === 'submit_changes' && Array.isArray(reply.edits) && reply.edits.length <= 30 && typeof reply.summary === 'string' && reply.edits.every(edit => edit && Object.keys(edit).every(key => ['path', 'action', 'baseHash', 'content'].includes(key)) && typeof edit.path === 'string' && ['write', 'delete'].includes(edit.action) && (edit.baseHash === null || typeof edit.baseHash === 'string'))) return reply;
   throw new AttemptError('Invalid worker reply; return read_files or submit_changes JSON');
 }

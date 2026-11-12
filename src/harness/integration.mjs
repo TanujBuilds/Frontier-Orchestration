@@ -1,4 +1,6 @@
 import path from 'node:path';
+import {access} from 'node:fs/promises';
+import {canonicalRepository,capacitySnapshot,writeScopeWait} from './scheduling/capacity.mjs';
 import {effectiveIntegrationChecks,isOvernightV2} from './overnight.mjs';
 import { repairIntegration } from './integration-repair.mjs';
 import { NativeCandidates } from './native-candidates.mjs';
@@ -86,7 +88,7 @@ async function assertCheckedCommit(workspace,checkpoint,snapshot,modes){
 }
 
 export class Integration {
- constructor({c,checksFactory,config={}}){this.c=c;this.checksFactory=checksFactory;this.config=config;this.inflight=new Map();this.nativeCandidates=new NativeCandidates(this);}
+ constructor({c,checksFactory,config={},signal}){this.signal=signal;this.c=c;this.checksFactory=checksFactory;this.config=config;this.inflight=new Map();this.nativeCandidates=new NativeCandidates(this);}
  async effect(key,input,action){
   identifier(key,'idempotencyKey');const hash=digest(input),old=this.c.store.maybe('effect',key);
   if(old&&old.hash!==hash)throw Error('Idempotency key conflict');if(old?.status==='completed')return old.result;
@@ -95,20 +97,75 @@ export class Integration {
   const run=(async()=>{const result=await action();this.c.store.tx(()=>this.c.store.put('effect',{id:key,hash,status:'completed',result,at:this.c.now()}));return result;})();
   this.inflight.set(key,run);try{return await run;}catch(error){if(error.code==='locked')error.retryable=true;throw error;}finally{this.inflight.delete(key);}
  }
+ repositoryId(g){const hash=digest(canonicalRepository(g.manifest.project.repo));return `${hash.slice(0,8)}-${hash.slice(8,12)}-${hash.slice(12,16)}-${hash.slice(16,20)}-${hash.slice(20,32)}`;}
+ async integrationJournal(g){
+  let id=g.integration?.journalId;
+  if(!id){
+   // Existing goal journals retain their path and semantics. New portable goals
+   // share one checked target; historical no-policy work remains private.
+   let historical=false;try{await access(path.join(this.c.store.root,'integration','jobs',g.id+'.jsonl'));historical=true;}catch(error){if(error.code!=='ENOENT')throw error;}
+   const legacyNative=!g.manifest.reviewPolicy&&g.manifest.mode.actors.includes('codex');
+   id=historical||!g.manifest.providerPolicy||legacyNative?g.id:this.repositoryId(g);
+  }
+  return new Journal(path.join(this.c.store.root,'integration'),id).load();
+ }
  async goalWorkspace(goalId,{native=false,journal:lockedJournal}={}){
   const g=this.c.store.get('goal',goalId);if(g.integrationSealed)throw Error('Preserved partial integration workspace is retired; use a separately approved goal');if(!g.manifest.project)throw Error('Goal has no coding project');
-  const journal=lockedJournal??await new Journal(path.join(this.c.store.root,'integration'),g.id).load();
-  const p=g.manifest.project,manifest={repo:p.repo,baseCommit:p.baseCommit,permissions:p,...(isOvernightV2(g.manifest)?{overnightV2:true}:{})};
+  const journal=lockedJournal??await this.integrationJournal(g),p=g.manifest.project;
+  const shared=journal.id!==g.id,origin=journal.last('integration.repository');
+  if(shared&&origin&&(origin.baseCommit!==p.baseCommit||origin.repository!==canonicalRepository(p.repo)))throw Error('Incompatible approved repository base; preserve candidate for a separately approved integration');
+  const manifest={repo:p.repo,baseCommit:p.baseCommit,permissions:p,...(isOvernightV2(g.manifest)?{overnightV2:true}:{})};
   if(!journal.last('workspace.created')){const inspected=await inspectRepository(p.repo,p);if(inspected.baseCommit!==p.baseCommit)throw Error('Approved source revision changed');}
   const workspace=new Workspace(manifest,journal);await workspace.initialize();
+  if(shared&&!origin)await journal.append('integration.repository',{repository:canonicalRepository(p.repo),baseCommit:p.baseCommit});
   if(!native)await workspace.recover();
-  if(!g.integration)this.c.store.tx(()=>{const current=this.c.store.get('goal',g.id);current.integration={worktree:workspace.root,branch:workspace.branch,baseCommit:p.baseCommit};this.c.store.put('goal',current);});
-  return {journal,workspace,g:this.c.store.get('goal',goalId)};
+  if(!g.integration)this.c.store.tx(()=>{const current=this.c.store.get('goal',g.id);current.integration={worktree:workspace.root,branch:workspace.branch,baseCommit:p.baseCommit,...(shared?{journalId:journal.id}: {})};this.c.store.put('goal',current);});
+  return {journal,workspace,g:this.c.store.get('goal',goalId),shared};
  }
  checks(workspace){return this.checksFactory?.(workspace)??new CheckRunner(workspace,{codex:this.config.codexPath??'codex'});}
  async lockedGoal(goalId,{native=false,refuseLegacy=false,integrationTaskId=null}={}){
-  const journal=await new Journal(path.join(this.c.store.root,'integration'),goalId).load(),release=await journal.lock();
-  try{const g=this.c.store.get('goal',goalId);if(g.integrationPending&&g.integrationPending.taskId!==integrationTaskId)throw Error('Another pending integration must be recovered first');if(refuseLegacy&&g.integrationOwner)throw Error('Native legacy owner holds integration workspace');return {...await this.goalWorkspace(goalId,{native,journal}),release};}catch(error){await release();throw error;}
+  const g=this.c.store.get('goal',goalId),repository=canonicalRepository(g.manifest.project.repo);
+  // Lock order is canonical repository then integration journal. Journal's
+  // random token is the lock generation; only verified ESRCH permits recovery.
+  const repositoryJournal=await new Journal(path.join(this.c.store.root,'integration-repository-locks'),this.repositoryId(g)).load(),releaseRepository=await repositoryJournal.lock();
+  let releaseJournal;
+  try{
+   for(const other of this.c.store.all('goal')){
+    if(!other.manifest.project||canonicalRepository(other.manifest.project.repo)!==repository)continue;
+    if(other.integrationPending&&other.integrationPending.taskId!==integrationTaskId)throw Error('Another pending integration must be recovered first');
+    if(other.integrationOwner&&(other.id!==goalId||refuseLegacy))throw Error('Native legacy owner holds integration workspace');
+   }
+   const journal=await this.integrationJournal(g);
+   for(const other of this.c.store.all('goal')){
+    if(other.id===g.id||!other.manifest.project||canonicalRepository(other.manifest.project.repo)!==repository||!other.integration)continue;
+    const otherJournal=other.integration.journalId??other.id;
+    if(otherJournal===journal.id||journal.id===g.id&&!other.integration.journalId)continue;
+    if(this.c.store.all('task').some(t=>t.goalId===other.id&&t.status==='accepted'&&t.integration))throw Error('Incompatible independent integration state; preserve legacy target and candidate for separately approved integration');
+   }
+   releaseJournal=await journal.lock();
+   const target=await this.goalWorkspace(goalId,{native,journal});
+   const release=async()=>{try{await releaseJournal();}finally{await releaseRepository();}};
+   return {...target,release};
+  }catch(error){try{await releaseJournal?.();}finally{await releaseRepository();}throw error;}
+ }
+ async combinedChecks(target,task,goal,checkSpecs){
+  const current={goalId:goal.id,goalHash:goal.hash,project:goal.manifest.project,checkSpecs,overnightV2:isOvernightV2(goal.manifest)},contracts=new Map();
+  // Contracts are saved by checked commits, independent of mutable goal records.
+  // Each old check runs under its own original permissions rather than a union.
+  for(const event of target.journal.events){const contract=event.type==='stage.accepted'&&event.data.integrationContract;if(contract)contracts.set(digest({project:contract.project,checkSpecs:contract.checkSpecs}),contract);}
+  contracts.set(digest({project:current.project,checkSpecs:current.checkSpecs}),current);
+  const evidence=[];let results;
+  for(const contract of contracts.values()){
+   this.currentCandidate(task);
+   const {overnightV2:ignored,...manifest}=target.workspace.manifest,workspace=new Workspace({...manifest,permissions:contract.project,...(contract.overnightV2?{overnightV2:true}:{})},target.journal);
+   const snapshot=await workspace.snapshot(),modes=await readBehavioralFileModes(workspace,Object.keys(snapshot));
+   const runner=this.checks(workspace);await runner.verify(this.signal);this.currentCandidate(task);const checks=await runner.run(contract.checkSpecs,`integrate-${task.id}-${contract.goalId}`,this.signal);
+   await workspace.assertSnapshot(snapshot);const afterModes=await readBehavioralFileModes(workspace,Object.keys(snapshot));if(behavioralModeHash(modes)!==behavioralModeHash(afterModes))throw Error('Combined executable bit changed during protected checks');
+   const behavioralEvidence=behavioralEvidenceFor(contract.project,contract.checkSpecs,checks,snapshot,modes);
+   evidence.push({...contract,checks,...(behavioralEvidence?{behavioralEvidence}:{})});
+   if(contract===current)results=checks;
+  }
+  return {results,evidence,contract:current};
  }
  async executionBase(goalId){
   const target=await this.lockedGoal(goalId,{refuseLegacy:true});
@@ -121,18 +178,18 @@ export class Integration {
   const edits=[];
   for(const file of files){
    if(protectedPath(file)||!matches(file,writePaths))throw Error('Candidate change outside approved scope');
-   const listed=await git(workspace.root,'ls-tree','--name-only',base,'--',file);
+   const entry=await git(workspace.root,'ls-tree',base,'--',file),listed=Boolean(entry),beforeMode=entry?entry.split(' ')[0]:null;
    // git() trims non-NUL output; read the exact blob through Workspace content's
    // hashing convention by retrieving bytes in a NUL-preserving command.
    const beforeExact=listed?await git(workspace.root,'show',`${base}:${file}`,'--format=','-z'):null;
    const current=await workspace.content(file);
-   edits.push({path:file,action:current.content===null?'delete':'write',content:current.content,beforeHash:listed?fileDigest(beforeExact):null,afterHash:current.hash});
+   edits.push({path:file,action:current.content===null?'delete':'write',content:current.content,beforeHash:listed?fileDigest(beforeExact):null,afterHash:current.hash,beforeMode,afterMode:await workspace.fileMode(file)});
   }
   return edits;
  }
  async prepareChanges(workspace,changes){
   const edits=[];
-  for(const change of changes){const current=await workspace.content(change.path);if(current.hash===change.afterHash)continue;if(current.hash!==change.beforeHash)throw Error(`Integration conflict for ${change.path}`);edits.push({path:change.path,action:change.action,content:change.content,baseHash:current.hash});}
+  for(const change of changes){const current=await workspace.content(change.path),mode=await workspace.fileMode(change.path),hasMode=Object.hasOwn(change,'afterMode');if(current.hash===change.afterHash&&(!hasMode||mode===change.afterMode))continue;if(current.hash!==change.beforeHash||hasMode&&mode!==change.beforeMode)throw Error(`Integration conflict for ${change.path}; preserve candidate for repair and review`);edits.push({path:change.path,action:change.action,content:change.content,baseHash:current.hash,...(hasMode?{mode:change.afterMode}: {})});}
   return edits;
  }
  async applyChanges(workspace,changes,key,writePaths){await workspace.apply(key,{writePaths},await this.prepareChanges(workspace,changes));}
@@ -174,7 +231,7 @@ export class Integration {
    const candidateModes=candidateSnapshot?await checkedFileModes(candidate.workspace,candidateSnapshot):null;
    const checkedSnapshot=candidateSnapshot?await this.checkedCandidateSnapshot(candidate,t,g,candidateSnapshot,candidateModes):null;
    const checks=this.checks(candidate.workspace),candidateCheckSpecs=candidate.manifest.permissions.checks;
-   await checks.verify();const candidateChecks=await checks.run(candidateCheckSpecs,`accept-${t.id}`);
+   await checks.verify(this.signal);const candidateChecks=await checks.run(candidateCheckSpecs,`accept-${t.id}`,this.signal);
    if(candidateSnapshot){
     await candidate.workspace.assertSnapshot(candidateSnapshot);
     await assertCheckedModes(candidate.workspace,candidateSnapshot,candidateModes);
@@ -210,28 +267,31 @@ export class Integration {
      this.c.store.put('goal',goal);return importKey;
     });
     if(!target.journal.events.some(e=>e.type==='integration.import.intent'&&e.data.key===importKey)){
-     const edits=await this.prepareChanges(target.workspace,changes),captured=[];for(const edit of edits)captured.push({path:edit.path,before:await target.workspace.content(edit.path),afterHash:edit.action==='delete'?null:fileDigest(edit.content)});
+     const edits=await this.prepareChanges(target.workspace,changes),captured=[];for(const edit of edits)captured.push({path:edit.path,before:await target.workspace.content(edit.path),afterHash:edit.action==='delete'?null:fileDigest(edit.content),beforeMode:await target.workspace.fileMode(edit.path),afterMode:edit.action==='delete'?null:edit.mode??await target.workspace.fileMode(edit.path)??'100644'});
      await target.journal.append('integration.import.intent',{key:importKey,taskId:t.id,candidateCommit:checkpoint.commit,baseCommit:await git(target.workspace.root,'rev-parse','HEAD'),snapshotBefore:await target.workspace.snapshot(),changes:captured});
     }
     await this.applyChanges(target.workspace,changes,importKey,t.spec.permissions.writePaths);
-    const checkSpecs=effectiveIntegrationChecks(this.c,t,g.manifest),snapshotBeforeChecks=project.behavioralChecks?await target.workspace.snapshot():null;
+    const checkSpecs=effectiveIntegrationChecks(this.c,t,g.manifest),snapshotBeforeChecks=project.behavioralChecks||target.shared?await target.workspace.snapshot():null;
     const combinedModes=snapshotBeforeChecks?await checkedFileModes(target.workspace,snapshotBeforeChecks):null;
-    const runner=this.checks(target.workspace);await runner.verify();const results=await runner.run(checkSpecs,`integrate-${t.id}`);
+    let results,combinedEvidence,integrationContract;
+    if(target.shared){const combined=await this.combinedChecks(target,t,g,checkSpecs);results=combined.results;combinedEvidence=combined.evidence;integrationContract=combined.contract;}
+    else {const runner=this.checks(target.workspace);await runner.verify(this.signal);results=await runner.run(checkSpecs,`integrate-${t.id}`,this.signal);}
     const snapshot=await target.workspace.snapshot();
     if(snapshotBeforeChecks){
      if(digest(snapshot)!==digest(snapshotBeforeChecks))throw Error('Combined snapshot changed during protected checks');
      await assertCheckedModes(target.workspace,snapshot,combinedModes);
     }
     const behavioralEvidence=behavioralEvidenceFor(project,checkSpecs,results,snapshot,combinedModes);
-    await target.journal.append('integration.checks',{key:importKey,checks:results,snapshot,...(behavioralEvidence?{behavioralEvidence}:{})});
-    if(!results.every(x=>x.passed))throw Error('Integrated checks failed');
+    await target.journal.append('integration.checks',{key:importKey,checks:combinedEvidence?combinedEvidence.flatMap(e=>e.checks):results,snapshot,...(combinedEvidence?{combinedEvidence}:{}),...(behavioralEvidence?{behavioralEvidence}:{})});
+    if(!(combinedEvidence?combinedEvidence.flatMap(e=>e.checks):results).every(x=>x.passed))throw Error('Integrated checks failed');
+    for(const evidence of combinedEvidence??[])assertBehavioralChecks(evidence.behavioralEvidence);
     assertBehavioralChecks(behavioralEvidence);
     t=this.currentCandidate(t);
-    if(behavioralEvidence)await checkedBlobIds(target.workspace,snapshot,combinedModes,{beforeCommit:true});
+    if(behavioralEvidence||target.shared)await checkedBlobIds(target.workspace,snapshot,combinedModes,{beforeCommit:true});
     const stage=`task-${t.id}-${checkpoint.commit}`,imported=await target.journal.memo(`${stage}/checkpoint`,()=>target.workspace.checkpoint({id:stage,writePaths:t.spec.permissions.writePaths}));
-    if(behavioralEvidence)await assertCheckedCommit(target.workspace,imported,snapshot,combinedModes);
-    if(!target.journal.events.some(e=>e.type==='stage.accepted'&&e.data.stageId===stage))await target.journal.append('stage.accepted',{stageId:stage,...imported});
-    this.c.store.tx(()=>{const current=this.currentCandidate(t);current.status='accepted';if(current.native?.layout==='candidate_v1')current.native.status='integrated';current.integration={commit:imported.commit,candidateCommit:checkpoint.commit,worktree:target.workspace.root,checks:results,review:g.manifest.reviewPolicy?(g.manifest.reviewPolicy.source==='host'?'host_review':'api_review'):g.manifest.mode.review==='checks'?'none':g.manifest.mode.review==='legacy'?'codex_legacy':'codex_operator',...(g.manifest.reviewPolicy?{reviewAcceptance:current.reviewAcceptance}:{}),...(behavioralEvidence?{candidateBehavioralEvidence,behavioralEvidence}:{})};this.c.store.put('task',current);const goal=this.c.store.get('goal',g.id);goal.integrationPending=null;this.c.store.put('goal',goal);this.c.emit('task.integrated',g.id,t.id,current.integration);});
+    if(behavioralEvidence||target.shared)await assertCheckedCommit(target.workspace,imported,snapshot,combinedModes);
+    if(!target.journal.events.some(e=>e.type==='stage.accepted'&&e.data.stageId===stage))await target.journal.append('stage.accepted',{stageId:stage,...imported,...(integrationContract?{integrationContract}: {})});
+    this.c.store.tx(()=>{const current=this.currentCandidate(t);current.status='accepted';if(current.native?.layout==='candidate_v1')current.native.status='integrated';current.integration={commit:imported.commit,candidateCommit:checkpoint.commit,worktree:target.workspace.root,checks:results,...(combinedEvidence?{combinedEvidence}:{}),review:g.manifest.reviewPolicy?(g.manifest.reviewPolicy.source==='host'?'host_review':'api_review'):g.manifest.mode.review==='checks'?'none':g.manifest.mode.review==='legacy'?'codex_legacy':'codex_operator',...(g.manifest.reviewPolicy?{reviewAcceptance:current.reviewAcceptance}:{}),...(behavioralEvidence?{candidateBehavioralEvidence,behavioralEvidence}:{})};this.c.store.put('task',current);const goal=this.c.store.get('goal',g.id);goal.integrationPending=null;this.c.store.put('goal',goal);this.c.emit('task.integrated',g.id,t.id,current.integration);});
     return this.c.getTask(t.id);
    }finally{await release();}
   }finally{await releaseCandidate();}
@@ -249,8 +309,9 @@ export class Integration {
   if(!t.spec.dependsOn.every(id=>this.c.getTask(id).status==='accepted'))throw Error('Dependencies are incomplete');
   if(g.integrationOwner&&g.integrationOwner!==t.id)throw Error('Another native task owns integration workspace');
   const target=await this.lockedGoal(g.id),unlock=target.release;try{
+   if(target.shared)throw Error('Historical native layout requires private integration; preserve shared target for separately approved integration');
    const snapshot=await target.workspace.snapshot();
-   this.c.store.tx(()=>{const current=this.c.liveTask(t,{allowStopped:!!extra.takeoverReason});current.status='codex_active';current.executionActor='codex';current.stopRequested=false;current.startedAt??=this.c.now();current.deadline??=Math.min(g.deadline,current.startedAt+t.spec.limits.seconds*1000);current.native={worktree:target.workspace.root,startSnapshot:snapshot,...extra};const goal=this.c.store.get('goal',g.id);if(goal.integrationOwner&&goal.integrationOwner!==t.id)throw Error('Another native task owns integration workspace');goal.integrationOwner=t.id;this.c.store.put('goal',goal);this.c.store.put('task',current);this.c.learning.pin(t.id);this.c.emit('task.native_started',g.id,t.id,{worktree:target.workspace.root});});
+   this.c.store.tx(()=>{const current=this.c.liveTask(t,{allowStopped:!!extra.takeoverReason});const scopeWait=writeScopeWait({task:current,goal:g,snapshot:capacitySnapshot(this.c)});if(scopeWait)throw Error(scopeWait.explanation);current.status='codex_active';current.executionActor='codex';current.stopRequested=false;current.startedAt??=this.c.now();current.deadline??=Math.min(g.deadline,current.startedAt+t.spec.limits.seconds*1000);current.native={worktree:target.workspace.root,startSnapshot:snapshot,...extra};const goal=this.c.store.get('goal',g.id);if(goal.integrationOwner&&goal.integrationOwner!==t.id)throw Error('Another native task owns integration workspace');goal.integrationOwner=t.id;this.c.store.put('goal',goal);this.c.store.put('task',current);this.c.learning.pin(t.id);this.c.emit('task.native_started',g.id,t.id,{worktree:target.workspace.root});});
   }finally{await unlock();}return this.c.getTask(t.id);
  }
  async takeover(input,key){return this.effect(key,{op:'native.takeover',...input},async()=>{
@@ -261,7 +322,7 @@ export class Integration {
    await source.workspace.recover();const frozen=await source.workspace.snapshot(),changes=await this.changes(source.workspace,source.manifest.baseCommit,t.spec.permissions.writePaths);
    const extra={workerWorktree:source.workspace.root,workerSnapshot:frozen,workerManifest:source.manifest,workerJournalRoot:source.journal.root,takeoverReason:input.reason};
    const native=input.layout==='candidate_v1'?await this.nativeCandidates.start(t.id,extra,input.registration):await this.beginNative(t.id,extra);
-   const target=input.layout==='candidate_v1'?await this.candidate(native):await this.goalWorkspace(g.id,{native:true}),unlock=await target.journal.lock();try{await this.applyChanges(target.workspace,changes,`takeover-${t.id}`,t.spec.permissions.writePaths);}finally{await unlock();}
+   const target=input.layout==='candidate_v1'?await this.candidate(native):await this.lockedGoal(g.id,{native:true}),unlock=target.release??await target.journal.lock();try{await this.applyChanges(target.workspace,changes,`takeover-${t.id}`,t.spec.permissions.writePaths);}finally{await unlock();}
    this.c.emit('task.taken_over',g.id,t.id,{reason:input.reason,workerSnapshot:frozen});return this.c.getTask(native.id);
   }finally{await release();}
  });}
@@ -272,13 +333,14 @@ export class Integration {
   if(t.status==='accepted'&&t.integration?.review==='codex_native')return t;
   this.c.liveGoal(g);if(t.status!=='codex_active'||g.integrationOwner!==t.id)throw Error('Native task ownership mismatch');
   this.c.liveTask(t);
-  const target=await this.goalWorkspace(g.id,{native:true}),release=await target.journal.lock();try{
+  const target=await this.lockedGoal(g.id,{native:true}),release=target.release;try{
+   if(target.shared)throw Error('Historical native layout cannot accept a shared integration target; preserve candidate for separately approved integration');
    if(t.native.workerSnapshot){const source=await this.candidate(t),unlock=await source.journal.lock();try{if(digest(await source.workspace.snapshot())!==digest(t.native.workerSnapshot))throw Error('Frozen worker checkout changed after takeover');}finally{await unlock();}}
    const snapshot=await target.workspace.snapshot(),before=t.native.startSnapshot;
    for(const f of new Set([...Object.keys(snapshot),...Object.keys(before)]))if(snapshot[f]!==before[f]&&(protectedPath(f)||!matches(f,t.spec.permissions.writePaths)))throw Error('Native change outside approved scope or protected checks');
    await target.journal.append('native.adopted',{taskId:t.id,snapshot});
    const project=g.manifest.project,modes=project.behavioralChecks?await checkedFileModes(target.workspace,snapshot):null;
-   const runner=this.checks(target.workspace);await runner.verify();const results=await runner.run(project.checks,`native-${t.id}`);
+   const runner=this.checks(target.workspace);await runner.verify(this.signal);const results=await runner.run(project.checks,`native-${t.id}`,this.signal);
    if(!results.every(x=>x.passed))throw Error('Native checks failed');
    const behavioralEvidence=behavioralEvidenceFor(project,project.checks,results,snapshot,modes);
    if(behavioralEvidence){
@@ -300,7 +362,7 @@ export class Integration {
   if(t.status==='partial'&&t.result?.savedNative)return t;
   const g=this.c.store.get('goal',t.goalId);
   if(t.spec.kind!=='coding'||t.executionActor!=='codex'||t.status!=='stopped'||t.owner||g.integrationOwner!==t.id)throw Error('Stop native editing and retain its ownership before explicit release');
-  const target=await this.goalWorkspace(g.id,{native:true}),unlock=await target.journal.lock();
+  const target=await this.lockedGoal(g.id,{native:true}),unlock=target.release;
   try{
    const snapshot=await target.workspace.snapshot(),head=await git(target.workspace.root,'rev-parse','HEAD');
    const savedNative={worktree:target.workspace.root,head,snapshot,snapshotHash:digest(snapshot),reason:input.reason};

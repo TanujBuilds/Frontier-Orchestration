@@ -65,15 +65,19 @@ export function canClaim({task,goal,route,snapshot}){
  }
  if(active.length>=snapshot.serviceLimit)return {allowed:false,reasonCode:'service_task_capacity',explanation:'Private service task capacity is occupied'};
  if(active.filter(t=>t.goalId===goal.id).length>=(policy?.maxConcurrentTasks??1))return {allowed:false,reasonCode:'goal_task_capacity',explanation:'Approved goal task capacity is occupied'};
+ const scopeWait=writeScopeWait({task,goal,snapshot});if(scopeWait)return scopeWait;
+ return {allowed:true,reasonCode:'capacity_available',explanation:'Task runner capacity available'};
+}
+export function writeScopeWait({task,goal,snapshot}){
  if(task.spec.kind==='coding'&&goal.manifest.project){
   const repo=canonicalRepository(goal.manifest.project.repo);
   for(const other of snapshot.tasks){
-   if(other.id===task.id||other.spec.kind!=='coding'||!other.startedAt||['accepted','cancelled','failed','partial'].includes(other.status))continue;
-   const otherGoal=snapshot.goals.find(g=>g.id===other.goalId);
+   const otherGoal=snapshot.goals.find(g=>g.id===other.goalId),writer=other.native?.writerActive||other.status==='codex_active'||otherGoal?.integrationOwner===other.id;
+   if(other.id===task.id||other.spec.kind!=='coding'||(!other.startedAt&&!other.owner&&!writer)||!writer&&['accepted','cancelled','failed','partial'].includes(other.status))continue;
    if(otherGoal?.manifest.project&&canonicalRepository(otherGoal.manifest.project.repo)===repo&&scopesOverlap(task.spec.permissions?.writePaths,other.spec.permissions?.writePaths))return {allowed:false,reasonCode:'write_scope_busy',explanation:'An unresolved candidate owns overlapping or ambiguous write scope'};
   }
  }
- return {allowed:true,reasonCode:'capacity_available',explanation:'Task runner capacity available'};
+ return null;
 }
 export function inferenceResource(c,goal,binding){
  const p=profiles(goal).find(p=>p.id===binding?.providerId&&p.revision===binding.revision&&digest(p)===binding.profileHash);

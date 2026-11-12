@@ -6,6 +6,7 @@ import { Workspace } from '../project/workspace.mjs';
 import { git } from '../project/process.mjs';
 import { digest, text } from './contracts.mjs';
 import {readBehavioralFileModes,behavioralModeHash} from './behavioral-validation.mjs';
+import {capacitySnapshot,writeScopeWait} from './scheduling/capacity.mjs';
 import { normalizeNativeCandidate } from './collaboration-contracts.mjs';
 
 // The host confirms finish/release. Reported progress never proves quiescence.
@@ -20,6 +21,7 @@ export class NativeCandidates {
   return {journal,workspace,manifest};
  }
  async start(taskId,extra={},registration=null){
+  this.i.signal?.throwIfAborted();
   let t=this.c.getTask(taskId),g=this.c.store.get('goal',t.goalId);
   this.c.liveTask(t,{allowStopped:!!extra.takeoverReason});
   if(!g.manifest.mode.actors.includes('codex')||t.spec.kind!=='coding')throw Error('Mode prohibits native Codex execution');
@@ -41,6 +43,7 @@ export class NativeCandidates {
   const agentId=registration?this.agents.register(registration,`native-agent-${t.id}`).id:t.native?.agentId??this.agents.register({version:1,taskId:t.id,role:'implementer',actor:'codex'},`native-agent-${t.id}`).id;
   this.c.store.tx(()=>{
    const current=this.c.liveTask(t,{allowStopped:!!extra.takeoverReason});
+   const scopeWait=writeScopeWait({task:current,goal:g,snapshot:capacitySnapshot(this.c)});if(scopeWait)throw Error(scopeWait.explanation);
    if(current.owner||digest({status:current.status,goalVersion:current.goalVersion,hash:current.hash,native:current.native??null})!==fence)throw Error('Native start state changed before writer reservation');
    if(!current.native){
     const p=g.manifest.project,manifest={repo:p.repo,baseCommit:base,permissions:{readPaths:current.spec.permissions.readPaths,writePaths:current.spec.permissions.writePaths,checks:p.checks.filter(x=>current.spec.permissions.checks.includes(x.id))}};
@@ -63,6 +66,7 @@ export class NativeCandidates {
    // Replayed start cannot discard a writer's unreported edits.
    if(t.native.status==='starting')await target.workspace.recover();
    if(t.native.transfer)await this.transferGeneration(t,target);
+   this.i.signal?.throwIfAborted();
    this.c.store.tx(()=>{
     const current=this.c.liveTask(t);if(current.status!=='codex_active')throw Error('Native ownership changed');
     current.native={...current.native,worktree:target.workspace.root,branch:target.workspace.branch,status:'active'};
@@ -82,7 +86,8 @@ export class NativeCandidates {
    const saved=target.journal.last('generation.source');if(saved&&(digest(saved.sourceSnapshot)!==digest(snapshot)||saved.head!==head))throw Error('Frozen generation source changed');
    if(!saved)await target.journal.append('generation.source',{taskId:t.id,sourceGeneration:archived.native.generation??1,head,sourceSnapshot:snapshot,changes});
    await this.i.applyChanges(target.workspace,changes,'generation-transfer',t.spec.permissions.writePaths);
-   const sandbox=await this.i.checks(target.workspace).verify();
+   const sandbox=await this.i.checks(target.workspace).verify(this.i.signal);
+   this.i.signal?.throwIfAborted();
    await target.journal.append('generation.transferred',{taskId:t.id,fromGeneration:archived.native.generation??1,generation:t.native.generation,baseCommit:t.native.baseCommit,sandbox,permissionsHash:digest(target.manifest.permissions),snapshot:await target.workspace.snapshot()});
   }finally{await release();}
  }
@@ -117,7 +122,7 @@ export class NativeCandidates {
    }
    const snapshot=await workspace.snapshot(),reviewModes=g.manifest.reviewPolicy?await readBehavioralFileModes(workspace,Object.keys(snapshot)):null;await journal.append('native.adopted',{taskId:t.id,snapshot,round:t.native.round});
    if(reviewModes){const pinned=await journal.memo(`${stage}/review-input`,async()=>({snapshotHash:digest(snapshot),executableModesHash:behavioralModeHash(reviewModes)}));if(pinned.snapshotHash!==digest(snapshot)||pinned.executableModesHash!==behavioralModeHash(reviewModes))throw Error('Candidate changed since the protected-check reservation');}
-   const runner=this.i.checks(workspace),sandbox=await runner.verify(),results=await runner.run(target.manifest.permissions.checks,stage);
+   const runner=this.i.checks(workspace),sandbox=await runner.verify(this.i.signal),results=await runner.run(target.manifest.permissions.checks,stage,this.i.signal);
    await workspace.assertSnapshot(snapshot);
    if(reviewModes&&behavioralModeHash(await readBehavioralFileModes(workspace,Object.keys(snapshot)))!==behavioralModeHash(reviewModes))throw Error('Candidate executable mode changed during checks');
    await journal.append('native.checks',{round:t.native.round,checks:results,sandbox});
