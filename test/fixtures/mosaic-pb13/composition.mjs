@@ -35,14 +35,15 @@ export async function runComposition({root,review='host',beta=false}) {
   const endpoints=[];
   for(const id of ['a','b']){
    const server=http.createServer(async(req,res)=>{
-    let counted=false;
     try {
      let raw='';for await(const part of req)raw+=part;
      const body=raw?JSON.parse(raw):null;calls.push({id,method:req.method,url:req.url,model:body?.model??null,body});
      assert.equal(req.headers.authorization,'Bearer '+dummy[id]);res.setHeader('content-type','application/json');
      if(req.url==='/v1/models'){assert.equal(req.method,'GET');return res.end(JSON.stringify({data:[{id:'fixture-'+id}]}));}
      assert.equal(req.method,'POST');assert.equal(req.url,'/v1/chat/completions');
-     active++;counted=true;maxActive=Math.max(maxActive,active);
+     active++;maxActive=Math.max(maxActive,active);
+     let settled=false;const settle=()=>{if(!settled){settled=true;active--;}};
+     res.once('finish',settle);res.once('close',settle);
      if(body.model==='fixture-reviewer'){
       assert.equal(id,'b');const evidence=JSON.stringify(body.messages);assert.match(evidence,/checks/);assert.match(evidence,/candidate/);
       return res.end(JSON.stringify({model:'reported-reviewer',choices:[{message:{role:'assistant',content:JSON.stringify({decision:'accept',feedback:'Fixture assessment of exact candidate and protected passing evidence',findings:[]})},finish_reason:'stop'}],usage:{prompt_tokens:7,completion_tokens:3}}));
@@ -55,7 +56,6 @@ export async function runComposition({root,review='host',beta=false}) {
      const content=id==='a'?(input.attempt===1?'export const parse = input => input.toUpperCase();\n':fixedBackend):sharedFrontend;
      res.end(JSON.stringify({model:'fixture-'+id,choices:[{message:{role:'assistant',content:JSON.stringify({type:'submit_changes',paths:[],summary:id==='a'?'Trim parser input':'Reuse the checked parser',edits:[{path:file,action:'write',baseHash:inventory.hash,content}]})},finish_reason:'stop'}],...(id==='a'?{usage:{prompt_tokens:11,completion_tokens:5}}:{})}));
     }catch(error){errors.push(error);res.writeHead(500).end(JSON.stringify({error:{message:'Fixture assertion failed'}}));}
-    finally{if(counted)active--;}
    });
    await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});servers.push(server);
    endpoints.push({schema:1,id:'worker-'+id,revision:'r1',displayName:'Loopback worker '+id,transport:'openai-chat',baseUrl:`http://127.0.0.1:${server.address().port}/v1`,model:'fixture-'+id,roles:['worker'],capabilities:{workerProtocol:'mosaic-structured-v1',transports:['json'],modelDiscovery:'advertised',taskKinds:['coding','consult']},maxContextTokens:32000,maxOutputTokens:2048,concurrency:1,capacityGroup:'loopback-'+id,credentialRef:'fixture-key-'+id,streaming:false});
