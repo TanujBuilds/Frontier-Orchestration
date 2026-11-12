@@ -1,6 +1,8 @@
+import {normalizeSettings,readCredentials,configuredPolicies} from './settings.mjs';
+import {ProviderRegistry} from '../harness/providers/registry.mjs';
 import {normalizeExecutionPolicy,executionIdentity,assertExecutionAvailable} from '../harness/execution.mjs';
 import {hostRegistry,normalizeHostSettings} from './hosts/index.mjs';
-import {lstatSync,readFileSync} from 'node:fs';
+import {existsSync,lstatSync,readFileSync} from 'node:fs';
 import {canonical} from '../harness/contracts.mjs';
 import {DatabaseSync} from 'node:sqlite';
 import {execFile} from 'node:child_process';
@@ -37,7 +39,9 @@ export function launchAgent(paths){
 `;
 }
 
-function assertIdle(db) {
+function assertIdle(db,{settingsMigration=false,settingsChange=false}={}) {
+ if((settingsMigration||settingsChange)&&db.prepare("SELECT id FROM records WHERE kind='goal' AND json_extract(data,'$.status')='stopped' AND json_extract(data,'$.manifest.executionPolicy.backend')='darwin-seatbelt' LIMIT 1").get())throw Error('A stopped native approval remains resumable. Retain its exact runtime and settings; resume and finish or finalize it as partial before reconfiguration.');
+ if(settingsMigration&&db.prepare("SELECT id FROM records WHERE kind='goal' AND json_extract(data,'$.status')='stopped' AND json_type(data,'$.manifest.workerProfile')='object' LIMIT 1").get())throw Error('A stopped legacy API worker approval remains resumable. Resume and finish it with its original settings, or finalize it as partial, before migrating settings.');
  const revision=db.prepare(`SELECT revision.id FROM records AS revision JOIN records AS goal
   ON goal.kind='goal' AND goal.id=json_extract(revision.data,'$.goalId')
   WHERE revision.kind='goal_revision' AND json_extract(revision.data,'$.status')='draft'
@@ -57,13 +61,13 @@ function assertIdle(db) {
  if(guard)throw Error('Mosaic Beta has prepared, active or unresolved work. Resolve it in its host before maintenance.');
 }
 
-export async function assertMaintenanceIdle(paths){
+export async function assertMaintenanceIdle(paths,options={}){
  const file=path.join(paths.state,'harness.sqlite3');
  const info=await entry(file);
  if(!info)return;
  if(!info.isFile())throw Error('Unsafe Mosaic Beta state database');
  const db=new DatabaseSync(file,{readOnly:true});
- try{assertIdle(db);}finally{db.close();}
+ try{assertIdle(db,options);}finally{db.close();}
 }
 
 async function loaded(paths){
@@ -129,25 +133,30 @@ export async function rollbackLaunchAgent(paths,{existed,registered}){
  if(registered)await startLaunchAgent(paths);
 }
 
-export function configuredExecutionIdentity(settings){return canonical({executionPolicy:normalizeExecutionPolicy(settings.executionPolicy)??null,...(settings.nativeCheckRuntime?{nativeCheckRuntime:settings.nativeCheckRuntime}:{}),...(executionIdentity(settings).backend==='codex-sandbox'?{codexPath:settings.codexPath??'codex'}:{})});}
+export function configuredExecutionIdentity(settings){const policy=normalizeExecutionPolicy(settings.schema===2?{version:1,...settings.execution}:settings.executionPolicy);return canonical({executionPolicy:policy??null,...(settings.nativeCheckRuntime?{nativeCheckRuntime:settings.nativeCheckRuntime}:{}),...((policy?.backend??'codex-sandbox')==='codex-sandbox'?{codexPath:settings.codexPath??'codex'}:{})});}
 
 export async function serveBeta(paths,settings){
  if(!settings)throw Error('Run mosaic setup before starting Mosaic Beta');
+ settings=normalizeSettings(settings);
+ const portablePolicies=settings.schema===2?configuredPolicies(settings):undefined;
+ if(settings.schema===2)settings={...settings,executionPolicy:{version:1,...settings.execution}};
  assertExecutionAvailable(settings,{codexPath:settings.codexPath,nativeCheckRuntime:settings.nativeCheckRuntime});
  await privateDirectories(paths);
  process.umask(0o077);
- const expectedWorker=canonical(settings.worker??null),expectedExecution=configuredExecutionIdentity(settings);
+ const expectedWorker=canonical(settings.schema===2?{providers:settings.providers,defaults:settings.defaults,capacityGroups:settings.capacityGroups,serviceMaxConcurrentTasks:settings.serviceMaxConcurrentTasks}:settings.worker??null),expectedExecution=configuredExecutionIdentity(settings);
  const selectedHost=value=>value.host?normalizeHostSettings(value.host).id:value.codexPath?'codex':null;
  const expectedHost=selectedHost(settings);
  const verifyCurrentWorker=()=>{
+  if(existsSync(paths.disabled))throw Error('Mosaic is off. New dispatch is blocked; running ownership is retained. Run mosaic on to resume.');
   try{
    const info=lstatSync(paths.config);
-   if(!info.isFile()||info.size>16384||info.mode&0o077)throw Error();
-   const current=JSON.parse(readFileSync(paths.config,'utf8'));
-   if(canonical(current.worker??null)===expectedWorker&&selectedHost(current)===expectedHost&&configuredExecutionIdentity(current)===expectedExecution)return;
+   if(!info.isFile()||info.size>131072||info.mode&0o077)throw Error();
+   const current=normalizeSettings(JSON.parse(readFileSync(paths.config,'utf8')));
+   if(canonical(current.schema===2?{providers:current.providers,defaults:current.defaults,capacityGroups:current.capacityGroups,serviceMaxConcurrentTasks:current.serviceMaxConcurrentTasks}:current.worker??null)===expectedWorker&&selectedHost(current)===expectedHost&&configuredExecutionIdentity(current)===expectedExecution)return;
   }catch{}
   throw Error('Configured API worker, host or execution backend settings changed. Restart Mosaic Beta safely and obtain a new goal approval.');
  };
+ const providerRegistry=settings.schema===2&&settings.providers.length?ProviderRegistry({profiles:settings.providers,credentialResolver:async ref=>(await readCredentials(paths)).entries[ref]}):undefined;
  return serve({root:paths.state,port:0,headless:true,canStop:c=>assertIdle(c.store.db),verifyCurrentWorker,
-  runtimeConfig:{beta:true,hostId:settings.host?.id??(settings.codexPath?'codex':undefined),hostRegistry,codexPath:settings.codexPath,nativeCheckRuntime:settings.nativeCheckRuntime,executionPolicy:settings.executionPolicy,workerProfile:settings.worker?.profile,workerApiKey:settings.worker?.apiKey}});
+  runtimeConfig:{beta:true,...(settings.schema===2?{providerRegistry,serviceMaxConcurrentTasks:settings.serviceMaxConcurrentTasks,configuredPolicies:portablePolicies}:{}),hostId:settings.host?.id??(settings.codexPath?'codex':undefined),hostRegistry,codexPath:settings.codexPath,nativeCheckRuntime:settings.nativeCheckRuntime,executionPolicy:settings.executionPolicy,workerProfile:settings.worker?.profile,workerApiKey:settings.worker?.apiKey}});
 }

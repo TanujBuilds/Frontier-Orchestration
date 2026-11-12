@@ -11,6 +11,7 @@ import { Store } from './store.mjs';
 import { Registry, normalizeGoal, normalizeTask, providerBinding as manifestProviderBinding, digest, text, identifier, keys } from './contracts.mjs';
 import {ReviewService} from './review/service.mjs';
 import {HOST_IDS,normalizeReviewPolicy} from './review/contracts.mjs';
+import {normalizeRoutingPolicy} from './routing/contracts.mjs';
 import {normalizeProviderPolicy} from './providers/contracts.mjs';
 import {verifyLocalAcceptance} from './research-review.mjs';
 import { Learning } from './learning.mjs';
@@ -73,9 +74,10 @@ function savedFailedGate(c,t,g){
  return verified.candidateId===gate.candidateId&&verified.failureId===gate.failureId&&verified.signature===gate.signature;
 }
 export class Coordinator {
- constructor({root,now=Date.now,registry=new Registry(),beta=false,workerProfile,verifyCurrentWorker,providerRegistry,selectedHost,hostRegistry,serviceMaxConcurrentTasks,executionPolicy,codexPath,defaultCodexPath,nativeCheckRuntime}={}){
+ constructor({root,now=Date.now,registry=new Registry(),beta=false,workerProfile,verifyCurrentWorker,providerRegistry,selectedHost,hostRegistry,serviceMaxConcurrentTasks,executionPolicy,codexPath,defaultCodexPath,nativeCheckRuntime,configuredPolicies}={}){
   if(providerRegistry&&!['get','snapshot','createClient'].every(method=>typeof providerRegistry[method]==='function'))throw Error('A normalized provider registry is required');
   this.providerRegistry=providerRegistry??null;
+  if(configuredPolicies!==undefined){keys(configuredPolicies,['providerPolicy','reviewPolicy','routingPolicy'],'trusted configured policies');this.configuredPolicies={...(configuredPolicies.providerPolicy?{providerPolicy:normalizeProviderPolicy(configuredPolicies.providerPolicy,this.providerRegistry)}:{}),...(configuredPolicies.reviewPolicy?{reviewPolicy:normalizeReviewPolicy(configuredPolicies.reviewPolicy)}:{})};if(configuredPolicies.routingPolicy)this.configuredPolicies.routingPolicy=normalizeRoutingPolicy(configuredPolicies.routingPolicy,this.configuredPolicies.providerPolicy);}
   this.selectedHost=typeof selectedHost==='string'?selectedHost:selectedHost?.id??null;if(this.selectedHost&&!HOST_IDS.includes(this.selectedHost))throw Error('Unsupported selected host');this.hostRegistry=hostRegistry??null;
   this.beta=beta;this.verifyCurrentWorker=()=>{verifyCurrentWorker?.();assertExecutionRuntime(this);};this.workerProfile=workerProfile?normalizeWorkerProfile(workerProfile):null;
   this.executionPolicy=normalizeExecutionPolicy(executionPolicy);this.executionConfig={codexPath,...(nativeCheckRuntime?{nativeCheckRuntime:normalizeNativeCheckRuntime(nativeCheckRuntime)}:{})};
@@ -185,6 +187,7 @@ export class Coordinator {
  notifications({goalId}={}){return this.store.all('notification').filter(n=>!n.acknowledged&&!n.resolved&&(!goalId||n.goalId===goalId)).sort((a,b)=>b.sequence-a.sequence).slice(0,50);}
  ackNotification(input,key){return this.store.command(key,{op:'notification.ack',...input},()=>{const n=this.store.get('notification',input.notificationId);n.acknowledged=true;n.acknowledgedAt=this.now();this.store.put('notification',n);return n;});}
  reviewPreparation(raw,{portable=false}={}){
+  if(portable){raw=this.configuredPreparation(raw);if(raw.executionPolicy===undefined&&this.executionPolicy)raw={...raw,executionPolicy:this.executionPolicy};}
   if(raw.reviewPolicy?.source==='host'&&(!this.selectedHost||raw.reviewPolicy.hostId!==this.selectedHost))throw Error('Host review requires matching trusted selected host context');
   const mode=this.registry.mode(raw.mode??(this.beta?(this.workerProfile||raw.providerPolicy?'collaborative':'codex_only'):undefined),raw.modeVersion);
   if(!raw.reviewPolicy&&(portable||this.beta||raw.providerPolicy||this.selectedHost)&&mode.review!=='checks'){
@@ -192,6 +195,14 @@ export class Coordinator {
    return {...raw,reviewPolicy:{version:1,source:'host',hostId:this.selectedHost,fallback:'wait'}};
   }
   return raw;
+ }
+ configuredPreparation(raw){
+  const defaults=this.configuredPolicies;if(!defaults)return raw;
+  const mode=this.registry.mode(raw.mode??(defaults.providerPolicy?'collaborative':'codex_only'),raw.modeVersion),next={...raw};
+  if(raw.mode===undefined)next.mode=mode.id;
+  if(mode.actors.includes('deepseek')&&!raw.providerPolicy&&defaults.providerPolicy){next.providerPolicy=defaults.providerPolicy;if(!raw.routingPolicy&&defaults.routingPolicy)next.routingPolicy=defaults.routingPolicy;}
+  if(mode.review!=='checks'&&!raw.reviewPolicy&&defaults.reviewPolicy){next.reviewPolicy=mode.id==='codex_only'?{version:1,source:'host',hostId:this.selectedHost,fallback:'wait'}:defaults.reviewPolicy;}
+  return next;
  }
  preparePortableGoal(raw,key){return this.prepareGoal(raw,key,{portable:true});}
  prepareLegacyGoal(raw,key){if(this.beta||raw.providerPolicy||raw.reviewPolicy||raw.routingPolicy||raw.executionPolicy)throw Error('Legacy preparation cannot select portable policy');return this.prepareGoal(raw,key,{legacy:true});}
@@ -258,12 +269,15 @@ export class Coordinator {
     const profile=approved.providerPolicy?.workers.find(worker=>worker.id===id&&worker.revision===revision)??(approved.reviewPolicy?.reviewer?.id===id&&approved.reviewPolicy.reviewer.revision===revision?approved.reviewPolicy.reviewer:null);
     if(!profile)throw Error('Saved provider revision differs');return structuredClone(profile);
    }});
-   let replayRaw=raw.reviewPolicy===undefined&&approved.reviewPolicy?{...raw,reviewPolicy:approved.reviewPolicy}:raw;
+   let replayRaw=raw;
+   for(const field of ['providerPolicy','routingPolicy'])if(raw[field]===undefined&&approved[field]!==undefined)replayRaw={...replayRaw,[field]:approved[field]};
+   if(raw.mode===undefined&&this.configuredPolicies)replayRaw={...replayRaw,mode:approved.mode.id,modeVersion:approved.mode.version};
+   replayRaw=raw.reviewPolicy===undefined&&approved.reviewPolicy?{...replayRaw,reviewPolicy:approved.reviewPolicy}:replayRaw;
    if(raw.executionPolicy===undefined&&approved.executionPolicy)replayRaw={...replayRaw,executionPolicy:approved.executionPolicy};
    let manifest;try{manifest=this.goalManifest(replayRaw,catalog,{historic:true});}catch{throw Error('Idempotency key conflict');}
    return this.store.command(key,{op:'goal.prepare',manifest},()=>{throw Error('Saved preparation command is unavailable');});
   }
-  if(!legacy){raw=this.reviewPreparation(raw,{portable});if(raw.executionPolicy===undefined&&this.executionPolicy)raw={...raw,executionPolicy:this.executionPolicy};}
+  if(!legacy){raw=this.configuredPreparation(raw);raw=this.reviewPreparation(raw,{portable});if(raw.executionPolicy===undefined&&this.executionPolicy)raw={...raw,executionPolicy:this.executionPolicy};}
   const manifest=legacy?normalizeGoal(raw,this.registry,this.providerRegistry):this.goalManifest(raw);return this.store.command(key,{op:'goal.prepare',manifest},()=>{
   assertCapacityConfiguration(this,manifest);
   const g=this.store.submission('goal','',manifest.submissionId,digest(manifest),id=>({id,manifest,hash:digest(manifest),version:1,status:'draft',createdAt:this.now(),activatedAt:null,deadline:null}));
@@ -285,6 +299,7 @@ export class Coordinator {
  liveGoal(g){if(g.status!=='active')throw Error('Goal is not active');if(this.now()>=g.deadline)throw Error('Goal deadline exceeded');}
  liveTask(t,{allowStopped=false}={}){const current=this.store.get('task',t.id),g=this.store.get('goal',current.goalId);this.liveGoal(g);if(current.goalVersion!==g.version)throw Error('Task needs explicit rebind to the approved goal version');if(current.deadline&&this.now()>=current.deadline)throw Error('Original task deadline exceeded');if(current.pauseRequested||(current.stopRequested&&!(allowStopped&&current.status==='stopped'&&!current.owner)))throw Error('Task is paused or stopped');return current;}
  startNativeText(input,key){return this.store.command(key,{op:'native.text.start',...input},()=>{
+  if(this.beta)this.verifyCurrentWorker?.();
   const t=this.getTask(input.taskId),g=this.store.get('goal',t.goalId);this.liveTask(t);
   if(!g.manifest.mode.actors.includes('codex')||!['consult','learning'].includes(t.spec.kind))throw Error('Mode/capability prohibits native text execution');
   if(t.spec.actor!=='codex')text(input.reason,'takeover reason');

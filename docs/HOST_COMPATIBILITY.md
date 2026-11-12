@@ -1,5 +1,41 @@
 # Host review compatibility
 
+## Portable candidate status — November 12, 2026
+
+Stage 16 guided setup uses the selected host as the default reviewer and allows
+an explicitly configured API reviewer. Native protected checks bind the separate
+`darwin-seatbelt@2` artifact fingerprint and literal installed Node path; a
+non-Codex host has no hidden Codex login or executable requirement. Historical
+goals keep their original policy, and native revision 1 remains unavailable.
+
+| Component | Version/protocol | Evidence level | Date | Evidence and limits |
+|---|---|---|---|---|
+| Codex connector | stdio / pull review | fixture-tested | 2026-11-12 | Host schema, registration preview and SDK protocol fixtures; actual host version/account NOT RUN for this candidate. |
+| Claude Code connector | stdio / pull review | fixture-tested | 2026-11-12 | Same coordinator contract and manual registration preview; actual app NOT RUN. |
+| Cursor connector | stdio / pull review | fixture-tested | 2026-11-12 | Configuration and protocol fixtures; disposable managed registration differs from a real app. Installed composition evidence is recorded separately in the release handoff. |
+| Antigravity connector | stdio / pull review | fixture-tested | 2026-11-12 | Configuration and protocol fixtures; actual app NOT RUN. |
+| OpenAI-compatible worker | Chat Completions JSON/SSE | fixture-tested | 2026-11-12 | Loopback transport, identity, routing, repair and capacity fixtures; no particular vendor/model quality or live availability claim. |
+| Optional reviewer | Chat Completions, Responses, Messages adapters | fixture-tested | 2026-11-12 | Strict structured review and durable reservations; live provider accounts NOT RUN. |
+| Native checks | Darwin arm64 / seatbelt revision 2 | fixture-tested | 2026-11-12 | Accepted stage 15 actual OS/kernel/Chromium source execution. Stage 16 extracted-package results require their own receipt. |
+| Linux/Windows distribution | — | unsupported | 2026-11-12 | Outside this release's platform scope. |
+
+For every real host in the new portable setup path, setup emits an exact manual
+snippet and records manual/unprobed status. The supported host interfaces do
+not provide the required atomic compare-and-swap operation.
+It does not overwrite a running app's settings through a best-effort file
+rename. Uninstall preserves manually configured and unrelated entries. Isolated
+fixture homes use a separately owned adapter, whose tests do not establish safe
+writes against real app processes. Configuration saved, protocol discovered,
+host connected and host reviewed are distinct evidence states.
+
+Actual app versions, auth, background lifecycle/wake behavior, clean macOS
+account setup and live-provider review remain NOT RUN. A closed host retains
+its review inbox; no API fallback occurs because it disconnects. See
+[release evidence](PORTABLE_BETA_RELEASE.md) for the current candidate boundary.
+
+The dated stage 12 account below is retained as historical evidence. Its
+statement that native checks await stage 15 describes that earlier stage.
+
 Portable-beta stage 12 provides one durable coordinator and pull-based review
 contract for Codex, Claude Code, Cursor and Antigravity. The source and SDK
 fixtures exercise configuration previews and MCP behavior; they do not certify

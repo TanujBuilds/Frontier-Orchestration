@@ -1,3 +1,6 @@
+import {fileURLToPath} from 'node:url';
+import {readSettings as readPrivateSettings,previewSettingsMigration,applySettingsMigration,resumeSettingsMigration} from './settings.mjs';
+import {setupPortable,portableSetupComplete,removePortableBindings} from './portable-setup.mjs';
 import {normalizeExecutionPolicy,normalizeNativeCheckRuntime,assertExecutionAvailable} from '../harness/execution.mjs';
 import {execFile} from 'node:child_process';
 import {access,mkdir,readdir,realpath,rm,rmdir} from 'node:fs/promises';
@@ -110,6 +113,7 @@ async function bindingReceipt(paths){
 export async function readSetupIntent(paths){
  await localDirectory(paths,paths.configDir,{create:false});
  const intent=await jsonFile(paths.setupIntent,{privateFile:true,max:32768});
+ if(intent?.schema===2){(await import('./settings.mjs')).normalizeSettings(intent.settings);if(!intent.settings||intent.settings.schema!==2||typeof intent.hadAgent!=='boolean')throw Error('Invalid portable setup intent');return intent;}
  if(intent&&(intent.schema!==1||!intent.settings||typeof intent.settings.codexPath!=='string'||
     !/^[a-f0-9]{64}$/.test(intent.previousConfigHash??'')||typeof intent.hadAgent!=='boolean'||
     ![intent.previousMcpHash,intent.previousSkillHash].every(hash=>hash===null||/^[a-f0-9]{64}$/.test(hash))))
@@ -118,25 +122,13 @@ export async function readSetupIntent(paths){
 }
 
 export async function setupComplete(paths){
+ if(await entry(path.join(paths.configDir,'portable-binding.json'))){const settings=await readSettings(paths);return portableSetupComplete(paths,{codexRegistrations:codexRegistrations(paths),codexPath:settings?.codexPath});}
  const receipt=await bindingReceipt(paths);
  return !await entry(paths.setupIntent)&&!!receipt?.mcpHash&&!!receipt?.skillHash&&receipt.complete!==false;
 }
 
-export async function readSettings(paths){
- await localDirectory(paths,paths.configDir,{create:false});
- const value=await jsonFile(paths.config,{privateFile:true,max:16384});
- if(!value)return null;
- if(value.nativeCheckRuntime!==undefined)value.nativeCheckRuntime=normalizeNativeCheckRuntime(value.nativeCheckRuntime);
- if(value.executionPolicy!==undefined)value.executionPolicy=normalizeExecutionPolicy(value.executionPolicy);
- if(value.host!==undefined)value.host=normalizeHostSettings(value.host);
- if(value.schema!==1||value.codexPath!==undefined&&(typeof value.codexPath!=='string'||!path.isAbsolute(value.codexPath))||!value.codexPath&&(!value.host||value.host.id==='codex'))throw Error('Invalid Mosaic Beta configuration. Run mosaic setup.');
- if(value.worker){
-  value.worker.profile=workerProfile(value.worker.profile);
-  if(value.worker.apiKey!==undefined&&(!/^[\x21-\x7e]{1,2048}$/.test(value.worker.apiKey)||typeof value.worker.apiKey!=='string'||
-     Object.values(value.worker.profile).some(field=>typeof field==='string'&&field.includes(value.worker.apiKey))))throw Error('Invalid private worker credential. Run mosaic setup.');
- }
- return value;
-}
+export const readSettings=readPrivateSettings;
+export {previewSettingsMigration,applySettingsMigration,resumeSettingsMigration};
 
 async function askSession(input,output,work){
  const queue=[];
@@ -253,7 +245,7 @@ async function applySetup(paths,intent,registrations,{recovering=false}={}){
   throw Error('Existing mosaic-beta skill has changed. Preserve '+paths.skill);
  const allowUnrecorded=!intent.hadAgent;
  await verifyLaunchAgent(paths,{allowUnrecorded});
- if(changed)await stopForMaintenance(paths,{allowUnrecorded,recovering});
+ if(changed){await stopForMaintenance(paths,{allowUnrecorded,recovering});await assertMaintenanceIdle(paths,{settingsChange:true});}
  if(!saved){
   try{await registrations.add(codex);}catch{throw Error('Could not add the beta MCP registration. Run mosaic setup to retry.');}
   saved=await registrations.get(codex);
@@ -279,8 +271,16 @@ function printCompletion(paths,output,{resumed=false}={}){
  output.write('\nStarter prompt\n'+starter+'\n');
 }
 
-export async function setup(paths,{explicitCodex,input=process.stdin,output=process.stdout,registrations=codexRegistrations(paths)}={}){
+export async function setup(paths,options={}){
+ const {explicitCodex,input=process.stdin,output=process.stdout,registrations=codexRegistrations(paths)}=options;
  const old=await readSettings(paths);
+ const runtimeRoot=fileURLToPath(new URL('../../',import.meta.url)),manifest=await jsonFile(path.join(path.dirname(runtimeRoot),'package-manifest.json'));
+ const pending=await jsonFile(paths.setupIntent,{privateFile:true});
+ if(options.portable||options.settings||old?.schema===2||pending?.schema===2||manifest?.layout==='terminal-beta-v2'){
+  let execution=options.execution,nativeCheckRuntime=options.nativeCheckRuntime;
+  if(!execution&&!options.settings&&!pending){nativeCheckRuntime=await (await import('./package-contract.mjs')).readBundledNativeCheckRuntime(runtimeRoot);execution={backend:'darwin-seatbelt',backendRevision:2,runtimeFingerprint:nativeCheckRuntime.artifactManifestSha256};}
+  return askSession(input,output,ask=>setupPortable(paths,{...options,ask,output,execution,nativeCheckRuntime,codexRegistrations:registrations}));
+ }
  if(old?.host&&old.host.id!=='codex'){
   output.write(`The current host is ${old.host.id}. This interactive setup configures Codex only; existing settings and registrations are preserved. Use mosaic host-preview --host ${old.host.id} for that host's manual configuration path.\n`);
   return false;
@@ -327,7 +327,7 @@ export async function setup(paths,{explicitCodex,input=process.stdin,output=proc
    if(bytes&&(!ownership||hash(bytes)!==ownership.skillHash||bytes.toString()!==skill)||!bytes&&info)
     throw Error('Existing mosaic-beta skill is foreign or has changed. Preserve '+skillFile);
    const hadAgent=await verifyLaunchAgent(paths);
-   if(fingerprint(current)!==fingerprint(settings))await assertMaintenanceIdle(paths);
+   if(fingerprint(current)!==fingerprint(settings))await assertMaintenanceIdle(paths,{settingsChange:true});
    const intent={schema:1,settings,hadAgent,previousConfigHash:fingerprint(current),previousMcpHash:existing?fingerprint(existing):null,previousSkillHash:bytes?hash(bytes):null};
    await saveJson(paths.setupIntent,intent);
    await applySetup(paths,intent,registrations);
@@ -348,7 +348,7 @@ export async function doctor(paths,output=process.stdout){
  check('Installation',!!await entry(paths.launcher),'Expected launcher '+paths.launcher);
  if(!checks.some(item=>item.name==='Settings'))check('Settings',!!settings,settings?'Private setup saved.':'Run mosaic setup.');
  const selectedHost=settings?.host?.id??'codex';
- if(selectedHost==='codex'){
+ if(selectedHost==='codex'&&settings?.schema!==2){
  const codex=await findCodex(paths,settings?.codexPath);
  check('Codex CLI',!!codex,codex??'Install the Codex CLI, then run codex login.');
  if(codex){
@@ -364,13 +364,14 @@ export async function doctor(paths,output=process.stdout){
   }catch{check(checkName,false,paths.isolated?'Cannot read fixture registration. Run mosaic setup.':'Cannot read registration. Check codex mcp list.');}
  }
  }else check('Host',true,getHost(selectedHost).displayName+' selected; inspect its Mosaic MCP connection in the host.');
- if(settings&&(selectedHost!=='codex'||settings.executionPolicy)){
-  try{assertExecutionAvailable({...settings,executionPolicy:settings.executionPolicy??{version:1,backend:'codex-sandbox',backendRevision:1}},{codexPath:settings.codexPath,nativeCheckRuntime:settings.nativeCheckRuntime});check('Protected checks',true,'Configured backend prerequisites found; actual enforcement probe is required before work.');}
+ if(settings&&(settings.schema===2||selectedHost!=='codex'||settings.executionPolicy)){
+  try{assertExecutionAvailable({...settings,executionPolicy:settings.schema===2?{version:1,...settings.execution}:settings.executionPolicy??{version:1,backend:'codex-sandbox',backendRevision:1}},{codexPath:settings.codexPath,nativeCheckRuntime:settings.nativeCheckRuntime});check('Protected checks',true,'Configured backend prerequisites found; actual enforcement probe is required before work.');}
   catch(error){check('Protected checks',false,error.message);}
  }
  try{await client(paths,{viewer:true})('tools_list');check('Coordinator',true,'Authenticated viewer connection ready.');}
  catch{check('Coordinator',false,paths.isolated?'Start the isolated instance with mosaic serve.':'Run mosaic setup to repair the LaunchAgent.');}
- if(settings?.worker){
+ if(settings?.schema===2){for(const profile of settings.providers)check('Provider '+profile.id,true,profile.displayName+' configured; connectivity/inference untested. No fallback.');check('Host capability',true,getHost(selectedHost).displayName+' documented and fixture-tested; actual host version unprobed.');}
+ else if(settings?.worker){
   const {profile,apiKey}=settings.worker;
   const requireAdvertised=requiresAdvertisedModel(profile);
   const untested=` The configured ${responseMode(profile)} completion is untested.`;
@@ -391,6 +392,9 @@ export async function doctor(paths,output=process.stdout){
 }
 
 export async function removeCodexBindings(paths,output=process.stdout,intent=null){
+ const settings=await readSettings(paths);
+ const portable=settings?.schema===2||await entry(path.join(paths.configDir,'portable-binding.json'))||intent?.schema===2;
+ if(portable){await removePortableBindings(paths,output,{codexRegistrations:codexRegistrations(paths),codexPath:settings?.codexPath});if(!paths.isolated){output.write('Preserved real host registrations and historical Codex bindings. Review the manual host instructions before removing any mosaic-beta entry.\n');return;}}
  const ownership=await bindingReceipt(paths);
  if(!ownership&&!intent)return;
  const registrations=codexRegistrations(paths);

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "mosaic-portable-beta-candidate-v1",
+  "title": "Mosaic local portable beta candidate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "kind", "version", "platform", "fixture", "source", "archive", "inventory", "versions", "build", "verification", "unpassedGates"],
+  "properties": {
+    "schema": {"const": 1},
+    "kind": {"const": "mosaic-portable-beta-candidate"},
+    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-beta\\.[0-9]+)?$"},
+    "platform": {"const": "darwin-arm64"},
+    "fixture": {"type": "boolean"},
+    "source": {"type": "object", "required": ["commit", "tree", "dirty", "closureHash"], "properties": {"commit": {"$ref": "#/$defs/git"}, "tree": {"$ref": "#/$defs/git"}, "dirty": {"type": "boolean"}, "closureHash": {"$ref": "#/$defs/hash"}}, "additionalProperties": false},
+    "archive": {"type": "object", "required": ["file", "sha256"], "properties": {"file": {"type": "string"}, "sha256": {"$ref": "#/$defs/hash"}}, "additionalProperties": false},
+    "inventory": {"type": "object", "required": ["file", "sha256", "contentHash"], "properties": {"file": {"const": "payload/package-manifest.json"}, "sha256": {"$ref": "#/$defs/hash"}, "contentHash": {"$ref": "#/$defs/hash"}}, "additionalProperties": false},
+    "versions": {"type": "object", "required": ["coordinatorNode", "checkNode", "sdk", "settingsSchemas", "databaseSchemas"]},
+    "build": {"type": "object", "required": ["archiveFormat", "timestamp", "owner", "group", "inputs", "runtimeInputs"]},
+    "verification": {"type": "object", "required": ["references", "nativePreflight"]},
+    "unpassedGates": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}}
+  },
+  "$defs": {"hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"}, "git": {"type": "string", "pattern": "^[a-f0-9]{40}$"}}
+}

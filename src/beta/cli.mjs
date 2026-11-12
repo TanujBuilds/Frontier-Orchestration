@@ -1,7 +1,10 @@
+import {rm} from 'node:fs/promises';
+import {createInterface} from 'node:readline/promises';
+import {previewSettingsMigration,applySettingsMigration,resumeSettingsMigration,normalizeSettings} from './settings.mjs';
 import {isEntry} from '../harness/entry.mjs';
 import {startMcp} from '../harness/mcp.mjs';
 import path from 'node:path';
-import {currentHome,locations} from './files.mjs';
+import {currentHome,locations,jsonFile,saveJson,withLock} from './files.mjs';
 import {client} from './client.mjs';
 import {readSettings,setup,setupComplete,doctor,previewHostRegistration} from './setup.mjs';
 import {serveBeta} from './service.mjs';
@@ -12,8 +15,13 @@ import {installedLauncher,uninstall,verifyVersion} from './install.mjs';
 const help=`Mosaic Beta
 
 mosaic                   Open setup or the read-only terminal observer
-mosaic setup             Configure Codex and an optional API worker
-mosaic doctor            Check installation, Codex, MCP and provider discovery
+mosaic setup             Configure the selected host, worker profiles and review
+mosaic doctor            Check private setup, package and documented/fixture capabilities
+mosaic migrate           Preview lossless schema1 migration; ask before applying
+mosaic off               Stop new dispatch; retain running owners and saved work
+mosaic on                Allow dispatch with the same approved configuration
+mosaic rollback VERSION  Switch to a compatible retained version
+mosaic recover           Resume an interrupted installation
 mosaic status --once     Print saved status and recent handoffs once
 mosaic --source core     Watch the existing frontier-harness installation
 mosaic --source beta     Watch only the separate beta installation
@@ -42,11 +50,12 @@ export async function main(args=process.argv.slice(2)){
   process.stdout.write(JSON.stringify(previewHostRegistration(paths,args[1]),null,2)+'\n');return;
  }
  if(command==='setup'||!command&&sourceIndex===-1){
-  let explicitCodex;
+  let explicitCodex,settings;
+  if(args.length===2&&args[0]==='--config'){args.shift();const file=args.shift();if(!path.isAbsolute(file))throw Error('Setup config must be an absolute private JSON path');settings=normalizeSettings(await jsonFile(file,{privateFile:true}));if(settings.schema!==2)throw Error('Use migrate for schema1 settings');}
   if(args.length===2&&args[0]==='--codex'){args.shift();explicitCodex=args.shift();}
   if(args.length)throw Error('Use mosaic setup [--codex /absolute/path/to/codex]');
   if(command==='setup'||!await readSettings(paths)||!await setupComplete(paths)){
-   if(!await setup(paths,{explicitCodex}))process.exitCode=1;
+   if(!await setup(paths,{explicitCodex,settings}))process.exitCode=1;
    return;
   }
  }
@@ -54,7 +63,11 @@ export async function main(args=process.argv.slice(2)){
   if(args.length&&!(args.length===1&&args[0]==='--once'))throw Error('Use mosaic status [--once]');
   return runObserver({invoke:observerClient(paths,{source}),once:args.includes('--once')});
  }
+ if(command==='rollback'){if(args.length!==1)throw Error('Use mosaic rollback VERSION');return (await import('./install.mjs')).rollbackVersion(paths,args[0]);}
  if(args.length)throw Error('Use mosaic --help for command syntax');
+ if(command==='recover')return (await import('./install.mjs')).recoverInstallation(paths);
+ if(command==='off'||command==='on'){return withLock(paths,async()=>{if(command==='off'){await saveJson(paths.disabled,{schema:1,disabled:true});process.stdout.write('Mosaic is off. New dispatch is blocked; running owners and saved work are retained.\n');}else{await rm(paths.disabled,{force:true});process.stdout.write('Mosaic is on. Existing approval and execution guards still apply.\n');}});}
+ if(command==='migrate'){if(await resumeSettingsMigration(paths)){process.stdout.write('Resumed approved settings migration.\n');return;}const preview=await previewSettingsMigration(paths);process.stdout.write(JSON.stringify(preview,null,2)+'\n');const rl=createInterface({input:process.stdin,output:process.stdout});let approved;try{approved=await rl.question('Apply this exact lossless migration? [y/N] ');}finally{rl.close();}if(/^y(es)?$/i.test(approved.trim())){await applySettingsMigration(paths,preview);process.stdout.write('Migration saved; refresh setup to configure portable bindings.\n');}return;}
  if(command==='doctor'){
   let valid=false;
   try{

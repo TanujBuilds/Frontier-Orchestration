@@ -35,6 +35,7 @@ export function actorRows(state){
  const {snapshot}=state,tasks=snapshot.tasks.filter(task=>task.goalId===goal.id),rows=[];
  const agents=(snapshot.agents??[]).filter(agent=>agent.goalId===goal.id);
  const workerName=goal.workerProfile?.displayName??'API worker';
+ const hostNames={'codex':'Codex','claude-code':'Claude Code',cursor:'Cursor',antigravity:'Antigravity'},hostName=hostNames[goal.reviewPolicy?.hostId??goal.hostId]??'Codex';
  const reviewPolicy=goal.reviewPolicy??reviewModes[goal.mode];
  for(const task of tasks){
   const native=task.actor==='codex',reports=agents.filter(agent=>agent.taskId===task.id&&agent.actor==='codex'&&agent.role!=='reviewer');
@@ -44,7 +45,7 @@ export function actorRows(state){
   const stateName=nativeActive?(reported&&!report.stale?reported.status:'uncertain'):task.status==='legacy_reviewing'?'awaiting_legacy_review':task.status;
   const wait=task.routingWait?.decision,worker=task.worker;
   const routeExplanation=worker?.routeExplanation??(worker?.routeProvenance==='legacy_binding'?'Pinned '+worker.providerId+' · historical routing reason unavailable':null)??wait?.explanation??null;
-  rows.push({id:task.id,actor:native?'Codex':worker?.bindingProvenance==='unverified'?'API worker · identity unverified':worker?.displayName??task.workerProfile?.displayName??(wait?.binding?'Selected '+wait.binding.providerId:workerName),role:report?.role==='explorer'?'Explorer':report?.role==='supervisor'?'Supervisor':'Implementer',assignment:task.objective,routeExplanation,
+  rows.push({id:task.id,actor:native?hostName:worker?.bindingProvenance==='unverified'?'API worker · identity unverified':worker?.displayName??task.workerProfile?.displayName??(wait?.binding?'Selected '+wait.binding.providerId:workerName),role:report?.role==='explorer'?'Explorer':report?.role==='supervisor'?'Supervisor':'Implementer',assignment:task.objective,routeExplanation,
    status:checksFailed(task)&&task.status==='blocked'?'Checks failed':wait&&['queued','suspended'].includes(task.status)?'Waiting · '+String(wait.reasonCode).replaceAll('_',' '):nativeActive&&stateName==='uncertain'?'Native owner · activity unknown':status(stateName),
    state:stateName,at:reported?.at??task.lastActivityAt??task.updatedAt,evidence:task.evidenceRef,provenance:native?(reported?'reported':'coordinator'):captured?'captured':'coordinator'});
  }
@@ -60,10 +61,10 @@ export function actorRows(state){
   if(!awaiting&&!checking&&!failed)continue;
   const reviewing=task.status==='legacy_reviewing'||report?.lastReport.status==='running';
   const heldByChecks=failed&&!checking&&!awaiting;
-  rows.push({id:'review-'+task.id,actor:'Codex',role:'Reviewer',assignment:task.objective,
+  rows.push({id:'review-'+task.id,actor:hostName,role:'Reviewer',assignment:task.objective,
    at:report?.lastReport.at??reservation?.at??(heldByChecks?task.lastCheck?.at:null)??task.updatedAt,evidence:task.evidenceRef,
    state:reviewing?'running':heldByChecks?'blocked':'waiting',
-   status:reviewing?'Reviewing':checking?'Waiting for checks':heldByChecks?'Waiting · checks failed':reservation?'Reserved · waiting':'Waiting in Codex',
+   status:reviewing?'Reviewing':checking?'Waiting for checks':heldByChecks?'Waiting · checks failed':reservation?'Reserved · waiting':'Waiting in '+hostName,
    provenance:report?'reported':'coordinator'});
  }
  return rows;

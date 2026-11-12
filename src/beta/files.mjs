@@ -17,7 +17,7 @@ export function locations(home,isolated=false){
  return {home,root,isolated,codexHome,configDir,versions:path.join(root,'versions'),state:path.join(root,'state'),
   launcher:path.join(home,'.local','bin','mosaic'),config:path.join(configDir,'settings.json'),
   ownership:path.join(configDir,'bindings.json'),installation:path.join(configDir,'installation.json'),
-  setupIntent:path.join(configDir,'setup-intent.json'),isolatedMcp:path.join(configDir,'isolated-mcp.json'),
+  setupIntent:path.join(configDir,'setup-intent.json'),credentials:path.join(configDir,'credentials.json'),disabled:path.join(configDir,'disabled.json'),isolatedMcp:path.join(configDir,'isolated-mcp.json'),
   plist:path.join(home,'Library','LaunchAgents',label+'.plist'),
   skill:path.join(codexHome,'skills','mosaic-beta','SKILL.md'),zshrc:path.join(home,'.zshrc')};
 }

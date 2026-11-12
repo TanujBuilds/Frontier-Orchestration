@@ -1,6 +1,6 @@
 # Mosaic Beta for Apple Silicon Macs
 
-Mosaic Beta uses Codex as its host and reviewer. You can also configure one OpenAI-compatible Chat Completions API worker. Use a native arm64 terminal on macOS. The archive includes Node.js and runtime dependencies. Install the Codex CLI separately and sign in with `codex login`. A clean Mac may prompt you to install Apple Command Line Tools when protected coding checks first need Git.
+Mosaic Beta connects your selected coding host to a local coordinator. Setup offers Codex, Claude Code, Cursor and Antigravity, one or more explicitly configured API workers, specialty routing and optional API review. Review defaults to the selected host. The initial archive targets native Apple Silicon macOS and includes its coordinator Node.js runtime and dependencies. The separate native check artifact supports protected checks without Codex. A clean Mac may prompt you to install Apple Command Line Tools when coding checks first need Git. Actual host versions and clean-account installation remain separate release gates; see [release evidence](PORTABLE_BETA_RELEASE.md).
 
 ## Install
 
@@ -14,17 +14,19 @@ cd mosaic-beta-VERSION-darwin-arm64
 ~/.local/bin/mosaic setup
 ```
 
-The installer checks package integrity and offers to append a managed PATH block to `~/.zshrc` when needed. Use `./install --no-path` to skip that prompt. Open a fresh terminal after accepting a PATH change. Setup previews the separate `mosaic-beta` Codex MCP registration, skill and LaunchAgent. It saves private configuration under `~/Library/Application Support/Mosaic Beta/config`.
+The installer checks package integrity and offers to append a managed PATH block to `~/.zshrc` when needed. Use `./install --no-path` to skip that prompt. Open a fresh terminal after accepting a PATH change. Setup previews the selected host, profiles, review source, routing, concurrency and exact native artifact identity. Private configuration lives under `~/Library/Application Support/Mosaic Beta/config`; bearer values use a separate owned `0600` credentials file. Existing schema-1 settings remain readable until explicit preview/cancel/apply migration. Migration does not rewrite saved goal identities or approvals.
 
-Choose Codex only or supply an API base URL, model ID and optional bearer key. A provider may implement Chat Completions without supporting model discovery. Enter the model ID manually in that case. Completed responses are the default. Select streaming only for providers that send Chat Completions SSE with a terminal marker. The optional connection test sends one fixed prompt with no repository data. Coding workflows still require protected checks and their selected review policy.
+Choose host-only use or explicitly supply each already-running local/remote API endpoint, model ID and credential reference. Mosaic does not install models or change model servers. A provider may implement Chat Completions without model discovery; enter its model ID manually. Completed responses are the default. Select streaming only for providers that send Chat Completions SSE with a terminal marker. The optional inference test requires a separate opt-in and sends one fixed prompt with no repository data. No inference occurs merely because setup, preview or discovery runs. A separately configured API reviewer does not use the coding app's account and has no automatic fallback from a closed host.
+
+All real hosts receive exact manual MCP registration instructions in the new portable setup path: a safe atomic comparison is unavailable through the supported host configuration interfaces. Follow the preview in the selected app; saving configuration does not prove the app loaded it. Disposable-home tests use a private fixture registration adapter. Only unchanged installer-owned bindings can be removed; manual and unrelated host entries are preserved. Historical schema-1 Codex setup remains a separate compatibility path. See [host compatibility](HOST_COMPATIBILITY.md) and [installation and recovery](PORTABLE_BETA_INSTALL.md).
 
 ## Run
 
-Reopen Codex after setup. Start a chat in the intended repository and use this prompt:
+Reopen the selected host after registration. Start a chat in the intended repository and use this prompt:
 
 > Use Mosaic Beta in this repository. Inspect the mosaic-beta registry, ask me to choose a workflow if needed, then prepare an exact goal and show me its scope and limits for approval before activation.
 
-The four available workflow policies are collaborative, API-worker-only (`deepseek_only` in the MCP protocol), Codex-only and overnight review. Confirm the approved manifest, Git base, file/check scope, provider profile and budgets in Codex. Use `mosaic` to observe activity in another terminal. Press ↑ or ↓ to select an assignment, Enter to see bounded saved evidence, g to choose a goal, and q or Ctrl-C to close the observer. Press **a** from any screen to jump to the current project. It prefers running work, then the most recently worked project, and says when nothing is running or native activity is unconfirmed. The result is labeled as the last check; press a again to refresh the selection. This shortcut only changes your view. Approvals stay in Codex.
+The four available workflow policies are collaborative, API-worker-only (`deepseek_only` in the MCP protocol), host-only (`codex_only`) and overnight review. Confirm the approved manifest, Git base, literal file/check scope, provider pool, routing and budgets in the host. Host review waits durably when the app closes; an inactive chat is not guaranteed to wake. Use `mosaic` to observe activity in another terminal. Press ↑ or ↓ to select an assignment, Enter to see bounded saved evidence, g to choose a goal, and q or Ctrl-C to close the observer. Press **a** from any screen to jump to the current project. It prefers running work, then the most recently worked project, and says when nothing is running or native activity is unconfirmed. The result is labeled as the last check; press a again to refresh the selection. This shortcut only changes your view. Approvals stay in the host.
 
 Use **[** for older handoffs and **]** for newer handoffs. In goal selection and details, these keys page up and down. Page Up/Down (Fn + ↑/↓ on a Mac keyboard) still work.
 
@@ -34,14 +36,18 @@ If the existing Mosaic coding core is installed in its standard user location, t
 mosaic status --once
 mosaic doctor
 mosaic setup
+mosaic off
+mosaic on
 mosaic uninstall
 ```
 
-Doctor checks model discovery with the configured API worker. It does not send a completion. The status command also works when redirected to a file. Uninstall removes only owned, unchanged beta bindings and retains the beta versions, private settings and evidence. An existing non-beta launcher or MCP registration is preserved. Resolve active or prepared beta work in Codex before reconfiguring, updating or uninstalling. If a prepared worker-bound revision blocks maintenance, stop its goal and finalize it as partial in Codex to retire the revision. Setup can resume a saved, approved change after interruption. If you reinstall after uninstalling, open `mosaic` to restore the bindings with your retained settings.
+Doctor checks configured capabilities and provider model discovery without sending a completion; its evidence distinguishes documented configuration, fixtures and actual probes. The status command also works when redirected to a file. `off` stops new dispatch while retaining recoverable state and execution ownership; `on` resumes the service's admission policy. Uninstall removes only owned, unchanged beta bindings and retains versions, private settings and evidence. Existing core, manual or modified registrations are preserved. Resolve active or prepared beta work in its host before maintenance. If a prepared worker-bound revision blocks maintenance, stop its goal and finalize it as partial to retire the revision. Native uncertainty cannot be cleared merely by timeout, process exit or switching a version pointer. Setup can resume an approved interrupted change. Relocation or a different native artifact needs a new exact approval; saved literal check paths are never rewritten silently.
 
-For isolated local verification, use `./install --home /absolute/disposable/directory --no-path`. Put a fixture Codex executable under that directory, run `mosaic setup`, then start the isolated coordinator with `mosaic serve`. In this mode setup and doctor use a private fixture MCP registration. Host Codex registration and sign-in checks belong to a normal installation.
+For isolated local verification, use `./install --home /absolute/disposable/directory --no-path`, run the installed `mosaic setup`, then start the isolated coordinator with `mosaic serve`. Select a non-Codex host to exercise the native check path with Codex absent. This mode uses a private fixture registration and dummy loopback credentials. It does not certify an actual host app, account, login startup or clean-machine installation.
 
 ## Validation scope
+
+November 12, 2026: portable stage 16 separates source tests, the disposable extracted-package fixture and external release gates. The current acceptance record is [release evidence](PORTABLE_BETA_RELEASE.md). The native foundation accepted in stage 15 is historical source evidence; it is not by itself an installed-package pass. Real host/account versions, live two-provider operation, clean-machine setup, signing/notarization, public license/source audit and publication remain NOT RUN for this candidate unless a distinct dated receipt records them.
 
 On November 9, 2026, the Apple Silicon package `0.1.0-beta.102` (`fb368a1`) completed a live overnight coding task in an isolated home on the development Mac. The existing Spark service handled one planning request and one coding request. The protected check passed, Codex accepted the candidate in one independent review, and the coordinator integrated the change and finalized the goal. The fixture processes shut down after the run.
 

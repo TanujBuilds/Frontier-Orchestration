@@ -1,0 +1,114 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtemp,mkdir,readFile,writeFile,rm,lstat,realpath,chmod,copyFile} from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {DatabaseSync} from 'node:sqlite';
+import {spawnSync} from 'node:child_process';
+import {digest} from '../src/harness/contracts.mjs';
+import {locations,hash} from '../src/beta/files.mjs';
+import * as installer from '../src/beta/install.mjs';
+import {Coordinator} from '../src/harness/coordinator.mjs';
+import {ProviderRegistry} from '../src/harness/providers/registry.mjs';
+import {buildNativeCheckArtifact} from '../scripts/build-native-check-artifact.mjs';
+import {readBundledNativeCheckRuntime} from '../src/beta/package-contract.mjs';
+import {git} from '../src/project/process.mjs';
+const nativeSources=['native-supervisor.c','native-supervisor.mjs','darwin-seatbelt-v2.mjs','darwin-seatbelt.mjs','contracts.mjs','../sandbox.mjs'];
+const nativeAvailable=process.platform==='darwin'&&process.arch==='arm64'&&!!process.env.MOSAIC_NATIVE_TEST_NODE;
+const nativeRequired=process.env.MOSAIC_REQUIRE_NATIVE==='1';
+async function fixture(t){
+ const root=await realpath(await mkdtemp(path.join(os.tmpdir(),'Mosaic update 16 '))),home=path.join(root,'User');await mkdir(home);const paths=locations(home,true);
+ t.after(async()=>{
+  const database=path.join(paths.state,'harness.sqlite3');let retained=false;
+  try{
+   await lstat(database);const db=new DatabaseSync(database,{readOnly:true});
+   try{if(db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='records'").get())retained=!!db.prepare("SELECT 1 FROM records WHERE kind='execution_owner' AND json_extract(data,'$.status')!='quiescent' LIMIT 1").get();}finally{db.close();}
+  }catch(error){if(error.code!=='ENOENT'){retained=true;t.diagnostic('Retained update fixture after ownership inspection failed: '+error.message);}}
+  if(retained)t.diagnostic('Retained native ownership fixture at '+root);else await rm(root,{recursive:true,force:true});
+ });
+ return {root,paths};
+}
+async function payload(root,version,{settings=[1,2],database=[0,1],supervisor="reviewed C source",implementation={},artifactRoot}={}){
+ const directory=path.join(root,version);await mkdir(directory);const sources={'runtime/src/project/check-backends/native-supervisor.c':supervisor,'runtime/bin/node':'#!/bin/sh\nexit 0\n','runtime/src/beta/cli.mjs':'// entry\n','runtime/package-lock.json':JSON.stringify({packages:{'node_modules/@modelcontextprotocol/sdk':{version:'1.32.2'}}}),'runtime/node_modules/@modelcontextprotocol/sdk/package.json':JSON.stringify({version:'1.32.2'})};const files=[];
+ for(const source of nativeSources)sources[path.posix.normalize('runtime/src/project/check-backends/'+source)]=implementation[source]??(source==='native-supervisor.c'?supervisor:'reviewed '+source);
+ if(artifactRoot)for(const name of ['node','mosaic-check-supervisor','NODE-LICENSE','artifact-manifest.json'])sources['runtime/check-artifact/'+name]=await readFile(path.join(artifactRoot,name));
+ for(const [name,bytes] of Object.entries(sources)){const target=path.join(directory,name);await mkdir(path.dirname(target),{recursive:true});const mode=['runtime/bin/node','runtime/check-artifact/node','runtime/check-artifact/mosaic-check-supervisor'].includes(name)?'100755':name==='runtime/check-artifact/artifact-manifest.json'?'100600':'100644';await writeFile(target,bytes,{mode:parseInt(mode.slice(3),8)});files.push({path:name,sha256:hash(bytes),bytes:Buffer.byteLength(bytes),mode});}
+ const manifest={schema:1,layout:'terminal-beta-v1',version,dependenciesInstalled:true,stateCompatibility:{settings,database},files,contentHash:digest(files)};await writeFile(path.join(directory,'package-manifest.json'),JSON.stringify(manifest));return directory;
+}
+test('update and compatible rollback preserve private state and every older version',async t=>{
+ const f=await fixture(t),a=await payload(f.root,'0.1.0-beta.161'),b=await payload(f.root,'0.1.0-beta.162');await installer.install(f.paths,a,{noPath:true});await writeFile(f.paths.config,JSON.stringify({schema:2,host:{id:'cursor'}}),{mode:0o600});const evidence=path.join(f.paths.state,'kept-evidence.json');await writeFile(evidence,'kept');const before=await readFile(f.paths.config);
+ await installer.install(f.paths,b,{noPath:true});assert.equal(typeof installer.rollbackVersion,'function');await installer.rollbackVersion(f.paths,'0.1.0-beta.161');assert.deepEqual(await readFile(f.paths.config),before);assert.equal(await readFile(evidence,'utf8'),'kept');assert.ok(await lstat(path.join(f.paths.versions,'0.1.0-beta.162')));
+});
+test('rollback refuses incompatible live settings/database rather than restore old state',async t=>{
+ const f=await fixture(t),a=await payload(f.root,'0.1.0-beta.161',{settings:[1],database:[0]}),b=await payload(f.root,'0.1.0-beta.162');await installer.install(f.paths,a,{noPath:true});await installer.install(f.paths,b,{noPath:true});await writeFile(f.paths.config,JSON.stringify({schema:2}),{mode:0o600});const launcher=await readFile(f.paths.launcher);await assert.rejects(installer.rollbackVersion(f.paths,'0.1.0-beta.161'),/incompatible.*settings|settings.*schema/i);assert.deepEqual(await readFile(f.paths.launcher),launcher);
+ await rm(f.paths.config);const db=new DatabaseSync(path.join(f.paths.state,'harness.sqlite3'));db.exec('CREATE TABLE records(kind TEXT,id TEXT,data TEXT); PRAGMA user_version=1');db.close();await chmod(path.join(f.paths.state,'harness.sqlite3'),0o600);await assert.rejects(installer.rollbackVersion(f.paths,'0.1.0-beta.161'),/database.*schema|incompatible.*database/i);
+});
+for(const phase of ['transaction-prepared','version-staged','launcher-switched','receipt-switched'])test('durable recovery after SIGKILL at '+phase,async t=>{
+ const f=await fixture(t),a=await payload(f.root,'0.1.0-beta.161'),b=await payload(f.root,'0.1.0-beta.162');await installer.install(f.paths,a,{noPath:true});const original=await readFile(f.paths.launcher);const evidence=path.join(f.paths.state,'evidence');await writeFile(evidence,'new live state retained');
+ const script=`import {install} from ${JSON.stringify(new URL('../src/beta/install.mjs',import.meta.url).href)};import {locations} from ${JSON.stringify(new URL('../src/beta/files.mjs',import.meta.url).href)};await install(locations(${JSON.stringify(f.paths.home)},true),${JSON.stringify(b)},{noPath:true,afterStep(step){if(step===${JSON.stringify(phase)})process.kill(process.pid,'SIGKILL')}});`;
+ const child=spawnSync(process.execPath,['--input-type=module','-e',script],{encoding:'utf8',timeout:15000});assert.equal(child.signal,'SIGKILL',child.stderr);assert.equal(typeof installer.recoverInstallation,'function');await installer.recoverInstallation(f.paths);assert.deepEqual(await readFile(f.paths.launcher),original);assert.equal(JSON.parse(await readFile(f.paths.installation)).version,'0.1.0-beta.161');assert.equal(await readFile(evidence,'utf8'),'new live state retained');await assert.rejects(lstat(path.join(f.paths.configDir,'install-transaction.json')),{code:'ENOENT'});
+});
+test('interrupted update recovery preserves a user-modified pointer for inspection',async t=>{
+ const f=await fixture(t),a=await payload(f.root,'0.1.0-beta.161'),b=await payload(f.root,'0.1.0-beta.162');await installer.install(f.paths,a,{noPath:true});
+ const script=`import {install} from ${JSON.stringify(new URL('../src/beta/install.mjs',import.meta.url).href)};import {locations} from ${JSON.stringify(new URL('../src/beta/files.mjs',import.meta.url).href)};await install(locations(${JSON.stringify(f.paths.home)},true),${JSON.stringify(b)},{noPath:true,afterStep(step){if(step==='launcher-switched')process.kill(process.pid,'SIGKILL')}});`;assert.equal(spawnSync(process.execPath,['--input-type=module','-e',script],{encoding:'utf8'}).signal,'SIGKILL');await writeFile(f.paths.launcher,'user change\n',{mode:0o755});await assert.rejects(installer.recoverInstallation(f.paths),/modified|changed|inspection/);assert.equal(await readFile(f.paths.launcher,'utf8'),'user change\n');
+});
+test('uninstall retains modified launcher, state, unrelated host files and immutable versions',async t=>{
+ const f=await fixture(t),a=await payload(f.root,'0.1.0-beta.161');await installer.install(f.paths,a,{noPath:true});await writeFile(f.paths.launcher,'user change\n',{mode:0o755});const custom=path.join(f.paths.home,'custom-host.json');await writeFile(custom,'unrelated');await installer.uninstall(f.paths);assert.equal(await readFile(f.paths.launcher,'utf8'),'user change\n');assert.equal(await readFile(custom,'utf8'),'unrelated');assert.ok(await lstat(path.join(f.paths.versions,'0.1.0-beta.161')));assert.ok(await lstat(f.paths.state));
+});
+
+test('unchanged historical managed launcher is accepted for update and uninstall',async t=>{
+ const f=await fixture(t),a=await payload(f.root,'0.1.0-beta.161'),b=await payload(f.root,'0.1.0-beta.162');await installer.install(f.paths,a,{noPath:true});
+ // Literal historical bytes are constructed independently of the new generator.
+ const quote=v=>"'"+v.replaceAll("'","'\"'\"'")+"'",runtime=path.join(f.paths.versions,'0.1.0-beta.161/runtime');
+ const old='#!/bin/sh\n# Mosaic Beta managed launcher v1\nPATH='+quote(path.join(runtime,'bin'))+':'+quote(path.dirname(f.paths.launcher))+':/opt/homebrew/bin:/usr/local/bin:\"$PATH\"\nexport PATH\nexec '+quote(path.join(runtime,'bin/node'))+' '+quote(path.join(runtime,'src/beta/cli.mjs'))+' --home '+quote(f.paths.home)+' \"$@\"\n';
+ const receipt=JSON.parse(await readFile(f.paths.installation));await writeFile(f.paths.launcher,old,{mode:0o755});await writeFile(f.paths.installation,JSON.stringify({...receipt,launcherHash:hash(old)}),{mode:0o600});
+ assert.deepEqual((await installer.installedLauncher(f.paths)).bytes,Buffer.from(old));await installer.install(f.paths,b,{noPath:true});assert.doesNotMatch(await readFile(f.paths.launcher,'utf8'),/opt\/homebrew|usr\/local/);await installer.uninstall(f.paths);await assert.rejects(lstat(f.paths.launcher),{code:'ENOENT'});
+});
+
+test('SIGKILL after committed pointer keeps the new verified version',async t=>{
+ const f=await fixture(t),a=await payload(f.root,'0.1.0-beta.161'),b=await payload(f.root,'0.1.0-beta.162');await installer.install(f.paths,a,{noPath:true});
+ const script=`import {install} from ${JSON.stringify(new URL('../src/beta/install.mjs',import.meta.url).href)};import {locations} from ${JSON.stringify(new URL('../src/beta/files.mjs',import.meta.url).href)};await install(locations(${JSON.stringify(f.paths.home)},true),${JSON.stringify(b)},{noPath:true,afterStep(step){if(step==='committed')process.kill(process.pid,'SIGKILL')}});`;assert.equal(spawnSync(process.execPath,['--input-type=module','-e',script],{encoding:'utf8'}).signal,'SIGKILL');
+ await installer.recoverInstallation(f.paths);assert.equal(JSON.parse(await readFile(f.paths.installation)).version,'0.1.0-beta.162');assert.match(await readFile(f.paths.launcher,'utf8'),/0\.1\.0-beta\.162/);assert.ok(await lstat(path.join(f.paths.versions,'0.1.0-beta.161')));
+});
+test('uncommitted recovery never restores a pointer incompatible with newer live state',async t=>{
+ const f=await fixture(t),a=await payload(f.root,'0.1.0-beta.161',{settings:[1],database:[0,1]}),b=await payload(f.root,'0.1.0-beta.162');await installer.install(f.paths,a,{noPath:true});
+ const script=`import {install} from ${JSON.stringify(new URL('../src/beta/install.mjs',import.meta.url).href)};import {locations} from ${JSON.stringify(new URL('../src/beta/files.mjs',import.meta.url).href)};await install(locations(${JSON.stringify(f.paths.home)},true),${JSON.stringify(b)},{noPath:true,afterStep(step){if(step==='launcher-switched')process.kill(process.pid,'SIGKILL')}});`;assert.equal(spawnSync(process.execPath,['--input-type=module','-e',script],{encoding:'utf8'}).signal,'SIGKILL');const pointer=await readFile(f.paths.launcher);await writeFile(f.paths.config,JSON.stringify({schema:2,retained:'newer state'}),{mode:0o600});
+ await assert.rejects(installer.recoverInstallation(f.paths),/incompatible.*settings|settings.*schema/i);assert.deepEqual(await readFile(f.paths.launcher),pointer);assert.equal(JSON.parse(await readFile(f.paths.config)).retained,'newer state');assert.ok(await lstat(path.join(f.paths.configDir,'install-transaction.json')));
+});
+
+async function nativeUpdateFixture(t){
+ const f=await fixture(t),materialized=path.join(f.root,'built-node');await copyFile(process.env.MOSAIC_NATIVE_TEST_NODE,materialized);await chmod(materialized,0o755);
+ const license=process.env.MOSAIC_NATIVE_TEST_LICENSE??path.resolve(process.env.MOSAIC_NATIVE_TEST_NODE,'../../../LICENSE');
+ const artifact=await buildNativeCheckArtifact({builtNode:materialized,builtNodeSha256:hash(await readFile(materialized)),nodeLicense:license,nodeSource:{version:'24.22.0',url:'https://nodejs.org/dist/v24.22.0/node-v24.22.0.tar.xz',sha256:'41f97cff2c666f1f8293dc5f85c65e8dd605c16b43fd9febd49ede32ee1e0329'},nodePatch:{sha256:'840109e32a582faf92ed07f75987c6eb03c9b5659cf74b2f5231ac1e72594741',description:'Disable the Apple posix_spawn branch before file actions; use the existing libuv fork path.'},outputDir:path.join(f.root,'artifact')});
+ const implementation={};for(const source of nativeSources)implementation[source]=await readFile(new URL('../src/project/check-backends/'+source,import.meta.url));
+ const a=await payload(f.root,'0.1.0-beta.161',{implementation,artifactRoot:artifact.root});await installer.install(f.paths,a,{noPath:true});
+ const nativeCheckRuntime=await readBundledNativeCheckRuntime(path.join(f.paths.versions,'0.1.0-beta.161/runtime')),executionPolicy={version:1,backend:'darwin-seatbelt',backendRevision:2,runtimeFingerprint:nativeCheckRuntime.artifactManifestSha256};
+ const profile={schema:1,id:'worker',revision:'r1',displayName:'Uncalled loopback worker',transport:'openai-chat',baseUrl:'http://127.0.0.1:1/v1',model:'fixture',roles:['worker'],capabilities:{workerProtocol:'mosaic-structured-v1',transports:['json'],modelDiscovery:'manual',taskKinds:['coding']},maxContextTokens:32000,maxOutputTokens:2048,concurrency:1,capacityGroup:'fixture',credentialRef:null,streaming:false};
+ const providers=ProviderRegistry({profiles:[profile]}),context={root:f.paths.state,beta:true,selectedHost:'cursor',providerRegistry:providers,nativeCheckRuntime,executionPolicy};
+ const config=JSON.stringify({schema:2,host:{id:'cursor',options:{}},nativeCheckRuntime,execution:executionPolicy,providers:[profile]});await writeFile(f.paths.config,config,{mode:0o600});
+ return {...f,implementation,artifact,config,context,nativeCheckRuntime,executionPolicy,providers};
+}
+test('required update proof has the explicit actual native runtime',()=>{if(nativeRequired)assert.ok(nativeAvailable,'MOSAIC_REQUIRE_NATIVE=1 needs Darwin arm64 and MOSAIC_NATIVE_TEST_NODE');});
+test('compatible pointer update restarts and resumes exact stopped native approval with retained artifact',{skip:!nativeAvailable&&!nativeRequired,timeout:45000},async t=>{
+ const f=await nativeUpdateFixture(t),repo=path.join(f.root,'approved-repo');await mkdir(path.join(repo,'src'),{recursive:true});await mkdir(path.join(repo,'checks'));await writeFile(path.join(repo,'src/value.mjs'),'export const value=1;\n');await writeFile(path.join(repo,'checks/value.mjs'),'process.stdout.write("native");\n');await git(repo,'init','-q');await git(repo,'add','.');await git(repo,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-qm','Approved base');
+ let c=new Coordinator(f.context);t.after(()=>c?.close());const goal=c.preparePortableGoal({submissionId:'retained-update',mode:'collaborative',objective:'Retain exact native approval across compatible pointer update',acceptance:['Resume original immutable approval'],environment:'fixture',providerPolicy:{version:1,defaultWorkerId:'worker',plannerWorkerId:'worker',workers:[f.providers.get('worker','r1')],capacityGroups:[{id:'fixture',limit:1}]},executionPolicy:f.executionPolicy,project:{repo,baseCommit:await git(repo,'rev-parse','HEAD'),readPaths:['src/','checks/'],writePaths:['src/'],checks:[{id:'value',argv:[path.join(path.dirname(f.nativeCheckRuntime.artifactManifestPath),'node'),'checks/value.mjs'],timeoutMs:1000}]}},'prepare');
+ const proof=await c.preflightExecution({goalId:goal.id,hash:goal.hash});assert.equal(proof.passed,true);c.activateGoal({goalId:goal.id,hash:goal.hash},'activate');const task=c.submitTask({goalId:goal.id,submissionId:'retained-task',kind:'coding',objective:'Retain exact provider pin',acceptance:['No dispatch on update'],permissions:{readPaths:['src/','checks/'],writePaths:['src/'],checks:['value']}},'task');c.control({goalId:goal.id,action:'stop'},'stop');assert.equal(c.store.get('task',task.id).providerBinding.providerId,'worker');
+ const before={goal:c.store.get('goal',goal.id),task:c.store.get('task',task.id),spend:c.store.spent(task.id),execution:c.store.get('execution_configuration','coordinator')};c.close();c=null;
+ const b=await payload(f.root,'0.1.0-beta.162',{implementation:f.implementation,artifactRoot:f.artifact.root});await installer.install(f.paths,b,{noPath:true});assert.equal(JSON.parse(await readFile(f.paths.installation)).version,'0.1.0-beta.162');assert.equal(await readFile(f.paths.config,'utf8'),f.config);assert.ok(await lstat(path.dirname(f.nativeCheckRuntime.artifactManifestPath)));
+ c=new Coordinator(f.context);assert.deepEqual(c.store.get('execution_configuration','coordinator'),before.execution);assert.deepEqual(c.store.get('goal',goal.id),before.goal);assert.deepEqual(c.store.get('task',task.id),before.task);c.control({goalId:goal.id,action:'resume'},'resume');c.verifyGoalBinding(c.store.get('goal',goal.id));const resumed=c.store.get('goal',goal.id);assert.equal(resumed.hash,before.goal.hash);assert.deepEqual(resumed.manifest,before.goal.manifest);assert.equal(resumed.deadline,before.goal.deadline);assert.deepEqual(c.store.spent(task.id),before.spend);const resumedTask=c.store.get('task',task.id);assert.equal(resumedTask.hash,before.task.hash);assert.deepEqual(resumedTask.provider,before.task.provider);assert.deepEqual(resumedTask.providerBinding,before.task.providerBinding);assert.deepEqual(resumedTask.spec,before.task.spec);assert.equal(resumedTask.attempts,before.task.attempts);c.close();c=null;
+});
+test('pointer switch rejects every changed native implementation module against saved execution identity',{skip:!nativeAvailable&&!nativeRequired,timeout:45000},async t=>{
+ const f=await nativeUpdateFixture(t),c=new Coordinator(f.context);const saved=c.store.get('execution_configuration','coordinator');c.close();const launcher=await readFile(f.paths.launcher),receipt=await readFile(f.paths.installation),state=await readFile(path.join(f.paths.state,'harness.sqlite3'));
+ for(const [index,source] of nativeSources.entries())await t.test(source,async()=>{
+  const changed={...f.implementation,[source]:Buffer.concat([f.implementation[source],Buffer.from('\n/* independently changed implementation */\n')])};const bad=await payload(f.root,'0.1.0-beta.'+(170+index),{implementation:changed,artifactRoot:f.artifact.root});await assert.rejects(installer.install(f.paths,bad,{noPath:true}),/native.*implementation|supervisor source|artifact.*incompatible/i);assert.deepEqual(await readFile(f.paths.launcher),launcher);assert.deepEqual(await readFile(f.paths.installation),receipt);assert.deepEqual(await readFile(path.join(f.paths.state,'harness.sqlite3')),state);assert.equal(await readFile(f.paths.config,'utf8'),f.config);await assert.rejects(lstat(path.join(f.paths.configDir,'install-transaction.json')),{code:'ENOENT'});
+ });
+ const verify=new Coordinator(f.context);assert.deepEqual(verify.store.get('execution_configuration','coordinator'),saved);verify.close();
+});
+test('native update fallback requires a verified owned old package and no held approval',{skip:!nativeAvailable&&!nativeRequired,timeout:30000},async t=>{
+ const f=await nativeUpdateFixture(t),b=await payload(f.root,'0.1.0-beta.162',{implementation:f.implementation,artifactRoot:f.artifact.root});
+ // Setup can precede the first coordinator boot; no runtime identity exists yet.
+ await assert.rejects(lstat(path.join(f.paths.state,'harness.sqlite3')),{code:'ENOENT'});await installer.install(f.paths,b,{noPath:true});assert.equal(JSON.parse(await readFile(f.paths.installation)).version,'0.1.0-beta.162');assert.equal(await readFile(f.paths.config,'utf8'),f.config);
+ const c=new Coordinator(f.context),goal=c.preparePortableGoal({submissionId:'missing-runtime-record',mode:'codex_only',objective:'Retain a stopped approval if its runtime record is missing',acceptance:['Refuse inferred replacement runtime identity'],environment:'fixture',executionPolicy:f.executionPolicy},'prepare');c.control({goalId:goal.id,action:'stop'},'stop');const saved=c.store.get('execution_configuration','coordinator');c.close();
+ const next=await payload(f.root,'0.1.0-beta.163',{implementation:f.implementation,artifactRoot:f.artifact.root}),launcher=await readFile(f.paths.launcher),receipt=await readFile(f.paths.installation),db=new DatabaseSync(path.join(f.paths.state,'harness.sqlite3'));db.prepare("UPDATE records SET data=? WHERE kind='execution_configuration' AND id='coordinator'").run(JSON.stringify({...saved,hash:'0'.repeat(64)}));db.close();await assert.rejects(installer.install(f.paths,next,{noPath:true}),/saved native execution identity/i);assert.deepEqual(await readFile(f.paths.launcher),launcher);assert.deepEqual(await readFile(f.paths.installation),receipt);
+ const damaged=new DatabaseSync(path.join(f.paths.state,'harness.sqlite3'));damaged.prepare("DELETE FROM records WHERE kind='execution_configuration' AND id='coordinator'").run();damaged.close();await assert.rejects(installer.install(f.paths,next,{noPath:true}),/implementation identity is missing.*resumable/i);assert.deepEqual(await readFile(f.paths.launcher),launcher);assert.deepEqual(await readFile(f.paths.installation),receipt);assert.equal(await readFile(f.paths.config,'utf8'),f.config);
+});
