@@ -83,6 +83,7 @@ test('a real protocol failure feeds bounded learning and a later assignment retr
   if(input.task.submissionId==='fresh'){assert.equal(input.memory.length,1);assert.equal(input.editLimits.maxFiles,1);}
   return answer(m);
  }}});await worker.drain();assert.equal(f.c.getTask(source.id).attempts,2);
+ await worker.integration.accept({taskId:source.id,feedback:'Fixture operator reviewed truncation recovery and passing protected checks'},'source-reviewed-integration');assert.equal(f.c.getTask(source.id).status,'accepted');
  const maintenance=f.c.submitTask({goalId:f.g.id,submissionId:'learn',kind:'learning',objective:'Learn from coding response truncation',acceptance:['Protected evaluation passes']},'learn');await worker.drain();
  assert.equal(f.c.getTask(maintenance.id).status,'accepted');assert.equal(f.c.getTask(maintenance.id).spent.model,1);
  const fresh=f.c.submitTask({goalId:f.g.id,...coding('fresh'),objective:'Implement coding answer after response truncation'},'fresh');await worker.drain();

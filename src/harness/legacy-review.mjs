@@ -37,7 +37,7 @@ export class LegacyReview {
   if(this.inflight.has(task.id)||task.status!=='awaiting_review'||goal.manifest.reviewPolicy?.source!=='api'||!c.eligible(task))return false;
   const ticket=c.store.all('review_ticket').find(r=>r.taskId===task.id&&r.status==='reserved');
   if(ticket){
-   const request=c.store.db.prepare("SELECT status,data FROM requests WHERE task_id=? AND kind='apiReview' AND json_extract(data,'$.ticketId')=?").get(task.id,ticket.id);
+   const request=c.store.db.prepare("SELECT status,data FROM requests WHERE task_id=? AND kind='apiReview' AND CASE WHEN json_valid(data) THEN json_extract(data,'$.ticketId') ELSE NULL END=?").get(task.id,ticket.id);
    if(request?.status!=='completed'||task.reviewWait?.reasonCode!==undefined&&task.reviewWait.reasonCode!=='controls_active')return false;
    try{identifier(JSON.parse(request.data).runKey,'saved API run key');return true;}catch{return false;}
   }
@@ -73,7 +73,7 @@ export class LegacyReview {
     try{identifier(saved.runKey,'saved API run key');}catch{continue;}
     run=this.c.reviewService.runApi({...ticket.binding,signal:this.worker.shutdown.signal},saved.runKey);
    }else{
-    run=(async()=>{const entry=(await this.c.reviewService.inbox({goalId:portable.goalId,limit:20})).items.find(x=>x.taskId===portable.id);if(!entry?.binding)return null;return this.c.reviewService.runApi({...entry.binding,signal:this.worker.shutdown.signal},`auto-review-${portable.id}-${portable.reviews+1}`);})();
+    run=(async()=>{const context=await this.c.reviewService.context(portable.id,{includeFiles:false});return this.c.reviewService.runApi({...context.binding,signal:this.worker.shutdown.signal},`auto-review-${portable.id}-${portable.reviews+1}`);})();
    }
    this.inflight.set(portable.id,run);try{return await run;}finally{this.inflight.delete(portable.id);}
   }

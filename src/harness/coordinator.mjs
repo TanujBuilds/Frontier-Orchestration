@@ -16,7 +16,7 @@ import {recordFailedGate} from './repair-progress.mjs';
 import {matches} from '../project/contracts.mjs';
 import {assertRoutingApproval,assertRoutePin,isRoutedTask,routeDecision,recordRoutingWait,pinnedResourceWait,taskRoutingManifest} from './routing/runtime.mjs';
 
-import {capacitySnapshot,canClaim,configureServiceCapacity,assertCapacityConfiguration,assertInferenceCapacity} from './scheduling/capacity.mjs';
+import {capacitySnapshot,canClaim,configureServiceCapacity,assertCapacityConfiguration,assertInferenceCapacity,capacityWaitHeld} from './scheduling/capacity.mjs';
 import {orderedCandidates} from './scheduling/scheduler.mjs';
 
 const TERMINAL=new Set(['accepted','failed','partial','cancelled']);
@@ -321,7 +321,7 @@ export class Coordinator {
   while(changed){changed=false;for(const t of tasks)if(!TERMINAL.has(t.status))for(const id of t.spec.dependsOn)if(p.get(id)<p.get(t.id)){p.set(id,p.get(t.id));changed=true;}}
   return p;
  }
- eligible(t){const g=this.store.get('goal',t.goalId),now=this.now();return !(t.routingWait&&t.routingWait.retryAt>now)&&!(isOvernightV2(g.manifest)&&t.providerWait&&(t.providerWait.retryAt>now||t.providerWait.until<=now))&&g.status==='active'&&g.deadline>now&&(!t.deadline||t.deadline>now)&&!(g.integrationSealed&&t.spec.kind==='coding')&&!t.pauseRequested&&!t.stopRequested&&t.goalVersion===g.version&&t.spec.dependsOn.every(id=>this.store.get('task',id).status==='accepted');}
+ eligible(t){const g=this.store.get('goal',t.goalId),now=this.now();return !(t.routingWait&&t.routingWait.retryAt>now)&&!(isOvernightV2(g.manifest)&&t.providerWait&&(t.providerWait.retryAt>now||t.providerWait.until<=now))&&g.status==='active'&&g.deadline>now&&(!t.deadline||t.deadline>now)&&!(g.integrationSealed&&t.spec.kind==='coding')&&!t.pauseRequested&&!t.stopRequested&&t.goalVersion===g.version&&t.spec.dependsOn.every(id=>this.store.get('task',id).status==='accepted')&&!capacityWaitHeld(this,t,g);}
  settleTask(t,status,reason,event='task.'+status,data={}){
   const overnight=isOvernightV2(this.store.get('goal',t.goalId).manifest);
   if(status==='blocked'&&overnight)t.firstBlocker??={reason,at:this.now()};
@@ -373,7 +373,7 @@ export class Coordinator {
    delete t.routingWait;
    t.startedAt??=this.now();t.deadline??=Math.min(g.deadline,t.startedAt+t.spec.limits.seconds*1000);t.owner=owner;t.status='running';t.yieldRequested=false;
    if(g.manifest.providerPolicy)t.runnerGeneration=(t.runnerGeneration??0)+1;
-   delete t.interruptedOwner;
+   delete t.interruptedOwner;delete t.capacityWait;
    if(lease)t.ownerLease=lease.generation;else delete t.ownerLease;
    this.store.put('task',t);if(routed)this.emit('task.routed',t.goalId,t.id,{routeHash:t.routeHash,route:t.route});this.learning.pin(t.id);this.emit('task.claimed',t.goalId,t.id,{owner});return this.getTask(t.id);
   }
@@ -400,7 +400,7 @@ export class Coordinator {
    if(saved&&(digest(saved.providerBinding??null)!==digest(t.providerBinding)||saved.routeHash!==t.routeHash))throw Error('Saved request provider binding differs from the task');
   }
   if(saved)return {...saved,cached:true};
-  const capacityResource=kind==='model'?assertInferenceCapacity(this,g,t.providerBinding):null;
+  let capacityResource=null;try{if(kind==='model')capacityResource=assertInferenceCapacity(this,g,t.providerBinding);}catch(error){if(error.waiting)error.requestKey=key;throw error;}
   const wait=kind==='model'?t.providerWait:null;
   if(wait){
    if(wait.readyOwner!==owner||this.now()>=wait.until)throw Error('Original provider reconnect window exhausted or readiness no longer verified');

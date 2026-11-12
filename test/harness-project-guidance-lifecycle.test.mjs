@@ -226,7 +226,11 @@ test('project guidance public lifecycle demo', async t => {
   assert.deepEqual(await f.retrieve(queryGoal.id, 'Update tokenizer in src/parser.mjs'), []);
   assert.deepEqual(await f.retrieve(queryGoal.id, matchingQuery, 'consult'), []);
 
-  const followUp = await f.makeTask(queryGoal.id, 'follow-up');
+  const followUp = await f.makeTask(queryGoal.id, 'follow-up', {permissions: {
+    readPaths: f.project.readPaths,
+    writePaths: [relatedPath],
+    checks: f.project.checks.map(check => check.id),
+  }});
   const started = await f.operation('native_start', {taskId: followUp.id, layout: 'candidate_v1'});
   assert.deepEqual(started.memory, [packet]);
   assert.deepEqual(started.spec.permissions, followUp.spec.permissions);
@@ -249,7 +253,11 @@ test('project guidance public lifecycle demo', async t => {
   assert.deepEqual(await f.retrieve(differentEnvironment.id), []);
   const stale = await f.makeGoal('changed-check', {project: changedCheckProject(f.project)});
   assert.deepEqual(await f.retrieve(stale.id), []);
-  const staleTask = await f.makeTask(stale.id, 'stale-new-task');
+  const staleTask = await f.makeTask(stale.id, 'stale-new-task', {permissions: {
+    readPaths: f.project.readPaths,
+    writePaths: ['src/stale.mjs'],
+    checks: f.project.checks.map(check => check.id),
+  }});
   const staleStarted = await f.operation('native_start', {taskId: staleTask.id, layout: 'candidate_v1'});
   assert.deepEqual(staleStarted.memory, []);
   assert.deepEqual(staleStarted.spec.permissions.checks, followUp.spec.permissions.checks);

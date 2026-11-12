@@ -1,6 +1,6 @@
 import path from 'node:path';
-import {access} from 'node:fs/promises';
-import {canonicalRepository,capacitySnapshot,writeScopeWait} from './scheduling/capacity.mjs';
+import {access,readFile} from 'node:fs/promises';
+import {canonicalRepository,capacitySnapshot,writeScopeWait,inertUnstartedGoal,repositoryLockId,sharedBaseJournalId} from './scheduling/capacity.mjs';
 import {effectiveIntegrationChecks,isOvernightV2} from './overnight.mjs';
 import { repairIntegration } from './integration-repair.mjs';
 import { NativeCandidates } from './native-candidates.mjs';
@@ -97,7 +97,8 @@ export class Integration {
   const run=(async()=>{const result=await action();this.c.store.tx(()=>this.c.store.put('effect',{id:key,hash,status:'completed',result,at:this.c.now()}));return result;})();
   this.inflight.set(key,run);try{return await run;}catch(error){if(error.code==='locked')error.retryable=true;throw error;}finally{this.inflight.delete(key);}
  }
- repositoryId(g){const hash=digest(canonicalRepository(g.manifest.project.repo));return `${hash.slice(0,8)}-${hash.slice(8,12)}-${hash.slice(12,16)}-${hash.slice(16,20)}-${hash.slice(20,32)}`;}
+ repositoryId(g){return repositoryLockId(g);}
+ baseJournalId(g,generation){return sharedBaseJournalId(g,generation);}
  async integrationJournal(g){
   let id=g.integration?.journalId;
   if(!id){
@@ -105,11 +106,25 @@ export class Integration {
    // share one checked target; historical no-policy work remains private.
    let historical=false;try{await access(path.join(this.c.store.root,'integration','jobs',g.id+'.jsonl'));historical=true;}catch(error){if(error.code!=='ENOENT')throw error;}
    const legacyNative=!g.manifest.reviewPolicy&&g.manifest.mode.actors.includes('codex');
-   id=historical||!g.manifest.providerPolicy||legacyNative?g.id:this.repositoryId(g);
+   if(historical||!g.manifest.providerPolicy||legacyNative)id=g.id;
+   else {
+    const repository=canonicalRepository(g.manifest.project.repo),cohort=this.c.store.all('goal').filter(other=>other.manifest.project&&canonicalRepository(other.manifest.project.repo)===repository&&other.manifest.project.baseCommit===g.manifest.project.baseCommit),retired=new Set(cohort.filter(other=>other.integrationSealed&&other.integration?.journalId).map(other=>other.integration.journalId)),known=[...new Set(cohort.filter(other=>other.integration?.journalId&&!retired.has(other.integration.journalId)).map(other=>other.integration.journalId))];
+    if(known.length>1)throw Error('Incompatible shared journals for approved base; preserve prior generations');
+    id=known[0];
+    // Retain an early shared journal even if initialization crashed just before
+    // its goal reference was saved. New bases get a distinct durable generation.
+    if(!id){const legacyId=this.repositoryId(g),file=path.join(this.c.store.root,'integration','jobs',legacyId+'.jsonl');let exists=true;try{await access(file);}catch(error){if(error.code!=='ENOENT')throw error;exists=false;}if(exists&&!retired.has(legacyId)){const old=await new Journal(path.join(this.c.store.root,'integration'),legacyId).load();if(old.last('integration.repository')?.baseCommit===g.manifest.project.baseCommit)id=legacyId;}}
+    id??=this.baseJournalId(g);if(retired.has(id))id=this.baseJournalId(g,g.id);
+   }
   }
   return new Journal(path.join(this.c.store.root,'integration'),id).load();
  }
- async goalWorkspace(goalId,{native=false,journal:lockedJournal}={}){
+ assertPreparationGoal(expected,{live=true}={}){
+  const current=this.c.store.get('goal',expected.id);if(live)this.c.liveGoal(current);
+  if(current.hash!==expected.hash||current.version!==expected.version||digest(current.manifest.project)!==digest(expected.manifest.project))throw Error('Goal approval or project version changed during integration preparation');
+  return current;
+ }
+ async goalWorkspace(goalId,{native=false,journal:lockedJournal,validatePrior}={}){
   const g=this.c.store.get('goal',goalId);if(g.integrationSealed)throw Error('Preserved partial integration workspace is retired; use a separately approved goal');if(!g.manifest.project)throw Error('Goal has no coding project');
   const journal=lockedJournal??await this.integrationJournal(g),p=g.manifest.project;
   const shared=journal.id!==g.id,origin=journal.last('integration.repository');
@@ -119,7 +134,7 @@ export class Integration {
   const workspace=new Workspace(manifest,journal);await workspace.initialize();
   if(shared&&!origin)await journal.append('integration.repository',{repository:canonicalRepository(p.repo),baseCommit:p.baseCommit});
   if(!native)await workspace.recover();
-  if(!g.integration)this.c.store.tx(()=>{const current=this.c.store.get('goal',g.id);current.integration={worktree:workspace.root,branch:workspace.branch,baseCommit:p.baseCommit,...(shared?{journalId:journal.id}: {})};this.c.store.put('goal',current);});
+  this.c.store.tx(()=>{const current=this.assertPreparationGoal(g,{live:!native||!g.integration});validatePrior?.();if(!current.integration){current.integration={worktree:workspace.root,branch:workspace.branch,baseCommit:p.baseCommit,...(shared?{journalId:journal.id}: {})};this.c.store.put('goal',current);}});
   return {journal,workspace,g:this.c.store.get('goal',goalId),shared};
  }
  checks(workspace){return this.checksFactory?.(workspace)??new CheckRunner(workspace,{codex:this.config.codexPath??'codex'});}
@@ -135,18 +150,73 @@ export class Integration {
     if(other.integrationPending&&other.integrationPending.taskId!==integrationTaskId)throw Error('Another pending integration must be recovered first');
     if(other.integrationOwner&&(other.id!==goalId||refuseLegacy))throw Error('Native legacy owner holds integration workspace');
    }
-   const journal=await this.integrationJournal(g);
-   for(const other of this.c.store.all('goal')){
-    if(other.id===g.id||!other.manifest.project||canonicalRepository(other.manifest.project.repo)!==repository||!other.integration)continue;
+   const journal=await this.integrationJournal(g),verifiedJournals=new Set(),verifiedHeads=new Set(),inertProofs=new Set(),snapshot=capacitySnapshot(this.c);
+   for(const other of snapshot.goals){
+    if(other.id===g.id||!other.manifest.project||canonicalRepository(other.manifest.project.repo)!==repository)continue;
+    // Historical private targets never join a shared lineage. Universal locks,
+    // pending imports, native owners and write-scope fences still apply.
+    if(journal.id===g.id&&!other.integration?.journalId)continue;
+    const differentBase=other.manifest.project.baseCommit!==g.manifest.project.baseCommit;
+    if(differentBase||other.integrationSealed||other.status==='partial'&&(other.integration?.journalId??other.id)!==journal.id){await this.assertClosedPredecessor(other,g,{snapshot,verifiedJournals,verifiedHeads,inertProofs});continue;}
+    if(!other.integration)continue;
     const otherJournal=other.integration.journalId??other.id;
     if(otherJournal===journal.id||journal.id===g.id&&!other.integration.journalId)continue;
-    if(this.c.store.all('task').some(t=>t.goalId===other.id&&t.status==='accepted'&&t.integration))throw Error('Incompatible independent integration state; preserve legacy target and candidate for separately approved integration');
+    if(snapshot.tasks.some(t=>t.goalId===other.id&&t.status==='accepted'&&t.integration))throw Error('Incompatible independent integration state; source must incorporate finalized accepted heads before a newly approved successor base');
    }
+   const validatePrior=()=>{for(const id of inertProofs)if(!inertUnstartedGoal(this.c,this.c.store.get('goal',id),{allowDraft:true}))throw Error('Prior inert authority changed during integration preparation');};
+   this.c.store.tx(()=>{this.assertPreparationGoal(g,{live:!native||!g.integration});validatePrior();});
    releaseJournal=await journal.lock();
-   const target=await this.goalWorkspace(goalId,{native,journal});
+   const target=await this.goalWorkspace(goalId,{native,journal,validatePrior});
    const release=async()=>{try{await releaseJournal();}finally{await releaseRepository();}};
    return {...target,release};
   }catch(error){try{await releaseJournal?.();}finally{await releaseRepository();}throw error;}
+ }
+ async assertClosedPredecessor(prior,current,{snapshot,verifiedJournals,verifiedHeads,inertProofs}){
+  if(inertUnstartedGoal(this.c,prior,{allowDraft:true})){inertProofs?.add(prior.id);return;}
+  const tasks=snapshot.tasks.filter(t=>t.goalId===prior.id),receipt=prior.receipt;
+  const held=snapshot.requests.some(r=>r.task_id===prior.id||tasks.some(t=>t.id===r.task_id)||!snapshot.goals.some(g=>g.id===r.task_id)&&!snapshot.tasks.some(t=>t.id===r.task_id));
+  if(!['completed','partial'].includes(prior.status)&&prior.activatedAt!=null&&!prior.integration&&!held&&!snapshot.planning.some(p=>p.goalId===prior.id)&&tasks.every(t=>t.startedAt==null&&!t.owner&&!t.native))throw Error('Unstarted prior goal requires exact prepareRevision/activateRevision for its source base; original deadline and limits remain unchanged');
+  if(!['completed','partial'].includes(prior.status)||!receipt||prior.receiptHash!==digest(receipt)||receipt.goalId!==prior.id||receipt.approvalHash!==prior.hash||receipt.goalVersion!==prior.version||digest(prior.manifest)!==prior.hash||
+     prior.integrationPending||prior.integrationOwner||tasks.some(t=>!['accepted','partial','failed','cancelled','stopped','blocked'].includes(t.status)||t.owner||t.native?.writerActive)||snapshot.planning.some(p=>p.goalId===prior.id)||
+     this.c.store.all('reviewer').some(r=>r.goalId===prior.id&&r.status==='reserved'))throw Error('Incompatible prior work must be finalized and quiescent before a newly approved successor base');
+  // Draft revisions of a completed goal have no executable authority and are
+  // preserved. Only still-owned inference (including unattributed corruption)
+  // prevents retirement; a clock or completed goal label cannot free it.
+  if(held)throw Error('Prior or unattributed inference remains uncertain; preserve original spending and ownership');
+  if(!Array.isArray(receipt.tasks)||receipt.tasks.length!==tasks.length||tasks.some(t=>!receipt.tasks.some(saved=>saved.id===t.id&&saved.status===t.status&&saved.hash===t.hash&&saved.resultHash===digest(t.result)&&digest(saved.integration??null)===digest(t.integration??null))))throw Error('Prior finalized task receipt changed; preserve old work');
+  for(const task of tasks)if(task.native?.layout==='candidate_v1'&&task.result?.savedNative)await this.assertPreservedPartial(task);
+  const heads=[prior.manifest.project.baseCommit,...tasks.flatMap(t=>t.status==='accepted'&&t.integration?.commit?[t.integration.commit]:[])];
+  if(prior.integration){
+   const id=prior.integration.journalId??prior.id,verificationKey=id+':'+digest(prior.manifest.project);
+   if(!verifiedJournals.has(verificationKey)){
+    const journal=new Journal(path.join(this.c.store.root,'integration'),id);await access(journal.file);await access(path.join(journal.dir,'worktree','.git'));await journal.load();
+    if(journal.tail||journal.events.some(e=>e.type==='edits.intent'&&!journal.events.some(done=>done.type==='edits.applied'&&done.data.key===e.data.key)))throw Error('Prior integration journal remains uncertain; preserve pending recovery');
+    try{const lock=JSON.parse(await readFile(path.join(journal.dir,'lock.json'),'utf8'));if(!Number.isInteger(lock.pid)||lock.pid<=0||typeof lock.token!=='string'||!lock.token)throw Error('Prior integration lock is uncertain');try{process.kill(lock.pid,0);throw Error('Prior integration writer still owns its journal');}catch(error){if(error.code!=='ESRCH')throw error;}}
+    catch(error){if(error.code!=='ENOENT')throw error;}
+    const workspace=new Workspace({repo:prior.manifest.project.repo,baseCommit:prior.manifest.project.baseCommit,permissions:prior.manifest.project},journal),checkpoint=journal.last('stage.accepted')??{commit:prior.manifest.project.baseCommit,snapshot:journal.last('workspace.created')?.snapshot};
+    if(workspace.root!==prior.integration.worktree||!checkpoint.snapshot||await git(workspace.root,'rev-parse','HEAD')!==checkpoint.commit)throw Error('Prior accepted integration head changed; preserve prior journal');
+    const sealed=prior.integrationSealed;
+    if(sealed){
+     const released=journal.last('native.released');
+     if(prior.status!=='partial'||sealed.worktree!==workspace.root||sealed.head!==checkpoint.commit||sealed.snapshotHash!==digest(sealed.snapshot)||released?.snapshotHash!==sealed.snapshotHash||released.head!==sealed.head||digest(released.snapshot)!==digest(sealed.snapshot))throw Error('Prior sealed partial lacks an exact recorded snapshot');
+     await workspace.assertSnapshot(sealed.snapshot);
+     // Historical seals recorded bytes but not new executable modes. Preserve
+     // dirty files only when their modes still match the committed preimage.
+     for(const [file,mode] of await checkedFileModes(workspace,sealed.snapshot)){const entry=await git(workspace.root,'ls-tree','HEAD','--',file),expected=entry?entry.split(' ')[0]:'100644';if(mode!==expected)throw Error('Prior sealed partial executable mode is uncertain');}
+    }else{await workspace.assertSnapshot(checkpoint.snapshot);const modes=await checkedFileModes(workspace,checkpoint.snapshot);await assertCheckedCommit(workspace,checkpoint,checkpoint.snapshot,modes);}
+    heads.push(checkpoint.commit);verifiedJournals.add(verificationKey);
+   }
+  }
+  for(const head of heads){if(verifiedHeads.has(head))continue;if(await git(current.manifest.project.repo,'merge-base',head,current.manifest.project.baseCommit)!==head)throw Error('New approved base omits prior accepted integration head; preserve both histories');verifiedHeads.add(head);}
+ }
+ async assertPreservedPartial(task){
+  const saved=task.result.savedNative,target=await this.nativeCandidates.open(task),{workspace,journal}=target;
+  if(journal.tail)throw Error('Prior partial journal is incomplete; preserve recovery');
+  const released=journal.last('native.released');
+  if(saved.initialized===false){let exists=true;try{await access(path.join(workspace.root,'.git'));}catch(error){if(error.code!=='ENOENT')throw error;exists=false;}if(exists)throw Error('Prior partial appeared after its uninitialized seal');return;}
+  if(saved.worktree!==workspace.root||saved.snapshotHash!==digest(saved.snapshot)||released?.snapshotHash!==saved.snapshotHash||released.head!==saved.head||digest(released.snapshot)!==digest(saved.snapshot)||await git(workspace.root,'rev-parse','HEAD')!==saved.head)throw Error('Prior partial candidate differs from its exact release seal');
+  await workspace.assertSnapshot(saved.snapshot);
+  for(const [file,mode] of await checkedFileModes(workspace,saved.snapshot)){const entry=await git(workspace.root,'ls-tree','HEAD','--',file),expected=entry?entry.split(' ')[0]:'100644';if(mode!==expected)throw Error('Prior partial executable mode is uncertain');}
  }
  async combinedChecks(target,task,goal,checkSpecs){
   const current={goalId:goal.id,goalHash:goal.hash,project:goal.manifest.project,checkSpecs,overnightV2:isOvernightV2(goal.manifest)},contracts=new Map();

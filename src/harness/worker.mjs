@@ -212,7 +212,7 @@ export class Worker {
    const adapter=this.adapters[task.spec.kind];if(!adapter)throw Error(`Capability ${task.spec.kind} is not configured`);
    return await adapter.step(task,this.owner);
   }catch(error){
-   if(error instanceof CapacityWaitError)return this.c.store.tx(()=>{const current=this.c.owned(task.id,this.owner);current.status='suspended';current.owner=null;current.capacityWait={reasonCode:error.reasonCode};this.c.store.put('task',current);return {waiting:true,reasonCode:error.reasonCode,taskId:current.id};});
+   if(error instanceof CapacityWaitError)return this.c.store.tx(()=>{const current=this.c.owned(task.id,this.owner);current.status='suspended';current.owner=null;current.capacityWait={reasonCode:error.reasonCode,...(error.requestKey?{requestKey:error.requestKey}:{})};this.c.store.put('task',current);return {waiting:true,reasonCode:error.reasonCode};});
    const current=this.c.getTask(task.id);
    if(current.status!=='running'||current.owner!==this.owner)return current;
    return this.c.failTaskStep(task.id,this.owner,String(error?.message??error));

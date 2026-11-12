@@ -50,7 +50,7 @@ test('generation fences obsolete request saves and preserves original deadline',
 });
 test('contradictory active or prepared group limits and service changes reject before mutation',t=>{
  const f=fixture(t,{limit:2});f.goal('stable',2,2);assert.throws(()=>f.goal('contradiction',2,3),/capacity.*(config|limit)|contradict/i);assert.equal(f.c.store.all('goal').length,1);
- assert.throws(()=>new Coordinator({root:f.root,serviceMaxConcurrentTasks:3}),/capacity.*(active|prepared|quiescen)/i);
+ assert.throws(()=>new Coordinator({root:f.root,now:f.c.now,serviceMaxConcurrentTasks:3}),/capacity.*(active|prepared|quiescen)/i);
 });
 test('historical goals remain one global autonomous slot even with private opt-in ceiling',t=>{
  const f=fixture(t);const g=f.c.prepareGoal({submissionId:'legacy',objective:'Historical work',acceptance:['Sequential'],environment:'fixture',mode:'collaborative'},'legacy');f.c.activateGoal({goalId:g.id,hash:g.hash},'legacy-active');f.task(g,'legacy-one');f.task(g,'legacy-two');assert.ok(f.c.claimNext('owner'));assert.equal(f.c.claimNext('third-owner'),null);
@@ -145,4 +145,33 @@ for(const outcome of ['completed','not_dispatched'])test('certified failed '+out
  assert.equal(capacitySnapshot(c).requests.length,0);assert.equal(inferenceWait(c,{manifest:{}},null),null);
  other=new Coordinator({root,serviceMaxConcurrentTasks:4});assert.equal(other.serviceMaxConcurrentTasks,4);
  assert.equal(c.store.spent('historical-task').codexReview,1);
+});
+for(const payload of ['{malformed','null','false','42','[]','"scalar"'])for(const status of ['reserved','failed'])test('corrupt '+status+' payload '+payload+' remains unattributed global capacity without ledger repair',t=>{
+ const f=fixture(t),g=f.goal('corrupt'),a=f.task(g,'corrupt-active');f.c.claimNext('active-owner');
+ f.c.store.db.prepare('INSERT INTO requests VALUES(?,?,?,?,?,?)').run('corrupt-row',g.id,'historical','apiReview',status,payload);
+ const before=f.c.store.db.prepare('SELECT * FROM requests WHERE id=?').get('corrupt-row');
+ const snapshot=capacitySnapshot(f.c);assert.equal(snapshot.requests.length,1);assert.equal(snapshot.requests[0].resource,null);
+ assert.throws(()=>f.c.reserve(a.id,{key:'consult-1',kind:'model'},'active-owner'),e=>e.waiting&&e.reasonCode==='legacy_inference_busy');assert.equal(f.c.getTask(a.id).spent.model,0);
+ const saved=f.c.store.get('goal',g.id);saved.status='partial';f.c.store.put('goal',saved);
+ assert.throws(()=>f.goal('corrupt-group-widen',4,3),/capacity.*config|contradict/i);
+ assert.throws(()=>new Coordinator({root:f.root,serviceMaxConcurrentTasks:3}),/quiescence/);
+ assert.deepEqual(f.c.store.db.prepare('SELECT * FROM requests WHERE id=?').get('corrupt-row'),before);
+});
+for(const resource of [null,'group',[],{}, {capacityGroup:'other',groupLimit:4}, {profileHash:'a'.repeat(64),capacityGroup:'other',baseUrl:'http://127.0.0.1:9/v1',profileLimit:4,groupLimit:4}])test('partial or inconsistent saved capacity resource '+JSON.stringify(resource)+' cannot declare independence',t=>{
+ const f=fixture(t),g=f.goal('bad-resource'),a=f.task(g,'bad-resource-active');f.c.claimNext('active-owner');
+ const binding=f.c.getTask(a.id).providerBinding,data={providerBinding:binding,capacityResource:resource};
+ f.c.store.db.prepare('INSERT INTO requests VALUES(?,?,?,?,?,?)').run('bad-resource',g.id,'historical','model','reserved',JSON.stringify(data));
+ assert.equal(capacitySnapshot(f.c).requests[0].resource,null);
+ assert.throws(()=>f.c.reserve(a.id,{key:'consult-1',kind:'model'},'active-owner'),e=>e.waiting&&e.reasonCode==='legacy_inference_busy');assert.equal(f.c.getTask(a.id).spent.model,0);
+});
+for(const status of ['reserved','failed'])test('parallel Worker supervisor holds malformed '+status+' API ticket without dispatch or repeat spend',{timeout:10000},async t=>{
+ const server=await reviewEndpoint(t),f=fixture(t,{baseUrl:server.baseUrl}),g=f.goal('corrupt-supervisor',4,4,{reviewPolicy:{version:1,source:'api',reviewer:profileIdentity(f.a),fallback:'wait'}}),a=f.task(g,'corrupt-review');
+ f.c.claimNext('owner');f.c.completeTask(a.id,{content:'Candidate answer'},'owner',{reviewRequired:true});
+ const binding=(await f.c.reviewService.inbox({goalId:g.id})).items[0].binding,reservation=await f.c.reviewService.reserve(binding,'corrupt-ticket'),ticket=f.c.store.get('review_ticket',reservation.ticketId);
+ f.c.store.db.prepare('INSERT INTO requests VALUES(?,?,?,?,?,?)').run(ticket.requestId,a.id,'api-review-corrupt','apiReview',status,'{malformed');
+ const before=f.c.store.db.prepare('SELECT * FROM requests WHERE id=?').get(ticket.requestId),worker=new Worker({c:f.c,owner:'supervisor',config:{environment:'fixture'}});
+ f.c.store.waitForChange=async()=>{};
+ try{for(let n=0;n<3;n++)await worker.tick();}finally{await worker.close();}
+ assert.equal(server.posts().length,0);assert.equal(f.c.getTask(a.id).reviews,1);assert.equal(f.c.getTask(a.id).spent.apiReview,1);assert.equal(f.c.getTask(a.id).status,'awaiting_review');
+ assert.deepEqual(f.c.store.db.prepare('SELECT * FROM requests WHERE id=?').get(ticket.requestId),before);
 });
