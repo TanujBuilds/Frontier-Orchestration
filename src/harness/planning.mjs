@@ -1,3 +1,4 @@
+import {assertInferenceCapacity,CapacityWaitError} from './scheduling/capacity.mjs';
 import {randomUUID} from 'node:crypto';
 import {keys,identifier,normalizeTask,digest} from './contracts.mjs';
 import {isOvernightV2,validateOvernightGraph} from './overnight.mjs';
@@ -51,10 +52,11 @@ export class Planner {
   const {c}=this,owner=this.worker.owner;
   const reserved=c.store.all('planning').find(p=>['running','uncertain'].includes(p.status));
   if(reserved&&(reserved.status==='uncertain'||reserved.owner!==owner))return {waiting:true,planning:reserved};
-  if(c.store.all('task').some(t=>['running','uncertain','taking_over'].includes(t.status)&&t.spec.actor==='deepseek'))return null;
+  if(c.store.all('task').some(t=>['running','uncertain','taking_over'].includes(t.status)&&t.spec.actor==='deepseek'&&!c.store.get('goal',t.goalId).manifest.providerPolicy))return null;
   if(!reserved&&c.store.all('task').some(t=>['queued','suspended'].includes(t.status)&&t.spec.actor==='deepseek'&&c.eligible(t)))return null;
   const g=reserved?c.store.get('goal',reserved.goalId):c.store.all('goal').find(g=>g.status==='active'&&g.deadline>c.now()&&g.manifest.mode.planner==='deepseek'&&!c.store.all('task').some(t=>t.goalId===g.id)&&!['completed','blocked','partial'].includes(c.store.maybe('planning',g.id)?.status));
   if(!g)return null;
+  if(!g.manifest.providerPolicy&&c.store.all('task').some(t=>['running','uncertain','taking_over'].includes(t.status)&&t.spec.actor==='deepseek'))return null;
   const lease=this.lease(),pending=c.store.maybe('planning',g.id);
   if(isOvernightV2(g.manifest)&&pending?.providerWait){
    const wait=pending.providerWait;
@@ -114,7 +116,7 @@ export class Planner {
   if(request?.status==='completed')result=request.result;
   else if(request)return this.fail(p,'Planning request outcome is ambiguous and remains spent',true,{g,lease});
   else{
-   request=c.store.tx(()=>{
+   try{request=c.store.tx(()=>{
     const {goal,current}=this.fence(g,p,lease);
     if(goal.deadline<=c.now()){
      current.status='partial';current.reason='Original planning window closed; saved evidence retained';current.owner=null;
@@ -126,14 +128,16 @@ export class Planner {
     }
     c.liveGoal(goal);
     this.verifyBinding(goal,current);
+    const capacityResource=assertInferenceCapacity(c,goal,current.providerBinding);
     if(c.store.spent(g.id).model>=3)throw Error('Planning request budget exhausted');
-    const id=randomUUID(),data={owner,reservedAt:c.now(),...(lease?{ownerLease:lease}:{}),
+    const id=randomUUID(),data={owner,reservedAt:c.now(),...(capacityResource?{capacityResource}:{}),...(lease?{ownerLease:lease}:{}),
      ...(current.reconnectUntil!==undefined?{reconnectUntil:current.reconnectUntil}:{}),
      ...(current.providerBinding?{providerBinding:current.providerBinding}:{}),
      ...(g.manifest.workerProfile?{workerProfile:g.manifest.workerProfile}:{})};
     c.store.db.prepare('INSERT INTO requests VALUES(?,?,?,?,?,?)').run(id,g.id,key,'model','reserved',JSON.stringify(data));
     c.emit('planning.reserved',g.id,null,{id,attempt:p.attempt});return {id,...data};
    });
+   }catch(error){if(error instanceof CapacityWaitError)return {waiting:true,reasonCode:error.reasonCode,planning:c.store.get('planning',g.id)};throw error;}
    if(!request)return c.store.get('planning',g.id);
    let invoked=false,builtIn=false,dispatched=false,dispatchPrevented=false;
    const beforeDispatch=()=>{

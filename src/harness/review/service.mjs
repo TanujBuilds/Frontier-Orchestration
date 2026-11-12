@@ -1,3 +1,4 @@
+import {assertInferenceCapacity,inferenceWait,CapacityWaitError} from '../scheduling/capacity.mjs';
 import {randomUUID} from 'node:crypto';
 import {digest,keys,identifier,integer} from '../contracts.mjs';
 import {normalizeReviewPolicy,normalizeVerdict,assertReviewMode,assertBinding,bindingFields,reviewerIdentity} from './contracts.mjs';
@@ -47,6 +48,10 @@ export class ReviewService {
   keys(input,[...bindingFields],'review reservation');
   const command={op:'review.reserve',...input},old=commandReplay(this.c,key,command);if(old)return old.result;
   const context=await this.context(input.taskId),{binding,policy}=context;assertBinding(input,binding);
+  return this.#reserveContext(input,key,context);
+ }
+ #reserveContext(input,key,context){
+  const command={op:'review.reserve',...input},{binding,policy}=context;
   if(policy.source==='host'&&this.c.selectedHost&&this.c.selectedHost!==policy.hostId)throw Error('Selected host differs from approved reviewer host');
   if(policy.source==='host'&&this.hostRegistry)this.hostRegistry.get(policy.hostId);
   return this.c.store.command(key,command,()=>{
@@ -152,14 +157,16 @@ export class ReviewService {
   const profile=context.policy.reviewer,binding={version:1,providerId:profile.id,revision:profile.revision,profileHash:digest(profile),policyHash:context.g.manifest.reviewPolicyHash};
   if(!this.providers||digest(this.providers.get(profile.id,profile.revision))!==digest(profile)||typeof this.providers.createReviewer!=='function')throw Error('Configured reviewer identity unavailable');
   const client=this.providers.createReviewer(binding);
-  if(c.store.db.prepare("SELECT 1 FROM requests WHERE kind='apiReview' AND status='reserved'").get())throw Error('An API review has uncertain ownership; no fallback dispatch');
-  const reservation=await this.reserve(input,`api-ticket-${digest(key)}`);
+  if(c.store.db.prepare("SELECT 1 FROM requests WHERE task_id=? AND kind='apiReview' AND status='reserved'").get(input.taskId))throw Error('An API review has uncertain ownership; no fallback dispatch');
+  const capacityWait=inferenceWait(c,context.g,binding);if(capacityWait)return {waiting:true,...capacityWait};
+  let reservation;
   const request=c.store.tx(()=>{
+   const capacityResource=assertInferenceCapacity(c,context.g,binding);
+   reservation=this.#reserveContext(input,`api-ticket-${digest(key)}`,context);
    const t=c.getTask(input.taskId),{g,policy}=policyFor(c,t);
    if(policy.source!=='api'||g.hash!==context.g.hash)throw Error('API review approval changed');
-   if(c.store.db.prepare("SELECT 1 FROM requests WHERE kind='apiReview' AND status='reserved'").get())throw Error('An API review has uncertain ownership; no fallback dispatch');
-   const row={id:c.store.get('review_ticket',reservation.ticketId).requestId,taskId:t.id,key:requestKey,kind:'apiReview',status:'reserved',inputHash:digest(input),ticketId:reservation.ticketId,reviewerBinding:binding,reservedAt:c.now(),requestOutcome:'unknown'};
-   c.store.db.prepare('INSERT INTO requests VALUES(?,?,?,?,?,?)').run(row.id,t.id,row.key,row.kind,row.status,JSON.stringify({runKey:key,inputHash:row.inputHash,ticketId:row.ticketId,reviewerBinding:binding,reservedAt:row.reservedAt,requestOutcome:'unknown'}));return row;
+   const row={id:c.store.get('review_ticket',reservation.ticketId).requestId,taskId:t.id,key:requestKey,kind:'apiReview',status:'reserved',inputHash:digest(input),ticketId:reservation.ticketId,reviewerBinding:binding,reservedAt:c.now(),capacityResource,requestOutcome:'unknown'};
+   c.store.db.prepare('INSERT INTO requests VALUES(?,?,?,?,?,?)').run(row.id,t.id,row.key,row.kind,row.status,JSON.stringify({runKey:key,inputHash:row.inputHash,ticketId:row.ticketId,reviewerBinding:binding,reservedAt:row.reservedAt,capacityResource,requestOutcome:'unknown'}));return row;
   });
   c.emit('model.request.started',context.g.id,input.taskId,{requestId:request.id,kind:'apiReview',role:'reviewer',providerBinding:binding});
   const timeout=AbortSignal.timeout(Math.max(1,Math.min(300000,input.expiresAt-c.now()))),combined=signal?AbortSignal.any([signal,timeout]):timeout;
@@ -177,10 +184,10 @@ export class ReviewService {
        digest((c.providerRegistry??this.providers).get(profile.id,profile.revision))!==digest(profile))throw Error('Review authority changed');
     assertBinding(input,ticket.binding);
    }});
-   c.store.tx(()=>{const saved=c.store.request(input.taskId,requestKey);c.store.db.prepare("UPDATE requests SET status='completed',data=? WHERE id=?").run(JSON.stringify({runKey:key,inputHash:request.inputHash,ticketId:request.ticketId,reviewerBinding:binding,reservedAt:request.reservedAt,requestOutcome:'completed',savedAt:c.now(),result}),saved.id);const savedTicket=c.store.get('review_ticket',reservation.ticketId);savedTicket.reviewer={...savedTicket.reviewer,reportedModel:result.reportedModel??null,provenance:result.reportedModel?'reported':'unknown',usage:result.usage??null};c.store.put('review_ticket',savedTicket);});
+   c.store.tx(()=>{const saved=c.store.request(input.taskId,requestKey);c.store.db.prepare("UPDATE requests SET status='completed',data=? WHERE id=?").run(JSON.stringify({runKey:key,inputHash:request.inputHash,ticketId:request.ticketId,reviewerBinding:binding,reservedAt:request.reservedAt,capacityResource:request.capacityResource,requestOutcome:'completed',savedAt:c.now(),result}),saved.id);const savedTicket=c.store.get('review_ticket',reservation.ticketId);savedTicket.reviewer={...savedTicket.reviewer,reportedModel:result.reportedModel??null,provenance:result.reportedModel?'reported':'unknown',usage:result.usage??null};c.store.put('review_ticket',savedTicket);});
   }catch(error){
    const outcome=['not_dispatched','completed'].includes(error.requestOutcome)?error.requestOutcome:'unknown';
-   c.store.tx(()=>{const saved=c.store.request(input.taskId,requestKey);c.store.db.prepare('UPDATE requests SET status=?,data=? WHERE id=?').run(outcome==='unknown'?'reserved':'failed',JSON.stringify({runKey:key,inputHash:request.inputHash,ticketId:request.ticketId,reviewerBinding:binding,reservedAt:request.reservedAt,requestOutcome:outcome==='unknown'?'unknown':outcome,error:'API review failed; explicit operator recovery required'}),saved.id);});
+   c.store.tx(()=>{const saved=c.store.request(input.taskId,requestKey);c.store.db.prepare('UPDATE requests SET status=?,data=? WHERE id=?').run(outcome==='unknown'?'reserved':'failed',JSON.stringify({runKey:key,inputHash:request.inputHash,ticketId:request.ticketId,reviewerBinding:binding,reservedAt:request.reservedAt,capacityResource:request.capacityResource,requestOutcome:outcome==='unknown'?'unknown':outcome,error:'API review failed; explicit operator recovery required'}),saved.id);});
    throw Error(outcome==='unknown'?'API review outcome uncertain and may be billed; request remains spent, no retry':'API review failed; reservation remains spent, no fallback');
   }
   c.emit('model.request.completed',context.g.id,input.taskId,{requestId:request.id,kind:'apiReview',role:'reviewer',providerBinding:binding,requestedModel:result.requestedModel,reportedModel:result.reportedModel??null,usage:result.usage??null});

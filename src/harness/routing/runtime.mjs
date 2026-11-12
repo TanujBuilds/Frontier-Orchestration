@@ -1,3 +1,4 @@
+import {inferenceWait} from '../scheduling/capacity.mjs';
 import {digest,normalizeTask,isStartedLegacyTask} from '../contracts.mjs';
 import {selectRoute} from './router.mjs';
 import {codingModelReplayEligible} from '../coding.mjs';
@@ -18,17 +19,7 @@ export function taskRoutingManifest(c,goal,task){
  return {...goal.manifest,routingPolicy:original.routingPolicy,routingPolicyHash:original.routingPolicyHash};
 }
 export function remainingCalls(c,task){return Math.max(0,task.spec.limits.modelCalls-(c.store.spent(task.id).model??0));}
-function busy(c,goal,binding){
- const selected=goal.manifest.providerPolicy.workers.find(p=>p.id===binding.providerId);
- return c.store.db.prepare("SELECT data FROM requests WHERE status='reserved' OR (status='failed' AND json_extract(data,'$.requestOutcome')='unknown')").all().some(row=>{
-  const data=JSON.parse(row.data),other=data.providerBinding??data.reviewerBinding;
-  if(!other)return false;
-  if(other.profileHash===binding.profileHash)return true;
-  const profiles=c.store.all('goal').flatMap(g=>[...(g.manifest.providerPolicy?.workers??[]),...(g.manifest.reviewPolicy?.reviewer?[g.manifest.reviewPolicy.reviewer]:[])]);
-  const profile=profiles.find(p=>p.id===other.providerId&&p.revision===other.revision&&digest(p)===other.profileHash);
-  return profile&&(profile.capacityGroup===selected.capacityGroup||profile.baseUrl===selected.baseUrl);
- });
-}
+function busy(c,goal,binding){return Boolean(inferenceWait(c,goal,binding));}
 /** Occupancy of an established pin is independent of current routing preferences.
  * Exact completed model replies need no inference resource, even at zero budget. */
 export function pinnedResourceWait(c,goal,task){

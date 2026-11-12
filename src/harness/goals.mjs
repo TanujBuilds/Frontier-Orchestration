@@ -1,3 +1,4 @@
+import {assertCapacityConfiguration} from './scheduling/capacity.mjs';
 import {isOvernightV2,overnightCompletionReady} from './overnight.mjs';
 import {assertOvernightPreflight} from './overnight-preflight.mjs';
 import {randomUUID} from 'node:crypto';
@@ -14,7 +15,7 @@ export class Goals {
  prepareRevision(input,key){return this.c.store.command(key,{op:'goal.revise.prepare',...input},()=>{
   const g=this.c.store.get('goal',input.goalId);if(['completed','partial'].includes(g.status))throw Error('Goal is terminal');if(g.hash!==input.expectedHash)throw Error('Goal approval changed');
   const manifest=this.c.goalManifest(input.manifest,undefined,{historic:!g.manifest.reviewPolicy&&!input.manifest.reviewPolicy});if(manifest.submissionId!==g.manifest.submissionId)throw Error('Goal submission identity cannot change');
-  assertWorkerUnchanged(g,manifest);
+  assertWorkerUnchanged(g,manifest);assertCapacityConfiguration(this.c,manifest);
   if(manifest.environment!==g.manifest.environment)throw Error('Execution environment cannot change after approval');
   if(g.integration||this.c.store.all('task').some(t=>t.goalId===g.id&&t.startedAt)){
    if(manifest.project?.repo!==g.manifest.project?.repo||manifest.project?.baseCommit!==g.manifest.project?.baseCommit)throw Error('Started work requires explicit stale-base handling in a new goal');
@@ -26,7 +27,7 @@ export class Goals {
   if(['completed','partial'].includes(g.status))throw Error('Goal is terminal');
   if(input.hash!==revision.hash)throw Error('Exact revision approval hash required');if(g.hash!==revision.previousHash||revision.status!=='draft')throw Error('Revision is stale');
   assertWorkerUnchanged(g,revision.manifest);
-  this.c.verifyGoalBinding(revision);
+  this.c.verifyGoalBinding(revision);assertCapacityConfiguration(this.c,revision.manifest,{excludeGoalId:g.id});
   if(!quiescent(this.c,g.id))throw Error('Verify quiescent owners before changing an approved version');
   if(this.c.now()>=g.deadline)throw Error('Original deadline exceeded');
   if(isOvernightV2(revision.manifest))assertOvernightPreflight(this.c,{...g,hash:revision.hash,manifest:revision.manifest});

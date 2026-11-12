@@ -129,6 +129,5 @@ export function normalizeProviderPolicy(raw,catalog){
  const plannerWorkerId=identifier(raw.plannerWorkerId,'planner worker id'),defaultWorkerId=identifier(raw.defaultWorkerId,'default worker id');
  if(!ids.has(plannerWorkerId)||!ids.has(defaultWorkerId))throw Error('Provider policy planner/default must belong to worker pool');
  const maxConcurrentTasks=integer(Object.hasOwn(raw,'maxConcurrentTasks')?raw.maxConcurrentTasks:1,'maximum concurrent tasks',1,4);
- if(maxConcurrentTasks!==1)throw Error('Provider execution remains sequential in this release');
  return {version:1,workers,plannerWorkerId,defaultWorkerId,maxConcurrentTasks,capacityGroups};
 }

@@ -90,9 +90,9 @@ test('worker planning persists a separate planner pin and profile changes change
  assert.notEqual(g.hash,next.hash);assert.notEqual(g.manifest.providerPolicyHash,next.manifest.providerPolicyHash);
 });
 
-test('dispatch schema rejects private fields and stage11 rejects concurrency before creating state',async t=>{
+test('dispatch schema rejects private fields and concurrency outside bounded range before creating state',async t=>{
  const f=await fixture(t);const initial=counts(f.c);
- for(const [providerPolicy,reason] of [[policy(undefined,{maxConcurrentTasks:2}),/concurrent|sequential/i],[{...policy(),workers:[privateProfile()]},/credential|profile/i],[policy(undefined,{secret:'dummy'}),/unknown|policy/i]]){
+ for(const [providerPolicy,reason] of [[policy(undefined,{maxConcurrentTasks:5}),/concurrent/i],[{...policy(),workers:[privateProfile()]},/credential|profile/i],[policy(undefined,{secret:'dummy'}),/unknown|policy/i]]){
   await assert.rejects(f.d.invoke('goal_prepare',{manifest:rawGoal({providerPolicy}),idempotencyKey:'invalid'}),reason);
   assert.deepEqual(counts(f.c),initial);
  }

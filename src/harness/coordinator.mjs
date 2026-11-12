@@ -16,6 +16,9 @@ import {recordFailedGate} from './repair-progress.mjs';
 import {matches} from '../project/contracts.mjs';
 import {assertRoutingApproval,assertRoutePin,isRoutedTask,routeDecision,recordRoutingWait,pinnedResourceWait,taskRoutingManifest} from './routing/runtime.mjs';
 
+import {capacitySnapshot,canClaim,configureServiceCapacity,assertCapacityConfiguration,assertInferenceCapacity} from './scheduling/capacity.mjs';
+import {orderedCandidates} from './scheduling/scheduler.mjs';
+
 const TERMINAL=new Set(['accepted','failed','partial','cancelled']);
 const SLOT=new Set(['running','uncertain','taking_over']);
 const rank={background:0,normal:1,blocking:2};
@@ -67,12 +70,13 @@ function savedFailedGate(c,t,g){
  return verified.candidateId===gate.candidateId&&verified.failureId===gate.failureId&&verified.signature===gate.signature;
 }
 export class Coordinator {
- constructor({root,now=Date.now,registry=new Registry(),beta=false,workerProfile,verifyCurrentWorker,providerRegistry,selectedHost,hostRegistry}={}){
+ constructor({root,now=Date.now,registry=new Registry(),beta=false,workerProfile,verifyCurrentWorker,providerRegistry,selectedHost,hostRegistry,serviceMaxConcurrentTasks}={}){
   if(providerRegistry&&!['get','snapshot','createClient'].every(method=>typeof providerRegistry[method]==='function'))throw Error('A normalized provider registry is required');
   this.providerRegistry=providerRegistry??null;
   this.selectedHost=typeof selectedHost==='string'?selectedHost:selectedHost?.id??null;if(this.selectedHost&&!HOST_IDS.includes(this.selectedHost))throw Error('Unsupported selected host');this.hostRegistry=hostRegistry??null;
   this.beta=beta;this.verifyCurrentWorker=verifyCurrentWorker;this.workerProfile=workerProfile?normalizeWorkerProfile(workerProfile):null;
   this.store=new Store(root);this.now=now;this.registry=registry;
+  try{this.serviceMaxConcurrentTasks=this.store.tx(()=>configureServiceCapacity(this,serviceMaxConcurrentTasks));}catch(error){this.store.close();throw error;}
   for(const record of this.store.all('mode')){const m=record.definition??record;if(!this.registry.modes.has(`${m.id}@${m.version}`))this.registry.registerMode(m);}
   for(const record of this.store.all('workflow')){const w=record.definition??record;if(!this.registry.workflows.has(`${w.id}@${w.version}`))this.registry.registerWorkflow(w);}
   this.learning=new Learning({c:this});this.reviewService=new ReviewService({c:this,providers:this.providerRegistry,hostRegistry:this.hostRegistry});
@@ -245,13 +249,14 @@ export class Coordinator {
   }
   if(!legacy)raw=this.reviewPreparation(raw,{portable});
   const manifest=legacy?normalizeGoal(raw,this.registry,this.providerRegistry):this.goalManifest(raw);return this.store.command(key,{op:'goal.prepare',manifest},()=>{
+  assertCapacityConfiguration(this,manifest);
   const g=this.store.submission('goal','',manifest.submissionId,digest(manifest),id=>({id,manifest,hash:digest(manifest),version:1,status:'draft',createdAt:this.now(),activatedAt:null,deadline:null}));
   this.emit('goal.prepared',g.id,null,{hash:g.hash});return g;
  });}
  activateGoal(input,key){return this.store.command(key,{op:'goal.activate',...input},()=>{
   const g=this.store.get('goal',input.goalId);if(input.hash!==g.hash)throw Error('Exact goal approval hash required');
   if(g.status==='draft'){
-   this.verifyGoalBinding(g);
+   this.verifyGoalBinding(g);assertCapacityConfiguration(this,g.manifest,{excludeGoalId:g.id});
    assertOvernightPreflight(this,g);
    g.status='active';g.activatedAt??=this.now();g.deadline??=g.activatedAt+g.manifest.limits.hours*3600000;
    this.store.put('goal',g);this.emit('goal.activated',g.id,null,{hash:g.hash,version:g.version});
@@ -339,18 +344,19 @@ export class Coordinator {
  claimNext(owner,readiness){identifier(owner,'owner');return this.store.tx(()=>{
   const lease=this.store.maybe('lease','coordinator');
   if(lease)this.currentLease(lease.token);
-  if(this.store.all('planning').some(p=>['running','uncertain'].includes(p.status)))return null;
-  const tasks=this.store.all('task');if(tasks.some(t=>SLOT.has(t.status)&&t.spec.actor==='deepseek'))return null;
+  const tasks=this.store.all('task'),snapshot=capacitySnapshot(this);
+  const existing=tasks.find(t=>t.status==='running'&&t.owner===owner&&t.interruptedOwner!==owner&&this.store.get('goal',t.goalId).manifest.providerPolicy);if(existing){this.owned(existing.id,owner);return this.getTask(existing.id);}
   if(readiness){const target=this.store.get('task',readiness.taskId),goal=this.store.get('goal',target.goalId);if(target.hash!==readiness.taskHash||digest(target.spec)!==readiness.taskHash||goal.hash!==readiness.goalHash||goal.version!==readiness.goalVersion||target.goalVersion!==goal.version||(this.workerLease?.generation??null)!==readiness.lease||!this.eligible(target))return null;}
-  const priorities=this.effectivePriorities();const candidates=tasks.filter(t=>['queued','suspended'].includes(t.status)&&t.spec.actor==='deepseek'&&t.executionActor!=='codex'&&this.eligible(t)).sort((a,b)=>priorities.get(b.id)-priorities.get(a.id)||a.sequence-b.sequence);
+  const candidates=orderedCandidates(this,tasks);
   for(const t of candidates){
    const g=this.store.get('goal',t.goalId);
+   const admission=canClaim({task:t,goal:g,snapshot});if(!admission.allowed){this.lastCapacityWait={taskId:t.id,...admission};continue;}
    let routed=false;
    if(isRoutedTask(g,t)&&!t.providerBinding){
     let decision;try{decision=routeDecision(this,g,t,readiness?.taskId===t.id?readiness.observation:undefined);}
     catch(error){this.settleTask(t,'blocked',String(error.message).slice(0,500));continue;}
     if(decision.status==='ineligible'){this.settleTask(t,'blocked',decision.explanation);continue;}
-    if(decision.status!=='selected'){if(readiness?.taskId===t.id)recordRoutingWait(this,t,g,decision);return null;}
+    if(decision.status!=='selected'){if(readiness?.taskId===t.id)recordRoutingWait(this,t,g,decision);continue;}
     const route={version:1,goalHash:g.hash,goalVersion:g.version,taskHash:t.hash,decision},pin={providerBinding:decision.binding,route,routeHash:digest(route)};
     try{this.verifyWorkerBinding(g,{...t,...pin});}
     catch(error){this.settleTask(t,'blocked','Approved API worker binding cannot be used: '+String(error.message).slice(0,500));continue;}
@@ -363,9 +369,10 @@ export class Coordinator {
     }
    }
    const wait=pinnedResourceWait(this,g,t);
-   if(wait){recordRoutingWait(this,t,g,wait);return null;}
+   if(wait){recordRoutingWait(this,t,g,wait);continue;}
    delete t.routingWait;
    t.startedAt??=this.now();t.deadline??=Math.min(g.deadline,t.startedAt+t.spec.limits.seconds*1000);t.owner=owner;t.status='running';t.yieldRequested=false;
+   if(g.manifest.providerPolicy)t.runnerGeneration=(t.runnerGeneration??0)+1;
    delete t.interruptedOwner;
    if(lease)t.ownerLease=lease.generation;else delete t.ownerLease;
    this.store.put('task',t);if(routed)this.emit('task.routed',t.goalId,t.id,{routeHash:t.routeHash,route:t.route});this.learning.pin(t.id);this.emit('task.claimed',t.goalId,t.id,{owner});return this.getTask(t.id);
@@ -393,6 +400,7 @@ export class Coordinator {
    if(saved&&(digest(saved.providerBinding??null)!==digest(t.providerBinding)||saved.routeHash!==t.routeHash))throw Error('Saved request provider binding differs from the task');
   }
   if(saved)return {...saved,cached:true};
+  const capacityResource=kind==='model'?assertInferenceCapacity(this,g,t.providerBinding):null;
   const wait=kind==='model'?t.providerWait:null;
   if(wait){
    if(wait.readyOwner!==owner||this.now()>=wait.until)throw Error('Original provider reconnect window exhausted or readiness no longer verified');
@@ -403,7 +411,7 @@ export class Coordinator {
   if(kind==='model'&&!g.manifest.providerPolicy)this.verifyWorkerBinding(g);
   const profile=kind==='model'?g.manifest.workerProfile:null;
   if(profile&&!t.workerProfile){t.workerProfile=profile;this.store.put('task',t);}
-  const id=randomUUID(),data={owner,reservedAt:this.now(),...(profile?{workerProfile:profile}:{}),...(kind==='model'&&t.providerBinding?{providerBinding:t.providerBinding}:{}),...(kind==='model'&&t.routeHash?{routeHash:t.routeHash}:{}),...(wait?{reconnectUntil:wait.until}:{})};this.store.db.prepare('INSERT INTO requests VALUES(?,?,?,?,?,?)').run(id,taskId,key,kind,'reserved',JSON.stringify(data));
+  const id=randomUUID(),data={owner,reservedAt:this.now(),...(t.runnerGeneration?{taskGeneration:t.runnerGeneration}:{}),...(capacityResource?{capacityResource}:{}),...(profile?{workerProfile:profile}:{}),...(kind==='model'&&t.providerBinding?{providerBinding:t.providerBinding}:{}),...(kind==='model'&&t.routeHash?{routeHash:t.routeHash}:{}),...(wait?{reconnectUntil:wait.until}:{})};this.store.db.prepare('INSERT INTO requests VALUES(?,?,?,?,?,?)').run(id,taskId,key,kind,'reserved',JSON.stringify(data));
   this.emit('request.reserved',t.goalId,taskId,{id,key,kind});return {id,task_id:taskId,key,kind,status:'reserved',...data,cached:false};
  });}
  ownedRequest(id,owner){
@@ -414,6 +422,7 @@ export class Coordinator {
   if(data.owner===undefined&&row.kind==='codexReview')return {row,data,t:this.store.get('task',row.task_id)};
   const t=this.owned(row.task_id,owner??data.owner);
   if(t.status!=='running'||t.owner!==data.owner)throw Error('Worker request ownership conflict');
+  if(data.taskGeneration!==undefined&&data.taskGeneration!==t.runnerGeneration)throw Error('Worker request generation conflict');
   return {row,data,t};
  }
  saveRequest(id,result,owner){return this.store.tx(()=>{
