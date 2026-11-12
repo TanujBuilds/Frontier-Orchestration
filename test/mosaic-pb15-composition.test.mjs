@@ -151,3 +151,90 @@ test('actual Codex backend honors explicit approval through worker candidate and
  for(const checks of [saved.result.checks,saved.integration.checks])for(const check of checks){assert.equal(check.passed,true);assert.equal(check.backend.id,'codex-sandbox');assert.equal(check.backend.revision,1);}
  assert.equal(saved.result.sandbox.backend.id,'codex-sandbox');assert.equal(c.getGoal(g.id).manifest.executionPolicy.backend,'codex-sandbox');
 });
+
+for(const mutation of ['executable','settings'])test(`API review ${mutation} change during credential lookup blocks POST and preserves the original spent reservation`,async t=>{
+ const {createServer}=await import('node:http');
+ const {ProviderRegistry}=await import('../src/harness/providers/registry.mjs');
+ const root=mkdtempSync(path.join(os.tmpdir(),'pb15-dispatch-fence-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
+ const executable=path.join(root,'sandbox'),settingsFile=path.join(root,'settings.json');writeFileSync(executable,'never executed',{mode:0o700});
+ const originalSettings={executionPolicy:codex,codexPath:executable};writeFileSync(settingsFile,JSON.stringify(originalSettings));
+ const {readFileSync}=await import('node:fs');let posts=0,lookups=0,c,observed;
+ const server=createServer(async(req,res)=>{for await(const chunk of req){}posts++;res.writeHead(200,{'content-type':'application/json'}).end(JSON.stringify({model:'fixture-model',choices:[{message:{role:'assistant',content:JSON.stringify({decision:'accept',feedback:'Fixture review',findings:[]})},finish_reason:'stop'}]}));});
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>{server.closeAllConnections();server.close(resolve);}));
+ const profile={schema:1,id:'reviewer',revision:'r1',displayName:'Fixture reviewer',transport:'openai-chat',baseUrl:`http://127.0.0.1:${server.address().port}/v1`,model:'fixture-model',roles:['reviewer'],capabilities:{workerProtocol:null,transports:['json'],modelDiscovery:'manual',taskKinds:[]},maxContextTokens:null,maxOutputTokens:2048,concurrency:1,capacityGroup:'fixture',credentialRef:'fixture-key-ref',streaming:false};
+ const providers=ProviderRegistry({profiles:[profile],credentialResolver:async()=>{lookups++;await new Promise(resolve=>setImmediate(resolve));observed={ticket:c.store.all('review_ticket')[0],request:c.store.db.prepare("SELECT id,key FROM requests WHERE kind='apiReview'").get()};if(mutation==='executable')rmSync(executable);else writeFileSync(settingsFile,JSON.stringify({...originalSettings,executionPolicy:native}));return 'private-fixture-token';}});
+ c=new Coordinator({root:path.join(root,'state'),selectedHost:'cursor',providerRegistry:providers,codexPath:executable,verifyCurrentWorker:()=>{if(digest(JSON.parse(readFileSync(settingsFile,'utf8')))!==digest(originalSettings))throw Error('Disposable execution settings changed');}});t.after(()=>c.close());c.acquireWorker('owner');
+ const goal=c.preparePortableGoal({submissionId:'review-fence',objective:'Review bounded answer',acceptance:['Clear'],mode:'collaborative',environment:'fixture',executionPolicy:codex,reviewPolicy:{version:1,source:'api',reviewer:providers.get('reviewer','r1'),fallback:'wait'},limits:{hours:1,maxTasks:1,reviewAgentRuns:2}},'prepare');c.activateGoal({goalId:goal.id,hash:goal.hash},'activate');
+ const task=c.submitTask({goalId:goal.id,submissionId:'answer',kind:'consult',actor:'deepseek',objective:'Fixture answer',acceptance:['Clear']},'task');assert.equal(c.claimNext('owner').id,task.id);c.completeTask(task.id,{content:'Bounded fixture answer'},'owner',{reviewRequired:true});
+ const binding=(await c.reviewService.inbox({goalId:goal.id})).items[0].binding;
+ await assert.rejects(c.reviewService.runApi(binding,'review-fence'),/reservation remains spent|no fallback/i);
+ assert.equal(posts,0);assert.equal(lookups,1);assert.equal(c.getTask(task.id).reviews,1);assert.equal(c.store.spent(task.id).apiReview,1);assert.equal(c.store.spent(task.id).model??0,0);
+ const saved=c.store.request(task.id,observed.request.key),ticket=c.store.get('review_ticket',observed.ticket.id);assert.equal(saved.id,observed.request.id);assert.equal(saved.status,'failed');assert.equal(saved.requestOutcome,'not_dispatched');
+ assert.deepEqual(ticket,observed.ticket);assert.equal(c.getTask(task.id).status,'awaiting_review');assert.equal(c.getTask(task.id).reviewed,false);
+ writeFileSync(executable,'never executed',{mode:0o700});writeFileSync(settingsFile,JSON.stringify(originalSettings));
+ await assert.rejects(c.reviewService.runApi(binding,'review-fence'),/spent|retry/i);assert.equal(posts,0);assert.equal(lookups,1);assert.equal(c.store.all('review_ticket').length,1);assert.equal(c.store.spent(task.id).apiReview,1);
+});
+
+test('unchanged native default restarts an explicitly approved Codex goal without rebinding it',t=>{
+ const options={executionPolicy:native,codexPath:process.execPath},f=fixture(t,options);
+ const raw={...legacy,executionPolicy:codex},goal=f.c.prepareGoal(raw,'override');f.c.activateGoal({goalId:goal.id,hash:goal.hash},'activate');
+ const before=f.c.getGoal(goal.id);assert.deepEqual(f.restart(options).getGoal(goal.id),before);assert.deepEqual(f.c.prepareGoal(raw,'override'),goal);
+});
+
+test('unchanged absent default restarts an explicitly native draft while retaining its containment block',t=>{
+ const f=fixture(t),raw={...legacy,executionPolicy:native},goal=f.c.prepareGoal(raw,'blocked-override');
+ assert.throws(()=>f.c.activateGoal({goalId:goal.id,hash:goal.hash},'activate'),/containment/i);
+ assert.deepEqual(f.restart().prepareGoal(raw,'blocked-override'),goal);assert.throws(()=>f.c.activateGoal({goalId:goal.id,hash:goal.hash},'activate-again'),/containment/i);
+});
+
+test('restart detects trusted executable byte and path changes independently of goal overrides',t=>{
+ const root=mkdtempSync(path.join(os.tmpdir(),'pb15-config-runtime-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
+ const a=path.join(root,'sandbox-a'),b=path.join(root,'sandbox-b');writeFileSync(a,'unused A',{mode:0o700});writeFileSync(b,'unused B',{mode:0o700});
+ const options={executionPolicy:native,codexPath:a},f=fixture(t,options),goal=f.c.prepareGoal({...legacy,executionPolicy:codex},'override');
+ const before=f.c.getGoal(goal.id);assert.throws(()=>f.restart({...options,codexPath:b}),/execution.*settings|runtime.*changed/i);
+ assert.deepEqual(f.restart(options).getGoal(goal.id),before);
+ writeFileSync(a,'changed unused A',{mode:0o700});assert.throws(()=>f.restart(options),/execution.*settings|runtime.*changed/i);
+ writeFileSync(a,'unused A',{mode:0o700});assert.deepEqual(f.restart(options).getGoal(goal.id),before);
+});
+
+async function exactPreflightFixture(t,{legacyConfig=false}={}){
+ const {git}=await import('../src/project/process.mjs');const {OvernightPreflight}=await import('../src/harness/overnight-preflight.mjs');
+ const root=mkdtempSync(path.join(os.tmpdir(),'pb15-preflight-runtime-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
+ const repo=path.join(root,'repo'),a=path.join(root,'sandbox-a'),b=path.join(root,'sandbox-b');mkdirSync(path.join(repo,'src'),{recursive:true});mkdirSync(path.join(repo,'checks'));writeFileSync(path.join(repo,'src/value.mjs'),'export const value=1;\n');writeFileSync(path.join(repo,'checks/check.mjs'),'never executed');writeFileSync(a,'unused A',{mode:0o700});writeFileSync(b,'unused B',{mode:0o700});
+ await git(repo,'init','-q');await git(repo,'add','.');await git(repo,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-qm','Base');
+ const options=legacyConfig?{}:{codexPath:a};const c=new Coordinator({root:path.join(root,'state'),...options});t.after(()=>c.close());
+ const raw={submissionId:'overnight-exact',objective:'Exact preflight',acceptance:['Checked'],mode:'overnight_review',environment:'fixture',executionPolicy:codex,project:{repo,baseCommit:await git(repo,'rev-parse','HEAD'),readPaths:['src/','checks/'],writePaths:['src/'],checks:[{id:'starter',argv:[process.execPath,'checks/check.mjs']},{id:'final',argv:[process.execPath,'checks/check.mjs']}]},overnightPolicy:{preflightCheckIds:['starter'],finalOnlyCheckIds:['final']}};
+ const goal=c.prepareGoal(raw,'prepare');let runs=0;const preflight=new OvernightPreflight({c,config:{codexPath:a},checksFactory:()=>({backendIdentity:{id:'codex-sandbox',revision:1},verify:async()=>({fixture:true}),run:async specs=>{runs++;return specs.map(check=>({id:check.id,passed:true,code:0}));}})});
+ const receipt=await preflight.run({goalId:goal.id,hash:goal.hash},'preflight');assert.equal(receipt.passed,true);assert.deepEqual(await preflight.run({goalId:goal.id,hash:goal.hash},'replay'),receipt);assert.equal(runs,1);
+ return {c,raw,goal,receipt,preflight,a,b};
+}
+
+for(const revision of [false,true])test(`exact overnight ${revision?'revision ':''}activation compares the current trusted executable with its saved receipt`,async t=>{
+ const f=await exactPreflightFixture(t);let g=f.goal;
+ if(revision){f.c.activateGoal({goalId:g.id,hash:g.hash},'activate');const r=new Goals(f.c).prepareRevision({goalId:g.id,expectedHash:g.hash,manifest:{...f.raw,objective:'Revised exact preflight'}},'revision');await f.preflight.run({goalId:g.id,hash:r.hash},'revision-preflight');g={...g,hash:r.hash,revisionId:r.id};}
+ const receipt=f.c.store.get('overnight_preflight',g.id);f.c.executionConfig.codexPath=f.b;
+ const activate=key=>revision?new Goals(f.c).activateRevision({revisionId:g.revisionId,hash:g.hash},key):f.c.activateGoal({goalId:g.id,hash:g.hash},key);
+ assert.throws(()=>activate('wrong-runtime'),/preflight.*changed|runtime.*changed/i);assert.deepEqual(f.c.store.get('overnight_preflight',g.id),receipt);
+ f.c.executionConfig.codexPath=f.a;assert.equal(activate('correct-runtime').status,'active');assert.deepEqual(f.c.store.get('overnight_preflight',g.id),receipt);
+});
+
+test('legacy caller without trusted executable configuration retains its saved preflight fallback',async t=>{
+ const f=await exactPreflightFixture(t,{legacyConfig:true});assert.equal(f.c.executionConfig.codexPath,undefined);assert.equal(f.c.activateGoal({goalId:f.goal.id,hash:f.goal.hash},'activate').status,'active');assert.deepEqual(f.c.store.get('overnight_preflight',f.goal.id),f.receipt);
+});
+
+test('actual A-to-B restart rejects prepared overnight work, while unchanged A reuses the exact receipt',async t=>{
+ const {OvernightPreflight}=await import('../src/harness/overnight-preflight.mjs');const f=await exactPreflightFixture(t),root=f.c.store.root;f.c.close();
+ assert.throws(()=>new Coordinator({root,codexPath:f.b}),/execution.*settings|runtime.*changed/i);
+ const restored=new Coordinator({root,codexPath:f.a});t.after(()=>restored.close());
+ assert.deepEqual(restored.store.get('overnight_preflight',f.goal.id),f.receipt);
+ const replay=new OvernightPreflight({c:restored,config:{codexPath:f.a},checksFactory:()=>{assert.fail('Unchanged successful preflight must reuse its saved receipt');}});
+ assert.deepEqual(await replay.run({goalId:f.goal.id,hash:f.goal.hash},'restart-replay'),f.receipt);
+ assert.equal(restored.activateGoal({goalId:f.goal.id,hash:f.goal.hash},'activate-after-restart').status,'active');assert.deepEqual(restored.store.get('overnight_preflight',f.goal.id),f.receipt);
+});
+
+test('quiescent configuration changes update only trusted defaults and preserve historical goal policy and evidence',t=>{
+ const f=fixture(t),goal=f.c.prepareGoal(legacy,'historic'),saved={backend:{id:'codex-sandbox',revision:1},readDenied:true};
+ const historical=f.c.store.get('goal',goal.id);historical.status='completed';historical.savedEvidence=saved;f.c.store.put('goal',historical);
+ assert.deepEqual(f.restart({executionPolicy:native}).getGoal(goal.id),{...historical,planning:null,tasks:[],reviewerRuns:[]});
+ assert.deepEqual(f.c.prepareGoal({...legacy,submissionId:'new'},'new-default').manifest.executionPolicy,native);
+});

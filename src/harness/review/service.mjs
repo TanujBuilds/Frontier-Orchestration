@@ -177,6 +177,7 @@ export class ReviewService {
    if(combined.aborted){const error=Error('Cancelled before dispatch');error.requestOutcome='not_dispatched';throw error;}
    result=await client.review({evidence:reservation.evidence,signal:combined,maxOutputTokens:profile.maxOutputTokens,beforeDispatch:()=>{
     const current=c.getTask(input.taskId),{g,policy}=policyFor(c,current);
+    c.verifyGoalBinding(g);
     const saved=c.store.request(input.taskId,requestKey),ticket=c.store.get('review_ticket',reservation.ticketId);
     if(g.hash!==input.goalHash||g.version!==input.goalVersion||digest(policy)!==input.reviewPolicyHash||
        digest(savedCandidateIdentity(current))!==digest(ticket.savedCandidateIdentity)||

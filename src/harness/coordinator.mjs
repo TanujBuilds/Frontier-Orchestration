@@ -78,7 +78,7 @@ export class Coordinator {
   this.beta=beta;this.verifyCurrentWorker=verifyCurrentWorker;this.workerProfile=workerProfile?normalizeWorkerProfile(workerProfile):null;
   this.executionPolicy=normalizeExecutionPolicy(executionPolicy);this.executionConfig={codexPath};
   this.store=new Store(root);this.now=now;this.registry=registry;
-  try{assertExecutionConfiguration(this);this.serviceMaxConcurrentTasks=this.store.tx(()=>configureServiceCapacity(this,serviceMaxConcurrentTasks));}catch(error){this.store.close();throw error;}
+  try{this.serviceMaxConcurrentTasks=this.store.tx(()=>{assertExecutionConfiguration(this);return configureServiceCapacity(this,serviceMaxConcurrentTasks);});}catch(error){this.store.close();throw error;}
   for(const record of this.store.all('mode')){const m=record.definition??record;if(!this.registry.modes.has(`${m.id}@${m.version}`))this.registry.registerMode(m);}
   for(const record of this.store.all('workflow')){const w=record.definition??record;if(!this.registry.workflows.has(`${w.id}@${w.version}`))this.registry.registerWorkflow(w);}
   this.learning=new Learning({c:this});this.reviewService=new ReviewService({c:this,providers:this.providerRegistry,hostRegistry:this.hostRegistry});
