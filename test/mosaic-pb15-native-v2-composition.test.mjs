@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,realpath,rm,mkdir,writeFile} from 'node:fs/promises';
+import {mkdtemp,realpath,rm,mkdir,readFile,writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import {fileURLToPath} from 'node:url';
@@ -10,26 +10,40 @@ const required=process.env.MOSAIC_REQUIRE_NATIVE==='1';
 const available=supported&&Boolean(process.env.MOSAIC_NATIVE_TEST_NODE);
 const fixture=fileURLToPath(new URL('./fixtures/mosaic-pb15-v2-composition/run.mjs',import.meta.url));
 function environment(){return {PATH:'/usr/bin:/bin',TMPDIR:os.tmpdir(),MOSAIC_NATIVE_TEST_NODE:process.env.MOSAIC_NATIVE_TEST_NODE,...(process.env.MOSAIC_NATIVE_TEST_LICENSE?{MOSAIC_NATIVE_TEST_LICENSE:process.env.MOSAIC_NATIVE_TEST_LICENSE}:{})};}
-async function rootFor(t){const root=await realpath(await mkdtemp(path.join(os.tmpdir(),'mosaic-pb15-native-composition-')));t.after(()=>rm(root,{recursive:true,force:true}));return root;}
+async function rootFor(t,{synthetic=false}={}){
+ const parent=process.env.MOSAIC_INSTALLED_ROOT_PARENT??os.tmpdir();await mkdir(parent,{recursive:true,mode:0o700});
+ const root=await realpath(await mkdtemp(path.join(parent,'mosaic-pb15-native-composition-'))),file=path.basename(root)+'-root.json';
+ let accepted=false;
+ const mapping=phase=>({schemaVersion:1,test:t.name,synthetic,root,runRoot:path.join(root,'run'),phase,validatedQuiescentSuccess:accepted,retained:phase!=='removed'});
+ t.after(async()=>{
+  await evidence(file,mapping('retained'));
+  if(accepted){await rm(root,{recursive:true,force:true});await evidence(file,mapping('removed'));}
+  t.diagnostic('Native fixture root: '+JSON.stringify(mapping(accepted?'removed':'retained')));
+ });
+ await evidence(file,mapping('allocated'));
+ return {root,acceptCleanup(){accepted=true;}};
+}
 async function evidence(name,result){if(process.env.MOSAIC_NATIVE_EVIDENCE_DIR){await mkdir(process.env.MOSAIC_NATIVE_EVIDENCE_DIR,{recursive:true});await writeFile(path.join(process.env.MOSAIC_NATIVE_EVIDENCE_DIR,name),JSON.stringify(result,null,2)+'\n');}}
 
 test('required native composition has an explicit supported built runtime',()=>{if(required)assert.ok(available,'MOSAIC_REQUIRE_NATIVE=1 needs Darwin arm64 and explicit MOSAIC_NATIVE_TEST_NODE');});
 for(const review of ['host','api'])test(`actual native2 Codex-free ${review} review composes routed repair, Chromium, restart and serialized integration`,{skip:!available&&!required,timeout:300000},async t=>{
- const root=await rootFor(t),result=await command([process.execPath,fixture,path.join(root,'run'),review],{env:environment(),timeoutMs:285000});
+ const {root,acceptCleanup}=await rootFor(t),result=await command([process.execPath,fixture,path.join(root,'run'),review],{env:environment(),timeoutMs:285000});
  await evidence('native-v2-'+review+'-process.json',result);
  assert.equal(result.code,0,result.stderr+'\n'+result.stdout);
  const summary=JSON.parse(result.stdout.trim().split('\n').at(-1));
  assert.equal(summary.usefulAccepted,2);assert.equal(summary.native.codexAbsent,true);assert.equal(summary.native.realFactory,true);assert.ok(summary.native.quiescentExecutions>0);
+ assert.ok(Array.isArray(summary.native.executionReceipts)&&summary.native.executionReceipts.length>0);
+ assert.ok(summary.native.executionReceipts.every(owner=>owner.status==='quiescent'),'Only proven quiescent native executions authorize fixture cleanup');
  assert.equal(summary.native.protectedCheckHash,'c4d9bac20d9fe9653505d4c60d3d5e417a2ab38950a56a21497e2dfce814fd72');
  assert.deepEqual(summary.tasks.map(task=>task.worker.providerId),['worker-a','worker-b']);
  assert.equal(summary.protectedChecks.failedFirst,true);assert.equal(summary.replay.noExtraPost,true);assert.equal(summary.liveCallsMade,false);
  assert.deepEqual(summary.native.restartBoundaries,['saved-response','applied-edits','failed-check','stopped-pending-review','accepted-replay']);
  assert.ok(summary.tasks.every(task=>/^[a-f0-9]{40}$/.test(task.commit)));
- await evidence('native-v2-'+review+'-summary.json',summary);
+ await evidence('native-v2-'+review+'-summary.json',summary);acceptCleanup();
 });
 
 for(const variant of ['missing-manifest','changed-node','wrong-fingerprint','stock-node'])test(`native2 prerequisite ${variant} blocks actual activation with zero worker/planner/reviewer POST`,{skip:!available&&!required,timeout:90000},async t=>{
- const root=await rootFor(t),script=fileURLToPath(new URL('./fixtures/mosaic-pb15-v2-composition/prerequisite.mjs',import.meta.url));
+ const {root}=await rootFor(t),script=fileURLToPath(new URL('./fixtures/mosaic-pb15-v2-composition/prerequisite.mjs',import.meta.url));
  const result=await command([process.execPath,script,path.join(root,'run'),variant],{env:environment(),timeoutMs:80000});
  await evidence('native-v2-'+variant+'-process.json',result);assert.equal(result.code,0,result.stderr+'\n'+result.stdout);
  const summary=JSON.parse(result.stdout.trim().split('\n').at(-1));assert.equal(summary.blocked,true);assert.equal(summary.posts,0);
@@ -38,10 +52,35 @@ for(const variant of ['missing-manifest','changed-node','wrong-fingerprint','sto
 });
 
 test('actual supervisor loss preserves uncertain owner, pins, spending and capacity across restart', {skip:!available&&!required,timeout:90000},async t=>{
- const root=await rootFor(t),script=fileURLToPath(new URL('./fixtures/mosaic-pb15-v2-composition/uncertain.mjs',import.meta.url));
+ const {root}=await rootFor(t),script=fileURLToPath(new URL('./fixtures/mosaic-pb15-v2-composition/uncertain.mjs',import.meta.url));
  const result=await command([process.execPath,script,path.join(root,'run')],{env:environment(),timeoutMs:80000});
  await evidence('native-v2-uncertain-process.json',result);assert.equal(result.code,0,result.stderr+'\n'+result.stdout);
  const summary=JSON.parse(result.stdout.trim().split('\n').at(-1));
  assert.equal(summary.actualFactory,true);assert.equal(summary.heldAfterRestart,true);assert.equal(summary.noDuplicateLaunch,true);assert.equal(summary.changedHelperRejected,true);
  await evidence('native-v2-uncertain-summary.json',summary);
+});
+
+// These fake roots never launch a process or acquire native ownership. Their
+// enclosing test may remove them after checking the helper's retention policy.
+test('native fixture roots remain without accepted quiescence',async t=>{
+ const fakeRoots=[];t.after(async()=>{for(const root of fakeRoots)await rm(root,{recursive:true,force:true});});
+ for(const outcome of ['unaccepted','uncertain']){
+  let root;
+  await t.test('known fake '+outcome+' root',async child=>{
+   const fixtureRoot=await rootFor(child,{synthetic:true});root=fixtureRoot.root;fakeRoots.push(root);
+   await writeFile(path.join(root,'known-fake-owner-sentinel'),outcome);
+  });
+  const sentinel=await readFile(path.join(root,'known-fake-owner-sentinel'),'utf8').catch(error=>error.code);
+  assert.equal(sentinel,outcome,'Cleanup must preserve the original root without validated quiescent success');
+ }
+});
+
+test('native fixture roots clean only after accepted known quiescence',async t=>{
+ let root;
+ await t.test('known fake quiescent root',async child=>{
+  const fixtureRoot=await rootFor(child,{synthetic:true});root=fixtureRoot.root;
+  await writeFile(path.join(root,'known-fake-owner-sentinel'),'No process or native owner was launched');
+  fixtureRoot.acceptCleanup();
+ });
+ await assert.rejects(readFile(path.join(root,'known-fake-owner-sentinel')),error=>error.code==='ENOENT');
 });
