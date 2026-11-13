@@ -39,9 +39,9 @@ path; it is not evidence of safe real-host portable registration.
 | Gate | Status for this stage | Evidence and limits |
 |---|---|---|
 | Accepted native source foundation | PASSED, historical stage 15 | Accepted source composition used real native checks, kernel probes, Chromium, Git, durable state and restart. Scripted loopback inference/review; no installed-release claim. |
-| Stage 16 focused source tests | Pending final candidate verification | Setup, explicit migration, archive inventory, interruption, rollback and ownership tests must pass against the recorded candidate. |
-| Disposable installed fixture | Pending actual execution | `test/mosaic-pb16-installed.test.mjs` requires named release and offline project artifacts. A source-only skip is not acceptance. |
-| Final frozen full suite | Pending final candidate verification | Require the native backend, Chromium and installed fixture; retain exact command, source hashes, counts and failed attempts. |
+| Stage 16 focused source tests | Consult the candidate handoff | Setup, explicit migration, archive inventory, interruption, rollback and ownership results must identify the tested source and exact checks. |
+| Disposable installed fixture | PASSED, November 12 generation 3 | Both actual extracted-package review variants passed; 3 tests, no failures/skips. Product source `9f2515528731094b6487dec216df07bc08abf5a3`, with separately recorded test-only fixture corrections. Details below. |
+| Final frozen full suite | Required; disposition in checksummed handoff | The candidate-specific handoff identifies the exact final commit/archive, native/browser/installed requirements, commands, counts and failed attempts. The historical installed pass below does not establish this gate. |
 | Fresh clean macOS account or VM | NOT RUN | Disposable homes on the development Mac do not establish a clean-machine install, toolchain prompts or login startup. |
 | Actual Codex, Claude Code, Cursor and Antigravity versions/accounts | NOT RUN for this candidate | Public MCP SDK clients and configuration fixtures are not the corresponding applications. |
 | Live two-provider coding/review task | NOT RUN | Loopback scripted responses establish protocol/state behavior, not model quality, provider limits or billing. |
@@ -50,6 +50,38 @@ path; it is not evidence of safe real-host portable registration.
 | Public repository, registry or release publication | NOT RUN | No push, upload or publication is authorized by stage 16. |
 
 ## Installed fixture contract
+
+On November 12, 2026 (Pacific), generation 3 attempt 5 passed the actual host
+and API-review lifecycles using `0.1.0-beta.160` and compatible update
+`0.1.0-beta.161`. Each accepted two routed CSV coding tasks, observed the real
+44-byte failing download and corrected 33-byte download, verified 11 passing
+native check results and retained 27 quiescent main execution receipts. The
+separate supervisor-loss installation retained an uncertain owner after its
+known bounded child exited. Its missing exact completion receipt, capacity/
+scope hold and rejected update/uninstall remained observable after restart.
+
+The independent overlap proof used two coding candidates with disjoint write
+paths and distinct worker endpoints. The saturation proof used two consult
+tasks pinned to the same worker/profile/capacity group, whose limit was one,
+inside a service and goal ceiling of two. This installed run does not by itself
+prove every cross-profile alias or cross-goal capacity combination. Those
+contracts have separate source tests. Missing-host diagnostics withheld an
+owned fixture MCP registration; they did not inspect an actual coding app.
+
+The primary archive SHA-256 was
+`b0e5f2c3361db5c89ee8995b459f002c363d016a8c49a40034050c7b28f82374`;
+the update was
+`915aa5c3bc7184f948c64c1e204e061c323afdc48c3ac5dcd19ad80b5d1c988b`.
+Both used native artifact fingerprint
+`a8359593981bcc572717923568712d1bcf23e7a28d7cf7c59f0d737ce885fbaf`.
+The separate project-input archive was
+`232a0315ac73ef3b7e59bfb03acf5964c80aee50b15e03c3a945e3efbcd5fcb6`.
+The local handoff retains the exact commands, fixture patch/hash, summaries,
+database/receipt inventories, process cleanup verification and original roots.
+Earlier failed/interrupted attempts remain recorded, including the corrected
+integration-lock defect and fixture preparation/validation mistakes. These
+hashes describe that measured historical run; the final candidate's handoff
+supplies its own source/archive mapping and full-suite disposition.
 
 The test extracts a real local candidate outside the source checkout under a
 path containing spaces. Its bundled ordinary Node executes a copied test
@@ -62,7 +94,7 @@ development source, use global modules, read developer authentication or inject
 persisted restart boundaries and the actual supervisor process.
 
 The CSV sample's protected Chromium check stays byte-identical to the accepted
-stage 15 fixture. The intended installed proof rejects the 44-byte all-rows CSV,
+stage 15 fixture. The installed proof rejects the 44-byte all-rows CSV,
 repairs it on its original pinned provider and accepts the exact 33-byte
 selected-row download. It also exercises independent specialty work overlap,
 shared capacity saturation, host closure with no API fallback, explicit API

@@ -12,11 +12,11 @@ goals keep their original policy, and native revision 1 remains unavailable.
 |---|---|---|---|---|
 | Codex connector | stdio / pull review | fixture-tested | 2026-11-12 | Host schema, registration preview and SDK protocol fixtures; actual host version/account NOT RUN for this candidate. |
 | Claude Code connector | stdio / pull review | fixture-tested | 2026-11-12 | Same coordinator contract and manual registration preview; actual app NOT RUN. |
-| Cursor connector | stdio / pull review | fixture-tested | 2026-11-12 | Configuration and protocol fixtures; disposable managed registration differs from a real app. Installed composition evidence is recorded separately in the release handoff. |
+| Cursor connector | stdio / pull review | fixture-tested | 2026-11-12 | Generation-3 actual installed SDK-host lifecycle passed, with simulated Cursor host identity and disposable managed registration. Actual Cursor application/account remains NOT RUN. |
 | Antigravity connector | stdio / pull review | fixture-tested | 2026-11-12 | Configuration and protocol fixtures; actual app NOT RUN. |
 | OpenAI-compatible worker | Chat Completions JSON/SSE | fixture-tested | 2026-11-12 | Loopback transport, identity, routing, repair and capacity fixtures; no particular vendor/model quality or live availability claim. |
 | Optional reviewer | Chat Completions, Responses, Messages adapters | fixture-tested | 2026-11-12 | Strict structured review and durable reservations; live provider accounts NOT RUN. |
-| Native checks | Darwin arm64 / seatbelt revision 2 | fixture-tested | 2026-11-12 | Accepted stage 15 actual OS/kernel/Chromium source execution. Stage 16 extracted-package results require their own receipt. |
+| Native checks | Darwin arm64 / seatbelt revision 2 | fixture-tested | 2026-11-12 | Generation-3 extracted host/API fixtures passed with actual native Node/supervisor, OS/kernel probes, Chromium and Git; exact source/archive evidence is in the release record. This is offline fixture evidence, not a live model/host certification. |
 | Linux/Windows distribution | — | unsupported | 2026-11-12 | Outside this release's platform scope. |
 
 For every real host in the new portable setup path, setup emits an exact manual

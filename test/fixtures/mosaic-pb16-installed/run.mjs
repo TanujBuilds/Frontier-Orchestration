@@ -59,7 +59,7 @@ try{
     if(body.model.startsWith('fixture-reviewer')){
      assert.equal(id,'b');assert.match(JSON.stringify(body.messages),/candidate|result/);
      if(review==='api'&&body.model==='fixture-reviewer'&&group('api-review').arrived===0)await workerBarrier('api-review');
-     content=body.model==='fixture-reviewer-malformed'?'unparseable reviewer verdict':JSON.stringify({decision:'accept',feedback:'Offline API assessment of exact checked candidate',findings:[]});
+     content=JSON.stringify(body.model==='fixture-reviewer-malformed'?{decision:'invalid-decision',feedback:'Malformed verdict inside a valid reviewer JSON envelope',findings:[]}:{decision:'accept',feedback:'Offline API assessment of exact checked candidate',findings:[]});
     }else{
      assert.equal(body.model,'fixture-'+id);assert.equal(body.stream,false);const payload=JSON.parse(body.messages.at(-1).content);
      if(payload.task.kind==='consult'){
@@ -93,6 +93,14 @@ try{
  const policy={version:1,workers:profiles.map(publicProfile),plannerWorkerId:'worker-a',defaultWorkerId:'worker-a',maxConcurrentTasks:2,capacityGroups:profiles.map(profile=>({id:profile.capacityGroup,limit:1}))};
  const hostReview={version:1,source:'host',hostId:'cursor',fallback:'wait'};
  const apiReview={version:1,source:'api',reviewer:publicProfile(reviewer),fallback:'wait'};
+ const diagnosticProject=async label=>{
+  // Stopped coding candidates retain their write scopes. Diagnostic consult
+  // goals therefore get their own approved repository and real native probe.
+  const repo=path.join(root,'Diagnostic '+label+' project');await mkdir(path.join(repo,'src'),{recursive:true});await mkdir(path.join(repo,'checks'));
+  await writeFile(path.join(repo,'package.json'),'{"private":true,"type":"module"}\n');await writeFile(path.join(repo,'src/value.mjs'),'export const value=0;\n');await writeFile(path.join(repo,'checks/infrastructure.mjs'),"import assert from 'node:assert/strict';import {value} from '../src/value.mjs';assert.equal(value,0);console.log('Approved diagnostic project remains unchanged');\n");
+  const git=async(...args)=>(await successful(['/usr/bin/git','-C',repo,...args],{env:h.env})).stdout.trim();await git('init','-q');await git('add','.');await git('-c','user.name=Offline Fixture','-c','user.email=fixture@example.invalid','commit','-qm','Diagnostic infrastructure base');
+  return {repo,baseCommit:await git('rev-parse','HEAD'),readPaths:['package.json','src/','checks/'],writePaths:['src/'],checks:[{id:'infrastructure',argv:[path.join(h.checkRoot,'node'),'checks/infrastructure.mjs'],timeoutMs:5000}]};
+ };
  const prepare=async(submissionId,{project,reviewPolicy=hostReview,providerPolicy=policy}={})=>{
   const draft=await h.mutate('goal_prepare',{manifest:{submissionId,objective:'Offline installed '+submissionId,acceptance:['Preserve exact approved state and checked outcomes'],environment:'live',mode:'collaborative',executionPolicy:h.executionPolicy,limits:{hours:1,maxTasks:4,reviewAgentRuns:8},...(project?{project}:{}),providerPolicy,routingPolicy:routing,reviewPolicy}});
   const goal=await h.mutate('goal_activate',{goalId:draft.id,hash:draft.hash});assert.equal(goal.manifest.executionPolicy.runtimeFingerprint,h.fingerprint);return goal;
@@ -112,7 +120,7 @@ try{
  assert.equal(maxActive,2);assert.equal(group('overlap').arrived,2);assert.deepEqual([h.record('task',left.id).providerBinding.providerId,h.record('task',right.id).providerBinding.providerId],['worker-a','worker-b']);
  const closedHostPosts=calls.filter(call=>call.method==='POST').length,hostInbox=await h.invoke('review_inbox',{goalId:parallelGoal.id});assert.equal(hostInbox.items.length,2);await h.disconnect();await delay(600);assert.equal(h.record('task',left.id).status,'awaiting_review');assert.equal(calls.filter(call=>call.method==='POST').length,closedHostPosts);await h.connect();assert.deepEqual(await h.invoke('review_inbox',{goalId:parallelGoal.id}),hostInbox);await partial(parallelGoal);
  phase='shared capacity saturation';
- const saturationGoal=await prepare('shared-capacity'),held=await submit(saturationGoal,'held','backend',{objective:'barrier:saturation first'});
+ const saturationGoal=await prepare('shared-capacity',{project:await diagnosticProject('capacity')}),held=await submit(saturationGoal,'held','backend',{objective:'barrier:saturation first'});
  await waitFor(()=>group('saturation').arrived===1,{label:'held worker request'});
  const postsHeld=calls.filter(call=>call.method==='POST').length,queued=await submit(saturationGoal,'queued','backend',{objective:'same shared capacity must wait'});
  await delay(750);assert.equal(calls.filter(call=>call.method==='POST').length,postsHeld);assert.equal(h.record('task',queued.id).attempts,0);
@@ -144,7 +152,7 @@ try{
  let stoppedApprovalUpdate;
  const updateStoppedApproval=async()=>{
   await h.mutate('work_control',{goalId:goal.id,action:'stop'},'stop-goal-for-pointer-update');
-  const oldGoal=await h.invoke('goal_get',{goalId:goal.id}),oldTasks=[first,second].map(task=>h.record('task',task.id)),settingsBytes=await readFile(path.join(h.configDir,'settings.json'));
+  const oldGoal=await h.invoke('goal_get',{goalId:goal.id}),oldTasks=await Promise.all([first,second].map(task=>h.invoke('task_get',{taskId:task.id}))),settingsBytes=await readFile(path.join(h.configDir,'settings.json'));
   assert.equal(oldGoal.status,'stopped');assert.ok(oldTasks.every(task=>task.status==='stopped'&&!task.owner));await h.stop();
   const beforeBytes=hash(await readFile(path.join(h.state,'harness.sqlite3'))),updated=await successful([path.join(updateBundle,'install'),'--home',h.home,'--no-path'],{env:h.env,cwd:root});
   assert.equal(hash(await readFile(path.join(h.state,'harness.sqlite3'))),beforeBytes);assert.deepEqual(await readFile(path.join(h.configDir,'settings.json')),settingsBytes);assert.ok(await lstat(path.join(h.checkRoot,'node')));
@@ -203,13 +211,13 @@ try{
  finally{await rename(withheldHost,hostTarget);}
 
  phase='malformed API reviewer wait';
- const malformedGoal=await prepare('malformed-review',{reviewPolicy:{version:1,source:'api',reviewer:publicProfile(malformed),fallback:'wait'}}),malformedTask=await submit(malformedGoal,'malformed','backend');
- const malformedWait=await waitTask(malformedTask.id,t=>t.reviewWait?.reasonCode==='invalid_response','malformed reviewer operator wait');assert.equal(malformedWait.status,'awaiting_review');const malformedPosts=calls.filter(call=>call.model==='fixture-reviewer-malformed'&&call.method==='POST').length;assert.equal(malformedPosts,1);await h.restart();await delay(500);assert.equal(calls.filter(call=>call.model==='fixture-reviewer-malformed'&&call.method==='POST').length,1);await partial(malformedGoal);
+ const malformedGoal=await prepare('malformed-review',{project:await diagnosticProject('review'),reviewPolicy:{version:1,source:'api',reviewer:publicProfile(malformed),fallback:'wait'}}),malformedTask=await submit(malformedGoal,'malformed','backend');
+ const malformedWait=await waitTask(malformedTask.id,t=>{if(t.reviewWait)assert.equal(t.reviewWait.reasonCode,'invalid_response');return t.reviewWait?.reasonCode==='invalid_response';},'malformed reviewer operator wait');assert.equal(malformedWait.status,'awaiting_review');const malformedPosts=calls.filter(call=>call.model==='fixture-reviewer-malformed'&&call.method==='POST').length;assert.equal(malformedPosts,1);await h.restart();await delay(500);assert.equal(calls.filter(call=>call.model==='fixture-reviewer-malformed'&&call.method==='POST').length,1);await partial(malformedGoal);
  phase='unreachable worker retains route';
  // Close only the owned loopback worker after all successful work. The exact
  // pinned endpoint becomes unreachable; no alternate profile may receive it.
  servers[0].closeAllConnections();await new Promise(resolve=>servers[0].close(resolve));
- const unavailableGoal=await prepare('worker-unreachable'),unavailableTask=await submit(unavailableGoal,'unreachable','backend'),unreachable=await waitTask(unavailableTask.id,t=>t.providerWait||t.routingWait,'recoverable unavailable worker',30000);assert.ok(['queued','suspended'].includes(unreachable.status));const unreachablePosts=calls.filter(call=>call.method==='POST').length;await delay(500);assert.equal(calls.filter(call=>call.method==='POST').length,unreachablePosts);await partial(unavailableGoal);
+ const unavailableGoal=await prepare('worker-unreachable',{project:await diagnosticProject('unavailable')}),unavailableTask=await submit(unavailableGoal,'unreachable','backend'),unreachable=await waitTask(unavailableTask.id,t=>t.providerWait||t.routingWait,'recoverable unavailable worker',30000);assert.ok(['queued','suspended'].includes(unreachable.status));const unreachablePosts=calls.filter(call=>call.method==='POST').length;await delay(500);assert.equal(calls.filter(call=>call.method==='POST').length,unreachablePosts);await partial(unavailableGoal);
 
  phase='source-free second-version update and compatible rollback';
  await h.stop();

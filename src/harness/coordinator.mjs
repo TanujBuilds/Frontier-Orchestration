@@ -206,7 +206,7 @@ export class Coordinator {
  }
  preparePortableGoal(raw,key){return this.prepareGoal(raw,key,{portable:true});}
  prepareLegacyGoal(raw,key){if(this.beta||raw.providerPolicy||raw.reviewPolicy||raw.routingPolicy||raw.executionPolicy)throw Error('Legacy preparation cannot select portable policy');return this.prepareGoal(raw,key,{legacy:true});}
- goalManifest(raw,providerRegistry=this.providerRegistry,{historic=false}={}){
+ goalManifest(raw,providerRegistry=this.providerRegistry,{historic=false,cachedApproval}={}){
   if(!historic)raw=this.reviewPreparation(raw);
   if(!this.beta)return normalizeGoal(raw,this.registry,providerRegistry);
   if(raw.researchPolicy)throw Error('Research is parked in Mosaic Beta');
@@ -215,9 +215,16 @@ export class Coordinator {
   manifest.mode={...manifest.mode,capabilities:manifest.mode.capabilities.filter(id=>id!=='research')};
   manifest.capabilities=manifest.capabilities.filter(capability=>capability.id!=='research');
   if(manifest.mode.actors.includes('deepseek')&&!manifest.providerPolicy){
-   this.verifyCurrentWorker?.();
-   if(!this.workerProfile)throw Error('Configure an API worker in mosaic setup or use codex_only');
-   manifest.workerProfile=this.workerProfile;
+   if(cachedApproval){
+    // Cached comparison is not new execution authority. Its command/manifest
+    // digests were verified before this exact credential-free snapshot is used.
+    normalizeWorkerProfile(cachedApproval.workerProfile);
+    manifest.workerProfile=structuredClone(cachedApproval.workerProfile);
+   }else{
+    this.verifyCurrentWorker?.();
+    if(!this.workerProfile)throw Error('Configure an API worker in mosaic setup or use codex_only');
+    manifest.workerProfile=this.workerProfile;
+   }
   }
   return manifest;
  }
@@ -270,11 +277,14 @@ export class Coordinator {
     if(!profile)throw Error('Saved provider revision differs');return structuredClone(profile);
    }});
    let replayRaw=raw;
-   for(const field of ['providerPolicy','routingPolicy'])if(raw[field]===undefined&&approved[field]!==undefined)replayRaw={...replayRaw,[field]:approved[field]};
-   if(raw.mode===undefined&&this.configuredPolicies)replayRaw={...replayRaw,mode:approved.mode.id,modeVersion:approved.mode.version};
+   // Only a trusted setup context supplying this default type can inherit
+   // its approved snapshot. A plain catalog still requires explicit policies.
+   for(const field of ['providerPolicy','routingPolicy'])if(this.configuredPolicies?.[field]!==undefined&&raw[field]===undefined&&approved[field]!==undefined)replayRaw={...replayRaw,[field]:approved[field]};
+   if(raw.mode===undefined)replayRaw={...replayRaw,mode:approved.mode.id};
+   if(raw.modeVersion===undefined)replayRaw={...replayRaw,modeVersion:approved.mode.version};
    replayRaw=raw.reviewPolicy===undefined&&approved.reviewPolicy?{...replayRaw,reviewPolicy:approved.reviewPolicy}:replayRaw;
    if(raw.executionPolicy===undefined&&approved.executionPolicy)replayRaw={...replayRaw,executionPolicy:approved.executionPolicy};
-   let manifest;try{manifest=this.goalManifest(replayRaw,catalog,{historic:true});}catch{throw Error('Idempotency key conflict');}
+   let manifest;try{manifest=this.goalManifest(replayRaw,catalog,{historic:true,cachedApproval:approved});}catch{throw Error('Idempotency key conflict');}
    return this.store.command(key,{op:'goal.prepare',manifest},()=>{throw Error('Saved preparation command is unavailable');});
   }
   if(!legacy){raw=this.configuredPreparation(raw);raw=this.reviewPreparation(raw,{portable});if(raw.executionPolicy===undefined&&this.executionPolicy)raw={...raw,executionPolicy:this.executionPolicy};}
