@@ -1,5 +1,6 @@
 import path from 'node:path';
 import {rm} from 'node:fs/promises';
+import {openSync,closeSync,fstatSync,lstatSync,readFileSync,realpathSync,constants} from 'node:fs';
 import {canonical,identifier} from '../harness/contracts.mjs';
 import {normalizeProfile,normalizeLegacyWorkerProfile,normalizeProviderPolicy,profileIdentity} from '../harness/providers/contracts.mjs';
 import {normalizeReviewPolicy} from '../harness/review/contracts.mjs';
@@ -7,7 +8,7 @@ import {normalizeRoutingPolicy} from '../harness/routing/contracts.mjs';
 import {normalizeExecutionPolicy,normalizeNativeCheckRuntime} from '../harness/execution.mjs';
 import {workerProfile} from '../harness/worker-profile.mjs';
 import {normalizeHostSettings} from './hosts/index.mjs';
-import {entry,hash,jsonFile,localDirectory,saveJson,withLock} from './files.mjs';
+import {entry,hash,jsonFile,saveJson,withLock} from './files.mjs';
 const fingerprint=value=>hash(canonical(value));
 const credentialsFile=paths=>path.join(paths.configDir,'credentials.json');
 const migrationFile=paths=>path.join(paths.configDir,'migration-intent.json');
@@ -15,7 +16,7 @@ function object(value,allowed,label,required=allowed){if(!value||typeof value!==
 function secret(value){if(typeof value!=='string'||!/^[\x21-\x7e]{1,2048}$/.test(value))throw Error('Invalid private credential');return value;}
 function absolute(value){if(typeof value!=='string'||!path.isAbsolute(value)||/[\x00-\x1f\x7f]/u.test(value))throw Error('Invalid configured executable path');return value;}
 export function normalizeCredentials(raw){object(raw,['schema','entries'],'private credentials');if(raw.schema!==1)throw Error('Invalid private credential schema');object(raw.entries,Object.keys(raw.entries??{}),'private credential entries',[]);const entries={};for(const [ref,value] of Object.entries(raw.entries)){identifier(ref,'credential reference');Object.defineProperty(entries,ref,{value:secret(value),enumerable:true,writable:true,configurable:true});}return {schema:1,entries};}
-function rejectSecretIdentity(settings,credentials){const encoded=canonical(settings),decoded=encoded.replace(/%([a-f0-9]{2})/gi,(_,hex)=>String.fromCharCode(parseInt(hex,16)));for(const value of Object.values(credentials.entries))if([value,JSON.stringify(value).slice(1,-1)].some(key=>[encoded,decoded].some(text=>text.includes(key))))throw Error('Credential values must occur only in the private credential store');}
+function rejectSecretIdentity(settings,credentials){const secrets=Object.values(credentials.entries).flatMap(value=>[value,JSON.stringify(value).slice(1,-1)]);for(let encoded=canonical(settings);;){if(secrets.some(key=>encoded.includes(key)))throw Error('Credential values must occur only in the private credential store');const decoded=encoded.replace(/%([a-f0-9]{2})/gi,(_,hex)=>String.fromCharCode(parseInt(hex,16)));if(decoded===encoded)return;encoded=decoded;}}
 export function normalizeSettings(raw){
  if(raw?.schema===1){
   object(raw,['schema','host','codexPath','worker','executionPolicy','nativeCheckRuntime'],'legacy configuration',['schema']);
@@ -43,9 +44,23 @@ export function normalizeSettings(raw){
 }
 export function configuredPolicies(raw){const settings=normalizeSettings(raw);if(settings.schema!==2)return {};const workers=settings.providers.filter(p=>p.roles.includes('worker'));const providerPolicy=workers.length?normalizeProviderPolicy({version:1,workers:workers.map(profileIdentity),plannerWorkerId:settings.defaults.plannerWorkerId,defaultWorkerId:settings.defaults.workerId,maxConcurrentTasks:settings.serviceMaxConcurrentTasks,capacityGroups:settings.capacityGroups},settings.providers):undefined;const ref=settings.defaults.review.reviewer;const reviewPolicy=normalizeReviewPolicy({version:1,...(settings.defaults.review.source==='host'?settings.defaults.review:{source:'api',reviewer:profileIdentity(settings.providers.find(p=>p.id===ref.id&&p.revision===ref.revision))}),fallback:'wait'});return {...(providerPolicy?{providerPolicy}:{}),reviewPolicy,...(settings.defaults.routing?{routingPolicy:normalizeRoutingPolicy(settings.defaults.routing,providerPolicy)}:{})};}
 async function ownedJson(file,{max=131072}={}){const info=await entry(file);if(info&&(info.uid!==process.getuid()||info.mode&0o077))throw Error('Unsafe private settings or credential ownership');return jsonFile(file,{privateFile:true,max});}
-export async function readSettings(paths){await localDirectory(paths,paths.configDir,{create:false});const raw=await ownedJson(paths.config);return raw?normalizeSettings(raw):null;}
-export async function readCredentials(paths){return normalizeCredentials(await ownedJson(credentialsFile(paths))??{schema:1,entries:{}});}
-export async function validateSettingsCredentials(paths,settings){const credentials=await readCredentials(paths);rejectSecretIdentity(settings,credentials);for(const p of settings.providers??[])if(p.credentialRef!==null&&!Object.hasOwn(credentials.entries,p.credentialRef))throw Error('Configured provider credential is unavailable');return credentials;}
+function privateJsonSync(paths,file,{max=131072}={}){
+ let fd;
+ try{
+  const home=realpathSync(paths.home),expected=path.join(home,path.relative(paths.home,file));
+  const directories=()=>{for(const directory of [paths.root,paths.configDir]){const relative=path.relative(paths.home,directory),info=lstatSync(directory);if(relative.startsWith('..'+path.sep)||relative==='..'||path.isAbsolute(relative)||!info.isDirectory()||info.isSymbolicLink()||info.uid!==process.getuid()||info.mode&0o077||realpathSync(directory)!==path.join(home,relative))throw Error();}};
+  directories();fd=openSync(file,constants.O_RDONLY|constants.O_NOFOLLOW);
+  const verify=()=>{const info=fstatSync(fd),named=lstatSync(file);if(!info.isFile()||info.size>max||info.uid!==process.getuid()||info.mode&0o077||!named.isFile()||named.isSymbolicLink()||named.dev!==info.dev||named.ino!==info.ino||named.uid!==process.getuid()||named.mode&0o077||realpathSync(file)!==expected)throw Error();};
+  verify();const bytes=readFileSync(fd);verify();directories();if(bytes.length>max)throw Error();return JSON.parse(bytes.toString('utf8'));
+ }catch(error){if(error.code==='ENOENT'&&fd===undefined)return null;throw Error('Unsafe or invalid private settings or credential file');}
+ finally{if(fd!==undefined)closeSync(fd);}
+}
+export function readSettingsSync(paths){const raw=privateJsonSync(paths,paths.config);return raw?normalizeSettings(raw):null;}
+export async function readSettings(paths){return readSettingsSync(paths);}
+export function readCredentialsSync(paths){return normalizeCredentials(privateJsonSync(paths,credentialsFile(paths))??{schema:1,entries:{}});}
+export async function readCredentials(paths){return readCredentialsSync(paths);}
+export function validateSettingsCredentialsSync(paths,settings,proposedCredentials){const credentials=proposedCredentials===undefined?readCredentialsSync(paths):normalizeCredentials(proposedCredentials);const identity=settings.schema===1&&settings.worker?{...settings,worker:{profile:settings.worker.profile}}:settings;rejectSecretIdentity(identity,credentials);for(const p of settings.providers??[])if(p.credentialRef!==null&&!Object.hasOwn(credentials.entries,p.credentialRef))throw Error('Configured provider credential is unavailable');return credentials;}
+export async function validateSettingsCredentials(paths,settings,proposedCredentials){return validateSettingsCredentialsSync(paths,settings,proposedCredentials);}
 export async function previewSettingsMigration(paths){
  const previous=await readSettings(paths);if(!previous||previous.schema!==1)throw Error('Migration requires readable legacy schema1 settings');const credentials=await readCredentials(paths),providers=[];const nextCredentials=structuredClone(credentials);
  if(previous.worker){const ref=previous.worker.apiKey?'legacy-worker-key':null;if(ref&&Object.hasOwn(credentials.entries,ref)&&credentials.entries[ref]!==previous.worker.apiKey)throw Error('Legacy credential reference is already owned by another value');providers.push(normalizeLegacyWorkerProfile(previous,{id:'legacy-worker',capacityGroup:'legacy-service',credentialRef:ref}));if(ref)nextCredentials.entries[ref]=previous.worker.apiKey;}

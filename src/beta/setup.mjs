@@ -1,5 +1,5 @@
 import {fileURLToPath} from 'node:url';
-import {readSettings as readPrivateSettings,previewSettingsMigration,applySettingsMigration,resumeSettingsMigration} from './settings.mjs';
+import {readSettings as readPrivateSettings,previewSettingsMigration,applySettingsMigration,resumeSettingsMigration,validateSettingsCredentials} from './settings.mjs';
 import {setupPortable,portableSetupComplete,removePortableBindings} from './portable-setup.mjs';
 import {normalizeExecutionPolicy,normalizeNativeCheckRuntime,assertExecutionAvailable} from '../harness/execution.mjs';
 import {execFile} from 'node:child_process';
@@ -353,7 +353,7 @@ export async function doctor(paths,output=process.stdout){
  const checks=[];
  const check=(name,ok,detail)=>checks.push({name,ok,detail});
  let settings;
- try{settings=await readSettings(paths);}catch{check('Settings',false,'Invalid private config. Run mosaic setup.');}
+ try{settings=await readSettings(paths);if(settings?.schema===2)await validateSettingsCredentials(paths,settings);}catch{settings=undefined;check('Settings',false,'Invalid private config or credentials. Run mosaic setup.');}
  try{
   if(settings&&!await setupComplete(paths))check('Setup',false,'Setup needs attention. Run mosaic setup to restore or resume its bindings.');
  }catch{check('Setup',false,'Cannot read the private beta binding receipt. Inspect the beta settings directory.');}

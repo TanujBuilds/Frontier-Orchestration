@@ -1,8 +1,8 @@
-import {normalizeSettings,readSettings,readCredentials,configuredPolicies,assertMigrationStartupReady} from './settings.mjs';
+import {normalizeSettings,readSettings,readSettingsSync,readCredentials,validateSettingsCredentials,validateSettingsCredentialsSync,configuredPolicies,assertMigrationStartupReady} from './settings.mjs';
 import {ProviderRegistry} from '../harness/providers/registry.mjs';
 import {normalizeExecutionPolicy,executionIdentity,assertExecutionAvailable} from '../harness/execution.mjs';
 import {hostRegistry,normalizeHostSettings} from './hosts/index.mjs';
-import {existsSync,lstatSync,readFileSync} from 'node:fs';
+import {existsSync} from 'node:fs';
 import {canonical} from '../harness/contracts.mjs';
 import {DatabaseSync} from 'node:sqlite';
 import {execFile} from 'node:child_process';
@@ -150,6 +150,7 @@ export async function assertBetaStartupReady(paths,settings){
   else {const receipt=await jsonFile(paths.ownership,{privateFile:true});if(!receipt?.complete||receipt.intentHash!==hash(canonical(intent))||receipt.settingsHash!==hash(canonical(settings)))throw Error('Legacy setup is incomplete; resume it before coordinator startup.');}
  }
  await assertMigrationStartupReady(paths,settings);
+ if(settings.schema===2)await validateSettingsCredentials(paths,settings);
 }
 
 export async function serveBeta(paths,settings){
@@ -167,14 +168,13 @@ export async function serveBeta(paths,settings){
  const verifyCurrentWorker=()=>{
   if(existsSync(paths.disabled))throw Error('Mosaic is off. New dispatch is blocked; running ownership is retained. Run mosaic on to resume.');
   try{
-   const info=lstatSync(paths.config);
-   if(!info.isFile()||info.size>131072||info.mode&0o077)throw Error();
-   const current=normalizeSettings(JSON.parse(readFileSync(paths.config,'utf8')));
+   const current=readSettingsSync(paths);
+   if(current?.schema===2)validateSettingsCredentialsSync(paths,current);
    if(canonical(current.schema===2?{providers:current.providers,defaults:current.defaults,capacityGroups:current.capacityGroups,serviceMaxConcurrentTasks:current.serviceMaxConcurrentTasks}:current.worker??null)===expectedWorker&&selectedHost(current)===expectedHost&&configuredExecutionIdentity(current)===expectedExecution)return;
   }catch{}
-  throw Error('Configured API worker, host or execution backend settings changed. Restart Mosaic Beta safely and obtain a new goal approval.');
+  throw Error('Configured API worker, credentials, host or execution backend settings changed or are unsafe. Restart Mosaic Beta safely and obtain a new goal approval.');
  };
- const providerRegistry=settings.schema===2&&settings.providers.length?ProviderRegistry({profiles:settings.providers,credentialResolver:async ref=>(await readCredentials(paths)).entries[ref]}):undefined;
+ const providerRegistry=settings.schema===2&&settings.providers.length?ProviderRegistry({profiles:settings.providers,credentialResolver:async ref=>(await validateSettingsCredentials(paths,settings)).entries[ref]}):undefined;
  return serve({root:paths.state,port:0,headless:true,startupGuard:work=>withLock(paths,async()=>{const current=await readSettings(paths);if(hash(canonical(current))!==startupSettingsHash)throw Error('Settings changed before startup; retry with the current private settings.');await assertBetaStartupReady(paths,current);assertExecutionAvailable(settings,{codexPath:settings.codexPath,nativeCheckRuntime:settings.nativeCheckRuntime});return work();}),canStop:c=>assertIdle(c.store.db),verifyCurrentWorker,
   runtimeConfig:{beta:true,...(settings.schema===2?{providerRegistry,serviceMaxConcurrentTasks:settings.serviceMaxConcurrentTasks,configuredPolicies:portablePolicies}:{}),hostId:settings.host?.id??(settings.codexPath?'codex':undefined),hostRegistry,codexPath:settings.codexPath,nativeCheckRuntime:settings.nativeCheckRuntime,executionPolicy:settings.executionPolicy,workerProfile:settings.worker?.profile,workerApiKey:settings.worker?.apiKey}});
 }

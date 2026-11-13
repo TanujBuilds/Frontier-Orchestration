@@ -287,6 +287,7 @@ export class Coordinator {
    let manifest;try{manifest=this.goalManifest(replayRaw,catalog,{historic:true,cachedApproval:approved});}catch{throw Error('Idempotency key conflict');}
    return this.store.command(key,{op:'goal.prepare',manifest},()=>{throw Error('Saved preparation command is unavailable');});
   }
+  if(this.beta&&!(typeof raw?.submissionId==='string'&&this.store.db.prepare("SELECT 1 FROM submissions WHERE kind='goal' AND scope='' AND key=?").get(raw.submissionId)))this.verifyCurrentWorker?.();
   if(!legacy){raw=this.configuredPreparation(raw);raw=this.reviewPreparation(raw,{portable});if(raw.executionPolicy===undefined&&this.executionPolicy)raw={...raw,executionPolicy:this.executionPolicy};}
   const manifest=legacy?normalizeGoal(raw,this.registry,this.providerRegistry):this.goalManifest(raw);return this.store.command(key,{op:'goal.prepare',manifest},()=>{
   assertCapacityConfiguration(this,manifest);
