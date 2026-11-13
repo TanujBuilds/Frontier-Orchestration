@@ -7,7 +7,9 @@ import {createServer} from 'node:http';
 import {spawn} from 'node:child_process';
 import {readFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
+import {createHash} from 'node:crypto';
 import {Coordinator} from '../src/harness/coordinator.mjs';
+import {assertExecutionRuntime,assertExecutionAvailable} from '../src/harness/execution.mjs';
 import {Worker} from '../src/harness/worker.mjs';
 import {Integration} from '../src/harness/integration.mjs';
 import {NativeCandidates} from '../src/harness/native-candidates.mjs';
@@ -23,6 +25,12 @@ function fixture(t,{alias=false,...options}={}){
  t.after(()=>{c?.close();rmSync(root,{recursive:true,force:true});});
  return {root,executable,get c(){return c;},mutate(){if(alias){rmSync(executable);symlinkSync(b,executable);}else writeFileSync(executable,'changed private runtime bytes',{mode:0o700});},restore(){if(alias){rmSync(executable);symlinkSync(a,executable);}else writeFileSync(executable,original,{mode:0o700});},restart(codexPath=executable){c?.close();c=null;c=new Coordinator({root:path.join(root,'state'),selectedHost:'cursor',codexPath,...options});return c;}};
 }
+
+test('unchanged unavailable runtime identity survives canonical persistence without changing its historical hash or granting execution',t=>{
+ const root=mkdtempSync(path.join(os.tmpdir(),'pb15-unavailable-runtime-')),missing=path.join(root,'missing-codex'),options={root:path.join(root,'state'),beta:true,selectedHost:'codex',codexPath:missing};let c=new Coordinator(options);t.after(()=>{c?.close();rmSync(root,{recursive:true,force:true});});
+ const identity=c.store.get('execution_configuration','coordinator'),historical={defaultBackend:{version:1,backend:'codex-sandbox',backendRevision:1},runtime:{unavailable:true,selector:missing}};assert.equal(identity.schema,1);assert.equal(identity.hash,createHash('sha256').update(JSON.stringify(historical)).digest('hex'));assert.doesNotThrow(()=>assertExecutionRuntime(c));const goal=c.preparePortableGoal({submissionId:'unavailable-metadata',objective:'Prepare metadata with the unchanged unavailable legacy executable',acceptance:['No execution authority'],mode:'codex_only',environment:'fixture'},'unavailable-metadata');assert.equal(goal.status,'draft');assert.throws(()=>assertExecutionAvailable({executionPolicy},{codexPath:missing}),/missing|unavailable/i);assert.deepEqual(c.store.get('execution_configuration','coordinator'),identity);
+ c.close();c=new Coordinator(options);assert.doesNotThrow(()=>assertExecutionRuntime(c));assert.deepEqual(c.store.get('execution_configuration','coordinator'),identity);c.executionConfig.codexPath=path.join(root,'other-missing-codex');assert.throws(()=>assertExecutionRuntime(c),/runtime.*changed/i);c.executionConfig.codexPath=missing;writeFileSync(missing,original,{mode:0o700});assert.throws(()=>assertExecutionRuntime(c),/runtime.*changed/i);assert.deepEqual(c.store.get('execution_configuration','coordinator'),identity);
+});
 
 for(const alias of [false,true])test(`live goal authority rejects ${alias?'a retargeted executable symlink':'changed executable bytes'} without refreshing its saved identity`,t=>{
  const f=fixture(t,{alias}),g=f.c.preparePortableGoal(raw,'prepare'),identity=f.c.store.get('execution_configuration','coordinator');

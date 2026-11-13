@@ -56,7 +56,7 @@ function configuredIdentity(c){
 export function assertExecutionRuntime(c){
  const previous=c.store.get('execution_configuration','coordinator');
  if(![1,2].includes(previous.schema)||!previous.identity||!Object.hasOwn(previous.identity,'runtime'))throw Error('Invalid saved execution runtime identity');
- const matches=previous.schema===1?JSON.stringify(configuredRuntime(c.executionConfig.codexPath))===JSON.stringify(previous.identity.runtime):stable(configuredIdentity(c))===stable(previous.identity);
+ const matches=previous.schema===1?stable(configuredRuntime(c.executionConfig.codexPath))===stable(previous.identity.runtime):stable(configuredIdentity(c))===stable(previous.identity);
  if(!matches)throw Error('Execution sandbox runtime changed; restore the trusted executable before continuing approved work');
 }
 export function assertExecutionConfiguration(c){
