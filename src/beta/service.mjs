@@ -1,4 +1,4 @@
-import {normalizeSettings,readCredentials,configuredPolicies} from './settings.mjs';
+import {normalizeSettings,readSettings,readCredentials,configuredPolicies,assertMigrationStartupReady} from './settings.mjs';
 import {ProviderRegistry} from '../harness/providers/registry.mjs';
 import {normalizeExecutionPolicy,executionIdentity,assertExecutionAvailable} from '../harness/execution.mjs';
 import {hostRegistry,normalizeHostSettings} from './hosts/index.mjs';
@@ -12,7 +12,7 @@ import {mkdir,rm} from 'node:fs/promises';
 import {randomUUID} from 'node:crypto';
 import path from 'node:path';
 import {serve} from '../harness/cli.mjs';
-import {atomic,entry,fileBytes,hash,jsonFile,label,privateDirectories} from './files.mjs';
+import {atomic,entry,fileBytes,hash,jsonFile,label,privateDirectories,withLock} from './files.mjs';
 import {client} from './client.mjs';
 
 const exec=promisify(execFile);
@@ -39,9 +39,8 @@ export function launchAgent(paths){
 `;
 }
 
-function assertIdle(db,{settingsMigration=false,settingsChange=false}={}) {
- if((settingsMigration||settingsChange)&&db.prepare("SELECT id FROM records WHERE kind='goal' AND json_extract(data,'$.status')='stopped' AND json_extract(data,'$.manifest.executionPolicy.backend')='darwin-seatbelt' LIMIT 1").get())throw Error('A stopped native approval remains resumable. Retain its exact runtime and settings; resume and finish or finalize it as partial before reconfiguration.');
- if(settingsMigration&&db.prepare("SELECT id FROM records WHERE kind='goal' AND json_extract(data,'$.status')='stopped' AND json_type(data,'$.manifest.workerProfile')='object' LIMIT 1").get())throw Error('A stopped legacy API worker approval remains resumable. Resume and finish it with its original settings, or finalize it as partial, before migrating settings.');
+function assertIdle(db,{settingsMigration=false,settingsChange=false,offline=false}={}) {
+ if(offline&&db.prepare("SELECT id FROM records WHERE kind='lease' AND id='coordinator' LIMIT 1").get())throw Error('A coordinator lease remains present during offline maintenance. Wait for startup/shutdown or recover and stop its coordinator before retrying.');
  const revision=db.prepare(`SELECT revision.id FROM records AS revision JOIN records AS goal
   ON goal.kind='goal' AND goal.id=json_extract(revision.data,'$.goalId')
   WHERE revision.kind='goal_revision' AND json_extract(revision.data,'$.status')='draft'
@@ -50,6 +49,7 @@ function assertIdle(db,{settingsMigration=false,settingsChange=false}={}) {
    AND json_extract(goal.data,'$.hash')=json_extract(revision.data,'$.previousHash')
    AND json_extract(goal.data,'$.deadline')>? LIMIT 1`).get(Date.now());
  if(revision)throw Error('A prepared revision is still current. Stop and finalize its goal as partial in its host, or supersede the revision, before maintenance.');
+ if((settingsMigration||settingsChange)&&db.prepare("SELECT id FROM records WHERE kind='goal' AND json_extract(data,'$.status')='stopped' LIMIT 1").get())throw Error('A stopped approval remains resumable. Retain its exact runtime and settings; resume and finish or finalize it as partial before migration or reconfiguration.');
  const guard=db.prepare(`SELECT kind FROM records WHERE
   (kind='goal' AND json_extract(data,'$.status') IN ('draft','active','paused')) OR
   (kind='task' AND (json_extract(data,'$.owner') IS NOT NULL OR json_extract(data,'$.native.writerActive')=1)) OR
@@ -98,10 +98,11 @@ export async function stopForMaintenance(paths,{allowUnrecorded=false,recovering
  }else{
   if(registered){
    if(!recovering)throw Error('The registered Mosaic Beta coordinator is unreachable. Run mosaic doctor before maintenance.');
-   await startLaunchAgent(paths,{allowUnrecorded});
-   return stopForMaintenance(paths,{allowUnrecorded});
+   // Recovery must not start a service while its caller owns maintenance.
+   // Only proven offline quiescence permits booting out this owned registration.
+   await assertMaintenanceIdle(paths,{offline:true});
   }
-  await assertMaintenanceIdle(paths);
+  await assertMaintenanceIdle(paths,{offline:true});
  }
  if(registered)await launchctl('bootout',serviceId());
  return registered;
@@ -135,9 +136,26 @@ export async function rollbackLaunchAgent(paths,{existed,registered}){
 
 export function configuredExecutionIdentity(settings){const policy=normalizeExecutionPolicy(settings.schema===2?{version:1,...settings.execution}:settings.executionPolicy);return canonical({executionPolicy:policy??null,...(settings.nativeCheckRuntime?{nativeCheckRuntime:settings.nativeCheckRuntime}:{}),...((policy?.backend??'codex-sandbox')==='codex-sandbox'?{codexPath:settings.codexPath??'codex'}:{})});}
 
+export async function assertSettingsMaintenanceAllowed(paths,{kind}={}){
+ if(await entry(path.join(paths.configDir,'install-transaction.json')))throw Error('An installation transaction is pending; recover it before changing settings.');
+ if(kind!=='setup'&&await entry(paths.setupIntent))throw Error('Setup is pending; resume it before migrating settings.');
+ if(kind!=='migration'&&await entry(path.join(paths.configDir,'migration-intent.json')))throw Error('Settings migration is pending; resume it before setup.');
+}
+export async function assertBetaStartupReady(paths,settings){
+ if(await entry(path.join(paths.configDir,'install-transaction.json'))){const {assertInstallationStartupReady}=await import('./install.mjs');await assertInstallationStartupReady(paths);}
+ const intent=await jsonFile(paths.setupIntent,{privateFile:true,max:131072});
+ if(intent){
+  if(hash(canonical(intent.settings))!==hash(canonical(settings)))throw Error('Setup is incomplete; resume it before coordinator startup.');
+  if(intent.schema===2){const receipt=await jsonFile(path.join(paths.configDir,'portable-binding.json'),{privateFile:true}),credentials=await readCredentials(paths);if(!receipt?.complete||receipt.intentHash!==hash(canonical(intent))||receipt.settingsHash!==hash(canonical(settings))||receipt.hostReceipt!==intent.hostPreview?.receiptFile||hash(canonical(credentials))!==intent.credentialsHash)throw Error('Setup is incomplete; resume it before coordinator startup.');}
+  else {const receipt=await jsonFile(paths.ownership,{privateFile:true});if(!receipt?.complete||receipt.intentHash!==hash(canonical(intent))||receipt.settingsHash!==hash(canonical(settings)))throw Error('Legacy setup is incomplete; resume it before coordinator startup.');}
+ }
+ await assertMigrationStartupReady(paths,settings);
+}
+
 export async function serveBeta(paths,settings){
  if(!settings)throw Error('Run mosaic setup before starting Mosaic Beta');
  settings=normalizeSettings(settings);
+ const startupSettingsHash=hash(canonical(settings));
  const portablePolicies=settings.schema===2?configuredPolicies(settings):undefined;
  if(settings.schema===2)settings={...settings,executionPolicy:{version:1,...settings.execution}};
  assertExecutionAvailable(settings,{codexPath:settings.codexPath,nativeCheckRuntime:settings.nativeCheckRuntime});
@@ -157,6 +175,6 @@ export async function serveBeta(paths,settings){
   throw Error('Configured API worker, host or execution backend settings changed. Restart Mosaic Beta safely and obtain a new goal approval.');
  };
  const providerRegistry=settings.schema===2&&settings.providers.length?ProviderRegistry({profiles:settings.providers,credentialResolver:async ref=>(await readCredentials(paths)).entries[ref]}):undefined;
- return serve({root:paths.state,port:0,headless:true,canStop:c=>assertIdle(c.store.db),verifyCurrentWorker,
+ return serve({root:paths.state,port:0,headless:true,startupGuard:work=>withLock(paths,async()=>{const current=await readSettings(paths);if(hash(canonical(current))!==startupSettingsHash)throw Error('Settings changed before startup; retry with the current private settings.');await assertBetaStartupReady(paths,current);assertExecutionAvailable(settings,{codexPath:settings.codexPath,nativeCheckRuntime:settings.nativeCheckRuntime});return work();}),canStop:c=>assertIdle(c.store.db),verifyCurrentWorker,
   runtimeConfig:{beta:true,...(settings.schema===2?{providerRegistry,serviceMaxConcurrentTasks:settings.serviceMaxConcurrentTasks,configuredPolicies:portablePolicies}:{}),hostId:settings.host?.id??(settings.codexPath?'codex':undefined),hostRegistry,codexPath:settings.codexPath,nativeCheckRuntime:settings.nativeCheckRuntime,executionPolicy:settings.executionPolicy,workerProfile:settings.worker?.profile,workerApiKey:settings.worker?.apiKey}});
 }

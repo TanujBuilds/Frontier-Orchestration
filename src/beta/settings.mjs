@@ -1,5 +1,5 @@
 import path from 'node:path';
-import {lstat} from 'node:fs/promises';
+import {rm} from 'node:fs/promises';
 import {canonical,identifier} from '../harness/contracts.mjs';
 import {normalizeProfile,normalizeLegacyWorkerProfile,normalizeProviderPolicy,profileIdentity} from '../harness/providers/contracts.mjs';
 import {normalizeReviewPolicy} from '../harness/review/contracts.mjs';
@@ -58,12 +58,42 @@ async function applyMigration(paths,intent,{afterStep=async()=>{}}={}){
  let next=credentials;if(fingerprint(credentials)!==intent.credentialsHash){next=structuredClone(credentials);if(legacy?.worker?.apiKey)next.entries['legacy-worker-key']=legacy.worker.apiKey;if(fingerprint(next)!==intent.credentialsHash)throw Error('Cannot recover exact approved credential migration');await saveJson(credentialsFile(paths),next);}await afterStep('credentials');
  if(current.schema!==2)await saveJson(paths.config,intent.settings);await afterStep('settings');
  await saveJson(path.join(paths.configDir,'migration-receipt.json'),{schema:1,previewHash:intent.previewHash,settingsHash:fingerprint(intent.settings),credentialsHash:intent.credentialsHash,complete:true});await afterStep('complete');
- const {rm}=await import('node:fs/promises');await rm(migrationFile(paths),{force:true});await rm(path.join(paths.configDir,'migration-legacy.json'),{force:true});return true;
+ return true;
 }
-export async function applySettingsMigration(paths,preview,options={}){return withLock(paths,async()=>{
- const {previewHash,...value}=preview??{};if(fingerprint(value)!==previewHash)throw Error('Migration preview changed');const actual=await previewSettingsMigration(paths);if(actual.previewHash!==previewHash)throw Error('Settings or credentials changed since migration preview');if(await entry(migrationFile(paths)))throw Error('Migration is pending; resume it before another apply');const {assertMaintenanceIdle}=await import('./service.mjs');await assertMaintenanceIdle(paths,{settingsMigration:true});
- // The original secret-bearing schema1 bytes remain owned0600 until credentials
- // are durable, allowing recovery without placing secrets in preview or intent.
- await saveJson(path.join(paths.configDir,'migration-legacy.json'),await readSettings(paths));await saveJson(migrationFile(paths),preview);await options.afterStep?.('intent');return applyMigration(paths,preview,options);
-});}
-export async function resumeSettingsMigration(paths,options={}){return withLock(paths,async()=>{const intent=await ownedJson(migrationFile(paths));if(!intent)return false;const {previewHash,...value}=intent;if(fingerprint(value)!==previewHash)throw Error('Invalid migration intent');normalizeSettings(intent.settings);const {assertMaintenanceIdle}=await import('./service.mjs');await assertMaintenanceIdle(paths,{settingsMigration:true});return applyMigration(paths,intent,options);});}
+export async function assertMigrationStartupReady(paths,settings){
+ const intent=await ownedJson(migrationFile(paths));if(!intent)return false;
+ const {previewHash,...value}=intent;if(fingerprint(value)!==previewHash)throw Error('Invalid pending migration intent');
+ const receipt=await ownedJson(path.join(paths.configDir,'migration-receipt.json')),credentials=await readCredentials(paths);
+ if(!receipt?.complete||receipt.previewHash!==previewHash||receipt.settingsHash!==fingerprint(settings)||receipt.credentialsHash!==fingerprint(credentials)||fingerprint(intent.settings)!==fingerprint(settings))throw Error('Settings migration is incomplete; resume it before coordinator startup.');
+ return true;
+}
+async function migrationPhase(paths,intent,{options={},create=false}={}){
+ const service=await import('./service.mjs'),lifecycle={...service,...options.lifecycle};
+ await service.assertSettingsMaintenanceAllowed(paths,{kind:'migration'});
+ const hadAgent=await lifecycle.verifyLaunchAgent(paths);
+ let ready=false;try{ready=await assertMigrationStartupReady(paths,await readSettings(paths));}catch(error){if(!/incomplete/.test(error.message))throw error;}
+ if(!ready){
+  await service.assertMaintenanceIdle(paths,{settingsMigration:true});
+  await lifecycle.stopForMaintenance(paths,{recovering:true});
+  await service.assertMaintenanceIdle(paths,{settingsMigration:true,offline:true});
+  if(create){await saveJson(path.join(paths.configDir,'migration-legacy.json'),await readSettings(paths));await saveJson(migrationFile(paths),intent);await options.afterStep?.('intent');}
+  await applyMigration(paths,intent,options);
+ }
+ return {intent,hadAgent};
+}
+async function finishMigration(paths,plan,options){
+ const service=await import('./service.mjs'),lifecycle={...service,...options.lifecycle};
+ if(plan.hadAgent)await lifecycle.startLaunchAgent(paths);
+ return withLock(paths,async()=>{await service.assertSettingsMaintenanceAllowed(paths,{kind:'migration'});const current=await ownedJson(migrationFile(paths));if(canonical(current)!==canonical(plan.intent))throw Error('Migration intent changed during owned restart; preserve newer state.');await assertMigrationStartupReady(paths,await readSettings(paths));await rm(migrationFile(paths),{force:true});await rm(path.join(paths.configDir,'migration-legacy.json'),{force:true});return true;});
+}
+export async function applySettingsMigration(paths,preview,options={}){
+ const plan=await withLock(paths,async()=>{
+  const {previewHash,...value}=preview??{};if(fingerprint(value)!==previewHash)throw Error('Migration preview changed');const actual=await previewSettingsMigration(paths);if(actual.previewHash!==previewHash)throw Error('Settings or credentials changed since migration preview');if(await entry(migrationFile(paths)))throw Error('Migration is pending; resume it before another apply');
+  return migrationPhase(paths,preview,{options,create:true});
+ });
+ return finishMigration(paths,plan,options);
+}
+export async function resumeSettingsMigration(paths,options={}){
+ const plan=await withLock(paths,async()=>{const intent=await ownedJson(migrationFile(paths));if(!intent)return null;const {previewHash,...value}=intent;if(fingerprint(value)!==previewHash)throw Error('Invalid migration intent');normalizeSettings(intent.settings);return migrationPhase(paths,intent,{options});});
+ return plan?finishMigration(paths,plan,options):false;
+}

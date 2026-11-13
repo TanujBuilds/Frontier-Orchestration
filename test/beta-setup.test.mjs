@@ -174,15 +174,16 @@ test('isolated setup refuses to follow a fixture Codex directory symlink',async 
  await assert.rejects(readFile(path.join(outside,'skills','mosaic-beta','SKILL.md')),{code:'ENOENT'});
 });
 
-test('a superseded worker revision does not block later setup',async t=>{
+test('a superseded revision permits exact setup but a stopped approval blocks worker removal until finalized',async t=>{
  const {paths}=await fixture(t);
  const initial=run(paths,['setup'],workerSetup);
  assert.equal(initial.status,0,initial.stderr);
  const before=await bytes(paths.config);
  const c=new Coordinator({root:paths.state,beta:true,selectedHost:'codex',workerProfile:before.worker.profile}),goals=new Goals(c);
  const manifest={submissionId:'revision-probe',objective:'Original goal',acceptance:['Scope check']};
+ let goal;
  try{
-  const goal=c.prepareGoal(manifest,'prepare');
+  goal=c.prepareGoal(manifest,'prepare');
   c.activateGoal({goalId:goal.id,hash:goal.hash},'activate');
   c.control({goalId:goal.id,action:'stop'},'stop');
   const draft=(key,objective)=>goals.prepareRevision({goalId:goal.id,expectedHash:goal.hash,manifest:{...manifest,objective}},key);
@@ -190,6 +191,16 @@ test('a superseded worker revision does not block later setup',async t=>{
   goals.activateRevision({revisionId:superseding.id,hash:superseding.hash},'approve-new');
   assert.throws(()=>goals.activateRevision({revisionId:stale.id,hash:stale.hash},'activate-old'),/stale/i);
  }finally{c.close();}
+ const reapplied=run(paths,['setup'],workerSetup);
+ assert.equal(reapplied.status,0,reapplied.stderr);
+ assert.deepEqual(await bytes(paths.config),before);
+ const rejected=run(paths);
+ assert.notEqual(rejected.status,0);
+ assert.match(rejected.stderr,/stopped approval.*resume.*finalize/i);
+ assert.deepEqual(await bytes(paths.config),before);
+ const retiring=new Coordinator({root:paths.state,beta:true,selectedHost:'codex',workerProfile:before.worker.profile});
+ try{assert.equal(new Goals(retiring).finalize({goalId:goal.id,partial:true,summary:'Retire stopped approval before removing its worker'},'finalize-before-worker-removal').status,'partial');}
+ finally{retiring.close();}
  const changed=run(paths);
  assert.equal(changed.status,0,changed.stderr);
  assert.equal((await bytes(paths.config)).worker,null);

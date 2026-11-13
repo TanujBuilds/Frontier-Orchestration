@@ -1,12 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,readFile,writeFile,rm,lstat,realpath,chmod,copyFile} from 'node:fs/promises';
+import {mkdtemp,mkdir,readFile,writeFile,rm,lstat,realpath,chmod,copyFile,rename,symlink} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
-import {spawnSync} from 'node:child_process';
+import {spawnSync,spawn} from 'node:child_process';
+import {once} from 'node:events';
+import {client} from '../src/beta/client.mjs';
 import {digest} from '../src/harness/contracts.mjs';
-import {locations,hash} from '../src/beta/files.mjs';
+import {locations,hash,withLock} from '../src/beta/files.mjs';
 import * as installer from '../src/beta/install.mjs';
 import {Coordinator} from '../src/harness/coordinator.mjs';
 import {ProviderRegistry} from '../src/harness/providers/registry.mjs';
@@ -111,4 +113,73 @@ test('native update fallback requires a verified owned old package and no held a
  const c=new Coordinator(f.context),goal=c.preparePortableGoal({submissionId:'missing-runtime-record',mode:'codex_only',objective:'Retain a stopped approval if its runtime record is missing',acceptance:['Refuse inferred replacement runtime identity'],environment:'fixture',executionPolicy:f.executionPolicy},'prepare');c.control({goalId:goal.id,action:'stop'},'stop');const saved=c.store.get('execution_configuration','coordinator');c.close();
  const next=await payload(f.root,'0.1.0-beta.163',{implementation:f.implementation,artifactRoot:f.artifact.root}),launcher=await readFile(f.paths.launcher),receipt=await readFile(f.paths.installation),db=new DatabaseSync(path.join(f.paths.state,'harness.sqlite3'));db.prepare("UPDATE records SET data=? WHERE kind='execution_configuration' AND id='coordinator'").run(JSON.stringify({...saved,hash:'0'.repeat(64)}));db.close();await assert.rejects(installer.install(f.paths,next,{noPath:true}),/saved native execution identity/i);assert.deepEqual(await readFile(f.paths.launcher),launcher);assert.deepEqual(await readFile(f.paths.installation),receipt);
  const damaged=new DatabaseSync(path.join(f.paths.state,'harness.sqlite3'));damaged.prepare("DELETE FROM records WHERE kind='execution_configuration' AND id='coordinator'").run();damaged.close();await assert.rejects(installer.install(f.paths,next,{noPath:true}),/implementation identity is missing.*resumable/i);assert.deepEqual(await readFile(f.paths.launcher),launcher);assert.deepEqual(await readFile(f.paths.installation),receipt);assert.equal(await readFile(f.paths.config,'utf8'),f.config);
+});
+
+test('retained native artifact damage rejects compatible update before any pointer or state writes',{skip:!nativeAvailable&&!nativeRequired,timeout:60000},async t=>{
+ const f=await nativeUpdateFixture(t),repo=path.join(f.root,'retained-repo');await mkdir(path.join(repo,'checks'),{recursive:true});await mkdir(path.join(repo,'src'));await writeFile(path.join(repo,'src/value.mjs'),'export const value=1;\n');await writeFile(path.join(repo,'checks/value.mjs'),'process.stdout.write("native");\n');await git(repo,'init','-q');await git(repo,'add','.');await git(repo,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-qm','Retained base');
+ const c=new Coordinator(f.context),nodePath=path.join(path.dirname(f.nativeCheckRuntime.artifactManifestPath),'node');const goal=c.preparePortableGoal({submissionId:'retained-artifact',mode:'codex_only',objective:'Preserve exact retained native runtime availability',acceptance:['Refuse unavailable approved literal runtime'],environment:'fixture',executionPolicy:f.executionPolicy,project:{repo,baseCommit:await git(repo,'rev-parse','HEAD'),readPaths:['src/','checks/'],writePaths:['src/'],checks:[{id:'value',argv:[nodePath,'checks/value.mjs'],timeoutMs:1000}]}},'prepare');c.control({goalId:goal.id,action:'stop'},'stop');const stopped=c.store.get('goal',goal.id),saved=c.store.get('execution_configuration','coordinator');c.close();assert.equal(stopped.manifest.project.checks[0].argv[0],nodePath);
+ const b=await payload(f.root,'0.1.0-beta.162',{implementation:f.implementation,artifactRoot:f.artifact.root}),artifactRoot=path.dirname(f.nativeCheckRuntime.artifactManifestPath),database=path.join(f.paths.state,'harness.sqlite3'),launcher=await readFile(f.paths.launcher),receipt=await readFile(f.paths.installation),state=await readFile(database),config=await readFile(f.paths.config);
+ const originals={};for(const file of ['node','mosaic-check-supervisor','NODE-LICENSE'])originals[file]=await readFile(path.join(artifactRoot,file));
+ const scenarios=[];
+ for(const file of ['node','mosaic-check-supervisor','NODE-LICENSE']){
+  scenarios.push({name:'missing '+file,async mutate(){await rename(path.join(artifactRoot,file),path.join(f.root,'retained-'+file));return ()=>rename(path.join(f.root,'retained-'+file),path.join(artifactRoot,file));}});
+  scenarios.push({name:'changed '+file,async mutate(){await writeFile(path.join(artifactRoot,file),Buffer.concat([originals[file],Buffer.from('changed')]));return ()=>writeFile(path.join(artifactRoot,file),originals[file]);}});
+  scenarios.push({name:'changed mode '+file,async mutate(){const mode=(await lstat(path.join(artifactRoot,file))).mode&0o777;await chmod(path.join(artifactRoot,file),file==='NODE-LICENSE'?0o600:0o644);return ()=>chmod(path.join(artifactRoot,file),mode);}});
+ }
+ scenarios.push({name:'symlink node alias',async mutate(){const backup=path.join(f.root,'aliased-node');await rename(nodePath,backup);await symlink(backup,nodePath);return async()=>{await rm(nodePath);await rename(backup,nodePath);};}});
+ scenarios.push({name:'symlink artifact directory',async mutate(){const backup=path.join(f.root,'aliased-artifact');await rename(artifactRoot,backup);await symlink(backup,artifactRoot);return async()=>{await rm(artifactRoot);await rename(backup,artifactRoot);};}});
+ scenarios.push({name:'writable artifact ancestor',async mutate(){const ancestor=path.dirname(artifactRoot),mode=(await lstat(ancestor)).mode&0o777;await chmod(ancestor,0o777);return ()=>chmod(ancestor,mode);}});
+ for(const scenario of scenarios)await t.test(scenario.name,async()=>{
+  const restore=await scenario.mutate();try{await assert.rejects(installer.install(f.paths,b,{noPath:true}),/native.*artifact|retained native|runtime.*changed|canonical|aliased|writable|mode/i);assert.deepEqual(await readFile(f.paths.launcher),launcher);assert.deepEqual(await readFile(f.paths.installation),receipt);assert.deepEqual(await readFile(database),state);assert.deepEqual(await readFile(f.paths.config),config);await assert.rejects(lstat(path.join(f.paths.configDir,'install-transaction.json')),{code:'ENOENT'});await assert.rejects(lstat(path.join(f.paths.versions,'0.1.0-beta.162')),{code:'ENOENT'});}finally{await restore();}
+ });
+ const reopened=new Coordinator(f.context);assert.deepEqual(reopened.store.get('execution_configuration','coordinator'),saved);assert.deepEqual(reopened.store.get('goal',goal.id),stopped);reopened.close();
+});
+test('retained artifact disappearing during staging cannot switch the pointer',{skip:!nativeAvailable&&!nativeRequired,timeout:30000},async t=>{
+ const f=await nativeUpdateFixture(t),c=new Coordinator(f.context),goal=c.preparePortableGoal({submissionId:'retained-staging',mode:'codex_only',objective:'Recheck retained runtime at pointer authority',acceptance:['No pointer switch after retained node disappears'],environment:'fixture',executionPolicy:f.executionPolicy},'prepare');c.control({goalId:goal.id,action:'stop'},'stop');const stopped=c.store.get('goal',goal.id);c.close();
+ const b=await payload(f.root,'0.1.0-beta.162',{implementation:f.implementation,artifactRoot:f.artifact.root}),nodePath=path.join(path.dirname(f.nativeCheckRuntime.artifactManifestPath),'node'),backup=path.join(f.root,'staged-retained-node'),database=path.join(f.paths.state,'harness.sqlite3'),launcher=await readFile(f.paths.launcher),receipt=await readFile(f.paths.installation),state=await readFile(database),config=await readFile(f.paths.config);let moved=false;
+ try{
+  await assert.rejects(installer.install(f.paths,b,{noPath:true,async afterStep(step){if(step==='version-staged'){await rename(nodePath,backup);moved=true;}}}),/native.*artifact|retained.*runtime/i);assert.deepEqual(await readFile(f.paths.launcher),launcher);assert.deepEqual(await readFile(f.paths.installation),receipt);assert.deepEqual(await readFile(database),state);assert.deepEqual(await readFile(f.paths.config),config);assert.equal(JSON.parse(await readFile(path.join(f.paths.configDir,'install-transaction.json'))).phase,'staged');
+ }finally{if(moved)await rename(backup,nodePath);}
+ await installer.recoverInstallation(f.paths);assert.deepEqual(await readFile(f.paths.launcher),launcher);assert.deepEqual(await readFile(f.paths.installation),receipt);assert.deepEqual(await readFile(database),state);await assert.rejects(lstat(path.join(f.paths.configDir,'install-transaction.json')),{code:'ENOENT'});const resumed=new Coordinator(f.context);assert.deepEqual(resumed.store.get('goal',goal.id),stopped);resumed.close();
+});
+
+function restartLifecycle(paths,events,expectedVersion,{startFailure=false}={}){
+ let coordinator=null;const owner='fixture-owned-restart';
+ const ready=async kind=>withLock(paths,async()=>{
+  assert.equal(await installer.assertInstallationStartupReady(paths),true);const tx=JSON.parse(await readFile(path.join(paths.configDir,'install-transaction.json')));assert.equal(tx.phase,kind==='rollback'?'restored':'committed');assert.equal(JSON.parse(await readFile(paths.installation)).version,expectedVersion);events.push('startup-mutex');
+  if(startFailure)throw Error('Owned service did not become ready');
+  coordinator=new Coordinator({root:paths.state});coordinator.acquireWorker(owner);events.push('ready');return true;
+ });
+ return {lifecycle:{verifyLaunchAgent:async()=>true,stopForMaintenance:async()=>true,startLaunchAgent:()=>ready('forward'),rollbackLaunchAgent:()=>ready('rollback')},close(){if(coordinator){coordinator.releaseWorker(owner);coordinator.close();coordinator=null;}}};
+}
+test('owned forward restart acquires startup mutex only after committed pointer writes',async t=>{
+ const f=await fixture(t),a=await payload(f.root,'0.1.0-beta.161'),b=await payload(f.root,'0.1.0-beta.162');await installer.install(f.paths,a,{noPath:true});const events=[],service=restartLifecycle(f.paths,events,'0.1.0-beta.162');t.after(()=>service.close());
+ await installer.install(f.paths,b,{noPath:true,lifecycle:service.lifecycle});assert.deepEqual(events,['startup-mutex','ready']);await assert.rejects(lstat(path.join(f.paths.configDir,'install-transaction.json')),{code:'ENOENT'});service.close();
+});
+test('precommit rollback releases maintenance mutex before restoring owned service',async t=>{
+ const f=await fixture(t),a=await payload(f.root,'0.1.0-beta.161'),b=await payload(f.root,'0.1.0-beta.162');await installer.install(f.paths,a,{noPath:true});const launcher=await readFile(f.paths.launcher),events=[],service=restartLifecycle(f.paths,events,'0.1.0-beta.161');t.after(()=>service.close());
+ await assert.rejects(installer.install(f.paths,b,{noPath:true,lifecycle:service.lifecycle,afterStep(step){if(step==='launcher-switched')throw Error('Interrupted before receipt commit');}}),/Interrupted before receipt commit/);assert.deepEqual(events,['startup-mutex','ready']);assert.deepEqual(await readFile(f.paths.launcher),launcher);await assert.rejects(lstat(path.join(f.paths.configDir,'install-transaction.json')),{code:'ENOENT'});service.close();
+});
+test('failed owned restart retains committed handoff until recovery obtains startup mutex',async t=>{
+ const f=await fixture(t),a=await payload(f.root,'0.1.0-beta.161'),b=await payload(f.root,'0.1.0-beta.162');await installer.install(f.paths,a,{noPath:true});const failedEvents=[],failed=restartLifecycle(f.paths,failedEvents,'0.1.0-beta.162',{startFailure:true});
+ await assert.rejects(installer.install(f.paths,b,{noPath:true,lifecycle:failed.lifecycle}),/did not become ready/);assert.deepEqual(failedEvents,['startup-mutex']);assert.equal(JSON.parse(await readFile(path.join(f.paths.configDir,'install-transaction.json'))).phase,'committed');
+ const events=[],service=restartLifecycle(f.paths,events,'0.1.0-beta.162');t.after(()=>service.close());assert.equal(await installer.recoverInstallation(f.paths,{lifecycle:service.lifecycle}),true);assert.deepEqual(events,['startup-mutex','ready']);await assert.rejects(lstat(path.join(f.paths.configDir,'install-transaction.json')),{code:'ENOENT'});service.close();
+});
+
+test('owned restart admits actual CLI service through shared startup mutex after pointer commit',{timeout:15000},async t=>{
+ const f=await fixture(t),a=await payload(f.root,'0.1.0-beta.161'),b=await payload(f.root,'0.1.0-beta.162');await installer.install(f.paths,a,{noPath:true});await writeFile(f.paths.config,JSON.stringify({schema:1,host:{id:'cursor',options:{}},codexPath:process.execPath}),{mode:0o600});let child,closed;const events=[];
+ const lifecycle={verifyLaunchAgent:async()=>true,stopForMaintenance:async()=>true,async startLaunchAgent(){
+  await withLock(f.paths,async()=>{assert.equal(await installer.assertInstallationStartupReady(f.paths),true);assert.equal(JSON.parse(await readFile(f.paths.installation)).version,'0.1.0-beta.162');events.push('startup-mutex');});
+  child=spawn(process.execPath,[path.resolve(import.meta.dirname,'../src/beta/cli.mjs'),'--home',f.paths.home,'serve'],{env:{PATH:'/usr/bin:/bin',HOME:f.paths.home},stdio:['ignore','pipe','pipe']});closed=once(child,'exit');closed.catch(()=>{});
+  await new Promise((resolve,reject)=>{let stdout='',stderr='';const timer=setTimeout(()=>reject(Error('Owned CLI did not become ready: '+stderr)),8000);child.stderr.on('data',bytes=>stderr+=bytes);child.stdout.on('data',bytes=>{stdout+=bytes;if(stdout.includes('"status":"ready"')){clearTimeout(timer);events.push('ready');resolve();}});child.once('error',error=>{clearTimeout(timer);reject(error);});child.once('exit',code=>{clearTimeout(timer);reject(Error('Owned CLI exited '+code+': '+stderr));});});
+ }};
+ try{await installer.install(f.paths,b,{noPath:true,lifecycle});assert.deepEqual(events,['startup-mutex','ready']);assert.ok((await client(f.paths)('tools_list')).some(tool=>tool.name==='goal_prepare'));await assert.rejects(lstat(path.join(f.paths.configDir,'install-transaction.json')),{code:'ENOENT'});const db=new DatabaseSync(path.join(f.paths.state,'harness.sqlite3'),{readOnly:true});try{assert.ok(db.prepare("SELECT 1 FROM records WHERE kind='lease' AND id='coordinator'").get());}finally{db.close();}}
+ finally{if(child&&child.exitCode===null&&child.signalCode===null){child.kill('SIGTERM');await closed;}}
+ const stopped=new DatabaseSync(path.join(f.paths.state,'harness.sqlite3'),{readOnly:true});try{assert.equal(stopped.prepare("SELECT 1 FROM records WHERE kind='lease' AND id='coordinator'").get(),undefined);}finally{stopped.close();}
+});
+test('startup readiness rejects incomplete writes and retains changed handoff settings',async t=>{
+ const f=await fixture(t),a=await payload(f.root,'0.1.0-beta.161'),b=await payload(f.root,'0.1.0-beta.162');await installer.install(f.paths,a,{noPath:true});assert.equal(await installer.assertInstallationStartupReady(f.paths),false);const custom=JSON.stringify({schema:1,codexPath:process.execPath});let incomplete=false;
+ const lifecycle={verifyLaunchAgent:async()=>true,stopForMaintenance:async()=>true,async startLaunchAgent(){await withLock(f.paths,()=>installer.assertInstallationStartupReady(f.paths));await writeFile(f.paths.config,custom,{mode:0o600});}};
+ await assert.rejects(installer.install(f.paths,b,{noPath:true,lifecycle,async afterStep(step){if(step==='version-staged'){await assert.rejects(installer.assertInstallationStartupReady(f.paths),/incomplete/);incomplete=true;}}}),/Settings changed.*recovery/);assert.equal(incomplete,true);assert.equal(await readFile(f.paths.config,'utf8'),custom);assert.equal(JSON.parse(await readFile(path.join(f.paths.configDir,'install-transaction.json'))).phase,'committed');await assert.rejects(installer.assertInstallationStartupReady(f.paths),/Settings changed/);
+ await rm(f.paths.config);const events=[],service=restartLifecycle(f.paths,events,'0.1.0-beta.162');t.after(()=>service.close());await installer.recoverInstallation(f.paths,{lifecycle:service.lifecycle});assert.deepEqual(events,['startup-mutex','ready']);service.close();
 });

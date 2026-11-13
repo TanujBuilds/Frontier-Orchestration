@@ -15,7 +15,7 @@ import {workerEndpoint,workerProfile} from '../harness/worker-profile.mjs';
 import {STRUCTURED_WORKER_PROTOCOL} from '../harness/provider-capabilities.mjs';
 import {atomic,entry,fileBytes,hash,jsonFile,localDirectory,saveJson,shellQuote,withLock} from './files.mjs';
 import {client} from './client.mjs';
-import {assertMaintenanceIdle,launchAgent,startLaunchAgent,stopForMaintenance,verifyLaunchAgent} from './service.mjs';
+import {assertMaintenanceIdle,assertSettingsMaintenanceAllowed,assertBetaStartupReady,launchAgent,startLaunchAgent,stopForMaintenance,verifyLaunchAgent} from './service.mjs';
 import {canonical} from '../harness/contracts.mjs';
 import {getHost,normalizeHostSettings} from './hosts/index.mjs';
 
@@ -229,7 +229,9 @@ async function inspectSkill(paths){
  return {directory,info,bytes:await fileBytes(paths.skill,{max:16384})};
 }
 
-async function applySetup(paths,intent,registrations,{recovering=false}={}){
+async function applySetup(paths,intent,registrations,{recovering=false,lifecycle}={}){
+ const controls={verifyLaunchAgent,stopForMaintenance,startLaunchAgent,...lifecycle};
+ await assertSettingsMaintenanceAllowed(paths,{kind:'setup'});
  const settings=intent.settings,codex=await findCodex(paths,settings.codexPath);
  if(!codex)throw Error('The Codex CLI used by the interrupted setup is unavailable.');
  const current=await readSettings(paths),currentHash=fingerprint(current);
@@ -244,8 +246,8 @@ async function applySetup(paths,intent,registrations,{recovering=false}={}){
     !bytes&&info&&(intent.previousSkillHash|| (await readdir(directory)).length))
   throw Error('Existing mosaic-beta skill has changed. Preserve '+paths.skill);
  const allowUnrecorded=!intent.hadAgent;
- await verifyLaunchAgent(paths,{allowUnrecorded});
- if(changed){await stopForMaintenance(paths,{allowUnrecorded,recovering});await assertMaintenanceIdle(paths,{settingsChange:true});}
+ await controls.verifyLaunchAgent(paths,{allowUnrecorded});
+ if(changed){await controls.stopForMaintenance(paths,{allowUnrecorded,recovering});await assertMaintenanceIdle(paths,{settingsChange:true});}
  if(!saved){
   try{await registrations.add(codex);}catch{throw Error('Could not add the beta MCP registration. Run mosaic setup to retry.');}
   saved=await registrations.get(codex);
@@ -258,10 +260,18 @@ async function applySetup(paths,intent,registrations,{recovering=false}={}){
   await atomic(paths.skill,skill);
  }
  if(changed)await saveJson(paths.config,settings);
- await startLaunchAgent(paths,{allowUnrecorded});
- await saveJson(paths.ownership,{schema:1,complete:true,mcpHash:fingerprint(saved),skillHash:hash(skill),codex,
+ await saveJson(paths.ownership,{schema:1,complete:true,intentHash:fingerprint(intent),settingsHash:fingerprint(settings),mcpHash:fingerprint(saved),skillHash:hash(skill),codex,
   ...(!paths.isolated?{launchAgentHash:hash(launchAgent(paths))}:{})});
- await rm(paths.setupIntent);
+ return intent;
+}
+
+async function legacyReady(paths,intent){
+ if(canonical(await readSettings(paths))!==canonical(intent.settings))return false;
+ const receipt=await bindingReceipt(paths);return receipt?.complete===true&&receipt.intentHash===fingerprint(intent)&&receipt.settingsHash===fingerprint(intent.settings);
+}
+async function finishLegacy(paths,intent,{lifecycle}={}){
+ const controls={startLaunchAgent,...lifecycle};await controls.startLaunchAgent(paths,{allowUnrecorded:!intent.hadAgent});
+ return withLock(paths,async()=>{await assertSettingsMaintenanceAllowed(paths,{kind:'setup'});if(canonical(await readSetupIntent(paths))!==canonical(intent)||!await legacyReady(paths,intent))throw Error('Legacy setup changed during owned restart; preserve newer state.');await assertBetaStartupReady(paths,await readSettings(paths));await rm(paths.setupIntent,{force:true});return true;});
 }
 
 function printCompletion(paths,output,{resumed=false}={}){
@@ -286,11 +296,11 @@ export async function setup(paths,options={}){
   return false;
  }
  if(await entry(paths.setupIntent)){
-  await withLock(paths,async()=>{
-   const intent=await readSetupIntent(paths);
-   if(intent)await applySetup(paths,intent,registrations,{recovering:true});
+  const plan=await withLock(paths,async()=>{
+   await assertSettingsMaintenanceAllowed(paths,{kind:'setup'});const intent=await readSetupIntent(paths);
+   return await legacyReady(paths,intent)?intent:applySetup(paths,intent,registrations,{recovering:true,lifecycle:options.lifecycle});
   });
-  printCompletion(paths,output,{resumed:true});
+  await finishLegacy(paths,plan,options);printCompletion(paths,output,{resumed:true});
   return true;
  }
  const codex=await findCodex(paths,explicitCodex??old?.codexPath);
@@ -316,7 +326,9 @@ export async function setup(paths,options={}){
   if(!paths.isolated)output.write(`LaunchAgent: ${plist}\n`);
   output.write(worker?`Worker: ${worker.profile.displayName} · ${worker.profile.baseUrl} · ${worker.profile.model} · ${responseMode(worker.profile)} · ${requiresAdvertisedModel(worker.profile)?'advertised model required':'manual model selection'}\n`:'Worker: Codex only\n');
   if(!yes(await ask('Apply these beta settings and registrations? [y/N] ')))return false;
-  return withLock(paths,async()=>{
+  const plan=await withLock(paths,async()=>{
+   await assertSettingsMaintenanceAllowed(paths,{kind:'setup'});
+   const controls={verifyLaunchAgent,stopForMaintenance,...options.lifecycle};
    if(await entry(paths.setupIntent))throw Error('Another setup already has pending changes. Run mosaic setup to resume.');
    const current=await readSettings(paths);
    if(canonical(current)!==canonical(old))throw Error('Mosaic Beta setup changed while the prompt was open. Run mosaic setup again.');
@@ -326,14 +338,14 @@ export async function setup(paths,options={}){
    const {info,bytes}=await inspectSkill(paths);
    if(bytes&&(!ownership||hash(bytes)!==ownership.skillHash||bytes.toString()!==skill)||!bytes&&info)
     throw Error('Existing mosaic-beta skill is foreign or has changed. Preserve '+skillFile);
-   const hadAgent=await verifyLaunchAgent(paths);
+   const hadAgent=await controls.verifyLaunchAgent(paths);
    if(fingerprint(current)!==fingerprint(settings))await assertMaintenanceIdle(paths,{settingsChange:true});
+   await controls.stopForMaintenance(paths,{allowUnrecorded:!hadAgent,recovering:true});await assertMaintenanceIdle(paths,{settingsChange:fingerprint(current)!==fingerprint(settings),offline:true});
    const intent={schema:1,settings,hadAgent,previousConfigHash:fingerprint(current),previousMcpHash:existing?fingerprint(existing):null,previousSkillHash:bytes?hash(bytes):null};
-   await saveJson(paths.setupIntent,intent);
-   await applySetup(paths,intent,registrations);
-   printCompletion(paths,output);
-   return true;
+   await saveJson(paths.setupIntent,intent);await options.afterStep?.('intent');
+   return applySetup(paths,intent,registrations,{lifecycle:options.lifecycle});
   });
+  await finishLegacy(paths,plan,options);printCompletion(paths,output);return true;
  });
 }
 
