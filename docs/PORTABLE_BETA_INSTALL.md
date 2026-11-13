@@ -83,10 +83,23 @@ A new launcher uses its installed runtime and the caller's PATH; it does not add
 hidden global host executable directories. Prior exact installer-owned launchers
 are accepted using their original receipt and historical template.
 
-Setup previews the selected host, configured already-running worker/reviewer
-endpoints, routes, capacity, native artifact identity and private configuration.
-Review defaults to the selected host. Any separate API review or connection/
-inference test requires explicit selection. Setup does not install a model,
+First setup explains the coordinator, coding app and worker, then asks you to
+choose Codex, Claude Code, Cursor or Antigravity. Choose an existing model on
+this Mac, another computer, a hosted API, or no worker yet. For one worker,
+enter its API base URL and model ID from the server's configuration, then an
+optional hidden bearer key. Mosaic generates the internal identifiers and
+uses one concurrent task slot. On another computer, localhost means the Mac
+running Mosaic; supply a reachable URL without any required tunnel product.
+
+Review defaults to the selected app. Approved task context goes to the supplied
+worker endpoint; remote/hosted workers send it off the Mac, and app review may
+use a cloud service even with a local worker. The summary shows the exact
+endpoint/model and capacity; technical settings are optional. Advanced setup
+retains multiple workers, specialty routes, concurrency and separate API review.
+Existing schema-2 settings use the advanced path and are replaced only after
+the exact preview and confirmation. Any connection/inference test requires a
+separate opt-in and proves only a fixed transport request, not coding quality
+or an actual app connection. Setup does not install a model,
 scan the network, change server settings, or require Tailscale. Follow the
 interactive preview for migration; cancel leaves existing settings intact.
 Secrets are held separately in owned 0600 credential storage. The existing core
