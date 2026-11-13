@@ -39,8 +39,8 @@ function transcript(){
 
 async function setupAnswers(paths,answers,{credentialInput=false}={}){
  const input=Readable.from([answers.join('\n')+'\n']);
- if(credentialInput)input.isTTY=true;
  const {output,text}=transcript();
+ if(credentialInput){input.isTTY=true;output.isTTY=true;}
  assert.equal(await setup(paths,{input,output}),true);
  return text();
 }
