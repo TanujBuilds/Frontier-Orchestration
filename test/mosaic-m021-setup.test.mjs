@@ -55,6 +55,26 @@ test('actual non-TTY simple bearer entry rejects before reading or echoing paste
  const paths=await fixture(t),key='dummy-non-tty-setup01-7392',io=streams(['3','1','http://127.0.0.1:1/v1','fixture-model','y',key,'n','n','y']);await assert.rejects(setup(paths,{...io,portable:true,...runtime,verifyExecution:()=>{}}),/interactive terminal/i);assert.ok(!io.text().includes(key));await noSetupWrites(paths);
 });
 
+test('TTY input with redirected output rejects hidden bearer entry before consuming a key',async t=>{
+ const paths=await fixture(t),key='dummy-redirected-setup01-key',io=streams(['3','1','http://127.0.0.1:1/v1','fixture-model','y',key,'n','n','y']);io.input.isTTY=true;
+ await assert.rejects(setup(paths,{...io,portable:true,...runtime,verifyExecution:()=>{}}),/interactive terminal/i);assert.ok(!io.text().includes(key));await noSetupWrites(paths);
+});
+
+for(const boundary of ['details','probe','preflight'])test(`setup rejects credential rotation at ${boundary} before stale publication or inference`,async t=>{
+ const paths=await fixture(t),{url,requests}=await loopback(t),model='dummy-rotated-private-model';let text='',rotated=false,publishedBeforeRotation='';
+ const rotate=async()=>{publishedBeforeRotation=text;rotated=true;await saveJson(paths.credentials,{schema:1,entries:{'rotated-key':model}});};
+ const answers=['3','1',url,model,'n','y','y','y'];
+ const ask=async prompt=>{text+=prompt;if(boundary==='details'&&/technical settings details/.test(prompt)||boundary==='probe'&&/optional inference/.test(prompt))await rotate();return answers.shift();};
+ await assert.rejects(setupPortable(paths,{ask,output:{write:x=>{text+=x;}},...runtime,verifyExecution:async()=>{if(boundary==='preflight')await rotate();}}),/Settings or credentials changed while preview was open/);
+ assert.equal(rotated,true);assert.equal(requests.length,0);assert.ok(!text.slice(publishedBeforeRotation.length).includes(model));assert.ok(!text.includes('Exact private setup preview')||boundary==='probe');assert.equal(JSON.parse(await readFile(paths.credentials)).entries['rotated-key'],model);await assert.rejects(readFile(paths.config),{code:'ENOENT'});await assert.rejects(readFile(paths.setupIntent),{code:'ENOENT'});
+});
+
+test('settings replaced while the details question is open are preserved without probing the stale endpoint',async t=>{
+ const paths=await fixture(t),{url,requests}=await loopback(t),replacement=complexSettings(),answers=['3','1',url,'fixture-model','n','y','y','y'];let text='';
+ const ask=async prompt=>{if(/technical settings details/.test(prompt))await saveJson(paths.config,replacement);return answers.shift();};
+ await assert.rejects(setupPortable(paths,{ask,output:{write:x=>{text+=x;}},...runtime,verifyExecution:()=>{}}),/Settings or credentials changed while preview was open/);assert.equal(requests.length,0);assert.deepEqual(JSON.parse(await readFile(paths.config)),replacement);assert.ok(!text.includes('Exact private setup preview'));await assert.rejects(readFile(paths.setupIntent),{code:'ENOENT'});
+});
+
 function profile(id,roles=['worker']){return {schema:1,id,revision:'r1',displayName:id,transport:'openai-chat',baseUrl:'http://127.0.0.1:1/v1',model:'fixture-model',roles,capabilities:{workerProtocol:roles.includes('worker')?'mosaic-structured-v1':null,transports:['json'],modelDiscovery:'manual',taskKinds:roles.includes('worker')?['coding','consult']:[]},maxContextTokens:null,maxOutputTokens:4096,concurrency:1,capacityGroup:'shared',credentialRef:null,streaming:false};}
 function complexSettings(){return {schema:2,host:{id:'cursor',options:{}},providers:[profile('first'),profile('second'),profile('reviewer',['reviewer'])],defaults:{workerId:'second',plannerWorkerId:'first',review:{source:'api',reviewer:{id:'reviewer',revision:'r1'}},routing:{version:1,rules:[{id:'docs',category:'docs',providerId:'first'}],defaultWorkerId:'second'}},...runtime,serviceMaxConcurrentTasks:1,capacityGroups:[{id:'shared',limit:1}]};}
 

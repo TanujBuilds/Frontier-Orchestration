@@ -146,7 +146,7 @@ async function askSession(input,output,work){
  const finish=()=>{closed=true;const next=waiter;waiter=null;next?.(null);};
  rl.on('SIGINT',()=>rl.close());rl.on('close',finish);
  const ask=async(prompt,{secret=false}={})=>{
-  if(secret&&!input.isTTY)throw Error('Bearer keys can only be entered in an interactive terminal.');
+  if(secret&&(!input.isTTY||!output.isTTY))throw Error('Bearer keys can only be entered in an interactive terminal with terminal output.');
   output.write(prompt);
   try{
    const answer=queue.length?queue.shift():closed?null:await new Promise(resolve=>{waiter=resolve;echo=!secret;});
