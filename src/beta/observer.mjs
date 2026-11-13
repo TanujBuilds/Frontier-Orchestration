@@ -151,7 +151,7 @@ function polishedMain(state,goal,{width,height,color,selected,offset}){
  if(!goal){
   out.push(bold(state.stale?'Waiting for the coordinator':'Ready when you are'),'');
   out.push(...lines(state.stale?'Run mosaic doctor to check the connection.':
-   'Start a Mosaic goal in Codex. Agent activity and handoffs will appear here.',space));
+   'Start a Mosaic goal in your selected host. Agent activity and handoffs will appear here.',space));
  }else{
   const title=lines(goal.objective,space);
   out.push(...title.slice(0,2).map((line,i)=>bold(i===1&&title.length>2?clip(line+' …',space):line)));

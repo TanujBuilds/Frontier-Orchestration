@@ -8,7 +8,7 @@ import { NativeCandidates } from './native-candidates.mjs';
 import { Journal } from '../project/journal.mjs';
 import { Workspace,inspectRepository } from '../project/workspace.mjs';
 import {approvedChecks,executionFields} from './execution.mjs';
-import { matches,protectedPath,secretPath,digest as fileDigest } from '../project/contracts.mjs';
+import { matches,protectedPath,secretPath,digest as fileDigest,Pause } from '../project/contracts.mjs';
 import { git } from '../project/process.mjs';
 import { CodingAdapter } from './coding.mjs';
 import { digest,identifier,text } from './contracts.mjs';
@@ -89,7 +89,7 @@ async function assertCheckedCommit(workspace,checkpoint,snapshot,modes){
 }
 
 export class Integration {
- constructor({c,checksFactory,config={},signal}){this.signal=signal;this.c=c;this.checksFactory=checksFactory;this.config=config;this.inflight=new Map();this.executionContext=new AsyncLocalStorage();this.nativeCandidates=new NativeCandidates(this);}
+ constructor({c,checksFactory,config={},signal}){this.signal=signal;this.c=c;this.checksFactory=checksFactory;this.config=config;this.inflight=new Map();this.repositoryTurns=new Map();this.executionContext=new AsyncLocalStorage();this.nativeCandidates=new NativeCandidates(this);}
  async effect(key,input,action){
   identifier(key,'idempotencyKey');const hash=digest(input),old=this.c.store.maybe('effect',key);
   if(old&&old.hash!==hash)throw Error('Idempotency key conflict');if(old?.status==='completed')return old.result;
@@ -147,14 +147,23 @@ export class Integration {
   return {journal,workspace,g:this.c.store.get('goal',goalId),shared};
  }
  checks(workspace,context={}){this.c.verifyCurrentWorker?.();return approvedChecks(workspace,{checksFactory:this.checksFactory,config:this.config,context:{...context,...this.executionContext.getStore(),c:this.c}});}
- async lockedGoal(goalId,{native=false,refuseLegacy=false,integrationTaskId=null,repairPin}={}){
+ async lockedGoal(goalId,{native=false,refuseLegacy=false,integrationTaskId=null,repairPin,wait=false}={}){
   if(repairPin){if(repairPin.goal.id!==goalId||repairPin.task.id!==integrationTaskId)throw Error('Pending repair target mismatch');assertPendingRepair(this,repairPin);}
   const g=this.c.store.get('goal',goalId),repository=canonicalRepository(g.manifest.project.repo);
+  // Coding lanes share this short preparation turn, then use separate candidate
+  // journals. Wait only for an in-process owner whose release we can observe;
+  // durable/external locks and their conservative recovery remain authoritative.
+  while(this.repositoryTurns.has(repository)){
+   if(!wait)throw new Pause('A runner already owns this job','locked');
+   await this.repositoryTurns.get(repository);this.signal?.throwIfAborted();
+  }
+  const turn=Promise.withResolvers();this.repositoryTurns.set(repository,turn.promise);
+  const endTurn=()=>{if(this.repositoryTurns.get(repository)===turn.promise)this.repositoryTurns.delete(repository);turn.resolve();};
   // Lock order is canonical repository then integration journal. Journal's
   // random token is the lock generation; only verified ESRCH permits recovery.
-  const repositoryJournal=await new Journal(path.join(this.c.store.root,'integration-repository-locks'),this.repositoryId(g)).load(),releaseRepository=await repositoryJournal.lock();
-  let releaseJournal;
+  let releaseRepository,releaseJournal;
   try{
+   const repositoryJournal=await new Journal(path.join(this.c.store.root,'integration-repository-locks'),this.repositoryId(g)).load();releaseRepository=await repositoryJournal.lock();
    for(const other of this.c.store.all('goal')){
     if(!other.manifest.project||canonicalRepository(other.manifest.project.repo)!==repository)continue;
     if(other.integrationPending&&other.integrationPending.taskId!==integrationTaskId)throw Error('Another pending integration must be recovered first');
@@ -178,9 +187,9 @@ export class Integration {
    this.c.store.tx(()=>{if(repairPin)assertPendingRepair(this,repairPin);else this.assertPreparationGoal(g,{live:!native||!g.integration});validatePrior();});
    releaseJournal=await journal.lock();
    const target=await this.goalWorkspace(goalId,{native,journal,validatePrior,repairPin});
-   const release=async()=>{try{await releaseJournal();}finally{await releaseRepository();}};
+   const release=async()=>{try{try{await releaseJournal();}finally{await releaseRepository();}}finally{endTurn();}};
    return {...target,release};
-  }catch(error){try{await releaseJournal?.();}finally{await releaseRepository();}throw error;}
+  }catch(error){try{try{await releaseJournal?.();}finally{await releaseRepository?.();}}finally{endTurn();}throw error;}
  }
  async assertClosedPredecessor(prior,current,{snapshot,verifiedJournals,verifiedHeads,inertProofs}){
   if(inertUnstartedGoal(this.c,prior,{allowDraft:true})){inertProofs?.add(prior.id);return;}
@@ -249,7 +258,7 @@ export class Integration {
   return {results,evidence,contract:current};
  }
  async executionBase(goalId){
-  const target=await this.lockedGoal(goalId,{refuseLegacy:true});
+  const target=await this.lockedGoal(goalId,{refuseLegacy:true,wait:true});
   try{await target.workspace.recover();if(await git(target.workspace.root,'diff','HEAD','--name-only'))throw Error('Integration has uncommitted imported edits; recover integration first');return await git(target.workspace.root,'rev-parse','HEAD');}finally{await target.release();}
  }
  async candidate(task,{original=false}={}){return !original&&task.native?.layout==='candidate_v1'?this.nativeCandidates.open(task):new CodingAdapter({c:this.c,config:this.config}).open(task);}
