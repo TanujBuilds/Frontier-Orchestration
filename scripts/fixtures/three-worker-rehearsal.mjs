@@ -1,16 +1,21 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import {readFile, mkdir, stat} from 'node:fs/promises';
+import {readFile, mkdir, open} from 'node:fs/promises';
+import {constants} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {Journal} from '../../src/project/journal.mjs';
 import {capacitySnapshot} from '../../src/harness/scheduling/capacity.mjs';
 import {parts,checkText} from '../../test/fixtures/mosaic-three-worker-rehearsal/project.mjs';
-import {freshRoot,runtimeConfiguration,bounded,endpoint,timeline,session,project,safeTask,requestRows,writeEvidence,digest,git} from '../../test/fixtures/mosaic-three-worker-rehearsal/runtime.mjs';
+import {freshRoot,runtimeConfiguration,bounded,endpoint,timeline,session,project,safeTask,requestRows,writeEvidence,sha256,git} from '../../test/fixtures/mosaic-three-worker-rehearsal/runtime.mjs';
 
 const sourceRoot=fileURLToPath(new URL('../../',import.meta.url));
-const sourceFiles=['scripts/demo-three-worker-rehearsal.mjs','scripts/fixtures/three-worker-rehearsal.mjs','test/fixtures/mosaic-three-worker-rehearsal/runtime.mjs','test/fixtures/mosaic-three-worker-rehearsal/project.mjs'];
+const sourceFiles=['scripts/demo-three-worker-rehearsal.mjs','scripts/fixtures/three-worker-rehearsal.mjs','test/fixtures/mosaic-three-worker-rehearsal/runtime.mjs','test/fixtures/mosaic-three-worker-rehearsal/project.mjs','test/mosaic-three-worker-rehearsal.test.mjs','docs/THREE_WORKER_REHEARSAL.md'];
 const endpointIdentity=p=>{const {credentialRef,...publicProfile}=p;return publicProfile;};
-async function sourceIdentity(){return {head:await git(sourceRoot,'rev-parse','HEAD'),tree:await git(sourceRoot,'rev-parse','HEAD^{tree}'),files:await Promise.all(sourceFiles.map(async file=>({path:file,sha256:digest(await readFile(path.join(sourceRoot,file)))})))};}
+async function sourceIdentity(){
+  const files=[...new Set([...sourceFiles,...(await git(sourceRoot,'ls-files','src/')).split('\n').filter(Boolean)])].sort();
+  return {head:await git(sourceRoot,'rev-parse','HEAD'),tree:await git(sourceRoot,'rev-parse','HEAD^{tree}'),trackedStatus:await git(sourceRoot,'status','--porcelain','--untracked-files=no'),
+    files:await Promise.all(files.map(async file=>({path:file,sha256:sha256(await readFile(path.join(sourceRoot,file)))})))};
+}
 const summaryRequest=r=>({id:r.id,key:r.key,kind:r.kind,status:r.status,requestOutcome:r.requestOutcome??null,providerBinding:r.providerBinding,routeHash:r.routeHash,capacityResource:r.capacityResource});
 const checkSummary=c=>({id:c.id,passed:c.passed,code:c.code,stdout:c.stdout,stderr:c.stderr,backend:c.backend,provenance:c.provenance,quiescence:c.quiescence});
 const stableBindings=t=>({providerBinding:t.providerBinding,routeHash:t.routeHash,hash:t.hash,goalVersion:t.goalVersion,deadline:t.deadline,spent:t.spent,attempts:t.attempts});
@@ -95,7 +100,7 @@ async function mainScenario(root,runtime){
     return {root,goalId:f.goal.id,goalHash:f.goal.hash,baseCommit:specification.baseCommit,endpoints:eps.map(ep=>endpointIdentity(ep.profile)),
       overlap:{configured:{service:3,goal:3,groups:1,profile:1},observedMaximum:clock.maximum,heldRequests:held.requests.length,barrier:'three POST handlers entered before any response released',protectedChecks:'production ownership and repository gates retained; no claim of parallel check throughput'},
       tasks:accepted.map(({result:t})=>({...safeTask(t),integration:{commit:t.integration.commit,worktree:t.integration.worktree,checks:t.integration.checks.map(checkSummary)},requests:requestRows(f.c,t.id).map(summaryRequest)})),
-      protectedChecks:{sha256:digest(Buffer.from(checkText)),rejectedWrongCandidate:true,combinedPassed:true,combinedOutput:'Invite: alice@example.invalid',specimens:5},replay:{sameBindings:true,noDuplicatePost:true},evidenceHash};
+      protectedChecks:{sha256:sha256(Buffer.from(checkText)),rejectedWrongCandidate:true,combinedPassed:true,combinedOutput:'Invite: alice@example.invalid',specimens:5},replay:{sameBindings:true,noDuplicatePost:true},evidenceHash};
   } finally {await closeAll(f,eps);}
 }
 
@@ -201,8 +206,18 @@ export async function runRehearsal({root}) {
 
 export async function inspectRehearsal(root) {
   const file=path.join(root,'rehearsal-result.json');
-  assert.ok((await stat(file)).size<256*1024,'report exceeds bound');
-  const text=await readFile(file,'utf8'),report=JSON.parse(text);
+  const limit=256*1024;
+  // Open once without following a final symlink or blocking on a FIFO. Bound
+  // actual bytes read too: a regular file can grow after its initial stat.
+  const handle=await open(file,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
+  let text;
+  try {
+    const info=await handle.stat();assert.ok(info.isFile(),'Report must be a regular file');assert.ok(info.size<limit,'report exceeds bound');
+    const bytes=Buffer.alloc(limit);let used=0;
+    while(used<limit){const chunk=await handle.read(bytes,used,limit-used,null);if(!chunk.bytesRead)break;used+=chunk.bytesRead;}
+    assert.ok(used<limit,'report exceeds bound');text=bytes.subarray(0,used).toString('utf8');
+  } finally {await handle.close();}
+  const report=JSON.parse(text);
   assert.equal(report.schemaVersion,1);assert.equal(report.fixtureOnly,true);assert.equal(report.liveCallsMade,false);assert.equal(report.label,'Scripted model/reviewer rehearsal');
   assert.equal(report.root,root);assert.ok(report.main?.tasks?.length===3);assert.ok(report.main.overlap.observedMaximum>=2);
   assert.ok(report.quiescence.localWorkersClosed&&report.quiescence.listenersClosed);assert.doesNotMatch(text,/dummy-bearer|fixture-key|Bearer /);

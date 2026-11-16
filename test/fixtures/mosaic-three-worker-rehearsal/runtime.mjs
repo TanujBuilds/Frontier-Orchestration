@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import path from 'node:path';
 import os from 'node:os';
+import {createHash} from 'node:crypto';
 import {mkdir, readFile, writeFile, realpath, lstat} from 'node:fs/promises';
 import {Coordinator} from '../../../src/harness/coordinator.mjs';
 import {Worker} from '../../../src/harness/worker.mjs';
@@ -9,9 +10,9 @@ import {Dispatcher} from '../../../src/harness/tools.mjs';
 import {ProviderRegistry} from '../../../src/harness/providers/registry.mjs';
 import {nativeRuntime} from '../../../src/harness/execution.mjs';
 import {git} from '../../../src/project/process.mjs';
-import {digest} from '../../../src/harness/contracts.mjs';
 
-export {digest, git};
+export {git};
+export const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 export async function noGitOverrides() {
   const names = (await git(os.tmpdir(),'rev-parse','--local-env-vars')).split('\n');
   const found = names.find(name=>Object.hasOwn(process.env,name));
@@ -122,5 +123,5 @@ export async function writeEvidence(root, name, value) {
   const text=JSON.stringify(value,null,2)+'\n';assert.ok(Buffer.byteLength(text)<1024*1024,'bounded raw evidence');
   assert.doesNotMatch(text,/dummy-bearer|fixture-key|Bearer /);
   await writeFile(path.join(root,name+'.json'),text,{mode:0o600});
-  return digest(Buffer.from(text));
+  return sha256(Buffer.from(text));
 }

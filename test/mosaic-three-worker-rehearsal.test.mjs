@@ -2,11 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import os from 'node:os';
-import {mkdtemp, readFile, readdir, writeFile, realpath} from 'node:fs/promises';
+import {mkdtemp, readFile, readdir, writeFile, realpath, symlink} from 'node:fs/promises';
 import {spawnSync} from 'node:child_process';
+import {createHash} from 'node:crypto';
 
 const cli = path.resolve('scripts/demo-three-worker-rehearsal.mjs');
-const run = (args, env = process.env) => spawnSync(process.execPath, [cli, ...args], {env, encoding:'utf8', timeout:180000, maxBuffer:1024*1024});
+const run = (args, env = process.env, timeout=180000) => spawnSync(process.execPath, [cli, ...args], {env, encoding:'utf8', timeout, maxBuffer:1024*1024});
 
 test('CLI refuses missing/duplicate arguments and Git overrides before writing', async () => {
   assert.ok((await readFile(cli, 'utf8')).includes('root'), 'runnable CLI exists');
@@ -34,6 +35,19 @@ test('inspect validates bounded evidence without creating or changing files', as
   assert.deepEqual(await readFile(file),before);
 });
 
+test('inspect rejects FIFOs and symlinks without blocking or following them', async () => {
+  const parent=await mkdtemp(path.join(os.tmpdir(),'three-worker-special-'));
+  const fifoRoot=path.join(parent,'fifo'),linkRoot=path.join(parent,'link');
+  const {mkdir}=await import('node:fs/promises');await mkdir(fifoRoot);await mkdir(linkRoot);
+  assert.equal(spawnSync('/usr/bin/mkfifo',[path.join(fifoRoot,'rehearsal-result.json')]).status,0);
+  const fifo=run(['--root',fifoRoot,'--inspect'],process.env,2000);
+  assert.equal(fifo.status,1,'FIFO must be refused immediately, not killed by timeout');assert.match(fifo.stderr,/regular file/i);
+  await writeFile(path.join(parent,'target'),'private fixture bytes');
+  await symlink(path.join(parent,'target'),path.join(linkRoot,'rehearsal-result.json'));
+  const link=run(['--root',linkRoot,'--inspect']);assert.equal(link.status,1);assert.match(link.stderr,/ELOOP|symbolic|symlink/i);
+  assert.equal(await readFile(path.join(parent,'target'),'utf8'),'private fixture bytes');
+});
+
 test('three real coding endpoints overlap, integrate and retain blocked scenario identities', {timeout:180000}, async () => {
   // Native runtime is deliberately mandatory. Missing inputs must fail, never skip.
   const parent = await realpath(process.env.MOSAIC_THREE_WORKER_TEST_PARENT ?? await mkdtemp(path.join(os.tmpdir(),'three-worker-run-')));
@@ -41,6 +55,11 @@ test('three real coding endpoints overlap, integrate and retain blocked scenario
   const result = run(['--root',root]);
   assert.equal(result.status,0,result.stderr+'\n'+result.stdout);
   const r = JSON.parse(result.stdout);
+  const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
+  assert.ok(r.source.files.some(file=>file.path==='src/harness/worker.mjs'));
+  for (const file of r.source.files) assert.equal(file.sha256,sha256(await readFile(file.path)),file.path+' raw-byte identity');
+  assert.equal(r.main.protectedChecks.sha256,sha256(await readFile(path.join(root,'main/repo/checks/invitation.mjs'))));
+  assert.equal(r.main.evidenceHash,sha256(await readFile(path.join(root,'main/observations.json'))));
   assert.equal(r.schemaVersion,1); assert.equal(r.fixtureOnly,true); assert.equal(r.liveCallsMade,false);
   assert.equal(r.main.endpoints.length,3);
   assert.equal(new Set(r.main.endpoints.map(p=>new URL(p.baseUrl).host)).size,3);
