@@ -55,3 +55,8 @@ for(const encode of [value=>value,value=>[...value].map(c=>'%'+c.charCodeAt(0).t
  const key='dummy-url-later-private',url='https://first.test/v1/'+encode(key),io=guide({urls:[url,'http://second.test/v1','https://third.test/v1'],keys:[null,null,key]});
  await assert.rejects(collectPortableSetup(io.ask,io.output,runtime),/Credential values must occur only/);assert.ok(!io.text().includes(url));assert.ok(io.prompts.every(p=>!p.prompt.includes(url)));
 });
+const unicodeIdentity=value=>[...value].map(c=>'\\u'+c.charCodeAt(0).toString(16).padStart(4,'0')).join('');
+for(const [form,encode] of [['slash',value=>value.replaceAll('/','\\/')],['unicode',unicodeIdentity],['percent-json',value=>encodeURIComponent(unicodeIdentity(value))],['nested-json',value=>unicodeIdentity(value).replaceAll('\\','\\u005c')]])for(const field of ['model','url'])test(`reversible ${form} ${field} identity rejects before any candidate or summary can escape`,async()=>{
+ const key='later/key',encoded=encode(key),io=guide({count:2,keys:[null,key],routes:['',''],...(field==='model'?{models:[encoded,'safe-model']}:{urls:['https://first.test/v1/'+encoded,'https://second.test/v1']})});
+ await assert.rejects(collectPortableSetup(io.ask,io.output,runtime),/Credential values must occur only/);assert.ok(!io.text().includes(encoded));
+});

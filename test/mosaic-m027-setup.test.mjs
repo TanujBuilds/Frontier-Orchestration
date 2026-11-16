@@ -39,3 +39,9 @@ test('merged existing credentials also reject JSON-escaped rendered identities b
  const paths=await fixture(t),servers=await Promise.all([endpoint(t),endpoint(t),endpoint(t)]),key='dummy-old-"\\-key',encoded=JSON.stringify(key).slice(1,-1);await saveJson(paths.credentials,{schema:1,entries:{retained:key}});const streams=io(servers,{probe:[1,2,3]}),original=streams.ask;streams.ask=async(prompt,options)=>/Worker 1 Model ID/.test(prompt)?encoded:original(prompt,options);let preflight=false;
  await assert.rejects(run(paths,streams,{verifyExecution:()=>{preflight=true;}}),/Credential values must occur only/);assert.equal(preflight,false);assert.deepEqual(servers.map(s=>s.calls),[[],[],[]]);assert.ok(!streams.text().includes(encoded));await noIntent(paths);
 });
+for(const field of ['model','url'])test(`JSON-encoded later-worker key in earlier ${field} aborts before preflight, consent, requests or writes`,async t=>{
+ const paths=await fixture(t),servers=await Promise.all([endpoint(t),endpoint(t),endpoint(t)]),key='later/key',encoded=[...key].map(c=>'\\u'+c.charCodeAt(0).toString(16).padStart(4,'0')).join('');
+ if(field==='url')servers[0].url+='/'+encodeURIComponent(encoded);
+ const streams=io(servers,{keys:[null,key,null],discover:[1,2,3],probe:[1,2,3]}),original=streams.ask;streams.ask=async(prompt,options)=>field==='model'&&/Worker 1 Model ID/.test(prompt)?encoded:original(prompt,options);let preflight=false;
+ await assert.rejects(run(paths,streams,{verifyExecution:()=>{preflight=true;}}),/Credential values must occur only/);assert.equal(preflight,false);assert.deepEqual(servers.map(s=>s.calls),[[],[],[]]);assert.doesNotMatch(streams.text(),/Mosaic setup summary|run optional model discovery|run optional inference/);assert.ok(!streams.text().includes(encoded));await noIntent(paths);await assert.rejects(readFile(paths.config),{code:'ENOENT'});
+});

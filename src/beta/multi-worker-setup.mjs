@@ -12,7 +12,10 @@ export async function validateMultiWorkerCredentials(settings,proposedCredential
   if(typeof value==='string'){
    for(let decoded=value;;){
     if(secrets.some(secret=>decoded.includes(secret)))throw Error('Credential values must occur only in the private credential store');
-    const next=decoded.replace(/%([a-f0-9]{2})/gi,(_,hex)=>String.fromCharCode(parseInt(hex,16)));if(next===decoded)break;decoded=next;
+    const next=decoded.replace(/%([a-f0-9]{2})/gi,(_,hex)=>String.fromCharCode(parseInt(hex,16)))
+     .replace(/\\u([a-f0-9]{4})/gi,(_,hex)=>String.fromCharCode(parseInt(hex,16)))
+     .replace(/\\(["\\/])/g,'$1');
+    if(next===decoded)break;decoded=next;
    }
   }else if(value&&typeof value==='object')for(const item of Object.values(value))visit(item);
  };
@@ -54,7 +57,10 @@ export async function collectMultiWorkerSetup(ask,output,{hostId,execution,nativ
   const members=providers.flatMap((p,j)=>p.capacityGroup===id?[j+1]:[]);
   capacityGroups.push({id,limit:integer(await ask(`Shared service ${i+1} maximum concurrent tasks for workers ${members.join(', ')} (1-4) [1]: `)||'1',1,4,'shared service concurrency')});
  }
- const settings=normalizeSettings({schema:2,host:{id:hostId,options:{}},providers,defaults:{workerId,plannerWorkerId,review:{source:'host',hostId},routing:{version:1,rules:[...routes].map(([category,i],j)=>({id:'rule-'+(j+1),category,providerId:'worker-'+i})),defaultWorkerId:workerId}},execution,nativeCheckRuntime,serviceMaxConcurrentTasks:concurrency,capacityGroups});
+ const candidate={schema:2,host:{id:hostId,options:{}},providers,defaults:{workerId,plannerWorkerId,review:{source:'host',hostId},routing:{version:1,rules:[...routes].map(([category,i],j)=>({id:'rule-'+(j+1),category,providerId:'worker-'+i})),defaultWorkerId:workerId}},execution,nativeCheckRuntime,serviceMaxConcurrentTasks:concurrency,capacityGroups};
+ // Check entered identities before URL canonicalization can transform JSON backslashes.
+ await validateMultiWorkerCredentials(candidate,{schema:1,entries});
+ const settings=normalizeSettings(candidate);
  await validateMultiWorkerCredentials(settings,{schema:1,entries});
  return {settings,entries,presentation:'guided',workerLocation:null};
 }
