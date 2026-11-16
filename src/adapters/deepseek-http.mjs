@@ -18,11 +18,85 @@ function endpoint(baseUrl, openAICompatible) {
   return url;
 }
 
-function requestError(message,url,status){
+const providerErrorCodes=new Set(['model_not_found','context_length_exceeded']);
+const diagnosticCategories=new Set(['address','tls','connection','timeout','cancelled','protocol','configuration','model_not_advertised']);
+function requestError(message,url,status,metadata={}){
   const error=new Error(message);
   error.requestOutcome=url?.pathname.endsWith('/chat/completions')&&(status===undefined||status>=500)?'unknown':'not_dispatched';
   if(status!==undefined)error.httpStatus=status;
+  if(url)error.requestOperation=url.pathname.endsWith('/chat/completions')?'inference':'model_discovery';
+  if(diagnosticCategories.has(metadata.category))error.diagnosticCategory=metadata.category;
+  if(providerErrorCodes.has(metadata.providerErrorCode))error.providerErrorCode=metadata.providerErrorCode;
+  if(['unknown','not_dispatched'].includes(metadata.outcome))error.requestOutcome=metadata.outcome;
   return error;
+}
+
+function reportedCode(bytes){
+  try{
+    const body=JSON.parse(Buffer.concat(bytes).toString('utf8'));
+    if(!body||typeof body!=='object'||Array.isArray(body)||!body.error||typeof body.error!=='object'||Array.isArray(body.error))return;
+    for(const field of ['code','type'])if(providerErrorCodes.has(body.error[field]))return body.error[field];
+  }catch{}
+}
+
+/** Read optional HTTP error metadata without withholding the known status. */
+export function readProviderErrorCode(response,signal){
+  return new Promise(resolve=>{
+    const chunks=[];let size=0,finished=false,timer;
+    const finish=complete=>{
+      if(finished)return;finished=true;
+      clearTimeout(timer);signal?.removeEventListener('abort',abort);
+      resolve(complete?reportedCode(chunks):undefined);
+      response.destroy();
+    };
+    const abort=()=>finish(false);
+    // Only a complete small JSON body can supply a code. Slow, disconnected or
+    // oversized bodies fall back to the already observed HTTP status.
+    timer=setTimeout(()=>finish(false),100);
+    signal?.addEventListener('abort',abort,{once:true});
+    response.on('data',chunk=>{size+=chunk.length;if(size>4096)finish(false);else chunks.push(chunk);});
+    response.on('end',()=>finish(true));
+    response.on('aborted',()=>finish(false));
+    response.on('error',()=>finish(false));
+    response.on('close',()=>finish(false));
+    if(signal?.aborted)finish(false);
+  });
+}
+
+export function connectionCategory(error){
+  const code=error?.cause?.code??error?.code;
+  if(['ECONNREFUSED','ENOTFOUND','EAI_AGAIN','ENETUNREACH','EHOSTUNREACH','EADDRNOTAVAIL'].includes(code))return 'address';
+  if(['CERT_HAS_EXPIRED','CERT_NOT_YET_VALID','DEPTH_ZERO_SELF_SIGNED_CERT','SELF_SIGNED_CERT_IN_CHAIN','UNABLE_TO_VERIFY_LEAF_SIGNATURE','UNABLE_TO_GET_ISSUER_CERT','UNABLE_TO_GET_ISSUER_CERT_LOCALLY','ERR_TLS_CERT_ALTNAME_INVALID','ERR_TLS_CERT_SIGNATURE_ALGORITHM_UNSUPPORTED'].includes(code))return 'tls';
+  return 'connection';
+}
+
+// Injected Fetch implementations receive the same strict error-body budget as
+// the native HTTP path. Only complete, small JSON bodies can supply a code.
+async function fetchReportedCode(response,signal){
+  if(providerErrorCodes.has(response.providerErrorCode))return response.providerErrorCode;
+  if(!response.body?.getReader)return;
+  let reader;try{reader=response.body.getReader();}catch{return;}
+  const chunks=[];
+  let timer,abort,size=0;
+  const stop=new Promise(resolve=>{
+    timer=setTimeout(()=>resolve({done:true,stopped:true}),100);
+    abort=()=>resolve({done:true,stopped:true});
+    signal?.addEventListener('abort',abort,{once:true});
+    if(signal?.aborted)abort();
+  });
+  try{
+    while(true){
+      const part=await Promise.race([reader.read(),stop]);
+      if(part.stopped)return;
+      if(part.done)return reportedCode(chunks);
+      size+=part.value.byteLength;
+      if(size>4096)return;
+      chunks.push(Buffer.from(part.value));
+    }
+  }catch{}finally{
+    clearTimeout(timer);signal?.removeEventListener('abort',abort);
+    void reader.cancel().catch(()=>{});
+  }
 }
 
 export function validModelId(value) {
@@ -36,16 +110,23 @@ function decodeUrlBytes(url) {
 
 function requestWithoutHeaderDeadline(url, options, signal) {
   return new Promise((resolve, reject) => {
+    let observedErrorResponse,observedStatus;
+    const rejectResponse=error=>{
+      if(observedStatus!==undefined)error.httpStatus=observedStatus;
+      reject(error);
+    };
     const transport = url.protocol === 'https:' ? https : http;
     const request = transport.request(url, {
       method: options.method ?? 'GET',
       headers: options.headers,
       signal,
     }, response => {
-      response.on('error', reject);
+      observedStatus=response.statusCode;
+      response.on('error', rejectResponse);
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        resolve({ ok: false, status: response.statusCode });
-        response.destroy();
+        observedErrorResponse=()=>response.destroy();
+        response.removeListener('error',rejectResponse);
+        readProviderErrorCode(response,signal).then(providerErrorCode=>resolve({ok:false,status:response.statusCode,providerErrorCode}));
         return;
       }
       const chunks = [];
@@ -63,9 +144,9 @@ function requestWithoutHeaderDeadline(url, options, signal) {
         status: response.statusCode,
         json: async () => JSON.parse(Buffer.concat(chunks).toString('utf8')),
       }));
-      response.on('aborted', () => reject(new Error('Provider response disconnected')));
+      response.on('aborted', () => rejectResponse(new Error('Provider response disconnected')));
     });
-    request.on('error', reject);
+    request.on('error',error=>observedErrorResponse?observedErrorResponse():rejectResponse(error));
     request.end(options.body);
   });
 }
@@ -96,7 +177,18 @@ export class DeepSeekHttpAdapter {
   }
 
   containsCredential(text) {
-    return Boolean(this.apiKey && (text.includes(this.apiKey) || text.includes(this.#jsonApiKey)));
+    if(!this.apiKey)return false;
+    // Model identities are untrusted. Decode common wire spellings before
+    // checking so encoded credentials cannot become public identity metadata.
+    let decoded=text;
+    for(let round=0;round<3;round++){
+      if(decoded.includes(this.apiKey)||decoded.includes(this.#jsonApiKey))return true;
+      const next=decodeUrlBytes(decoded).replace(/\\u([a-f0-9]{4})/gi,(_match,hex)=>String.fromCharCode(Number.parseInt(hex,16)))
+        .replace(/\\(["\\/])/g,'$1');
+      if(next===decoded)break;
+      decoded=next;
+    }
+    return decoded.includes(this.apiKey)||decoded.includes(this.#jsonApiKey);
   }
 
   redact(text) {
@@ -123,30 +215,35 @@ export class DeepSeekHttpAdapter {
     try {
       response = await this.fetchImpl(url, { ...options, headers:{...options.headers,...this.authHeaders}, signal: combined }, combined);
     } catch (error) {
-      if (signal?.aborted) throw requestError(this.label+' call interrupted',url);
-      if (timeout.aborted) throw requestError(`${this.label} call timed out after ${this.timeoutMs} ms`,url);
+      const status=Number.isInteger(error?.httpStatus)&&error.httpStatus>=100&&error.httpStatus<=599?error.httpStatus:undefined;
+      const outcome=url.pathname.endsWith('/chat/completions')?'unknown':'not_dispatched';
+      if (signal?.aborted) throw requestError(this.label+' call interrupted',url,status,{category:'cancelled',outcome});
+      if (timeout.aborted) throw requestError(`${this.label} call timed out after ${this.timeoutMs} ms`,url,status,{category:'timeout',outcome});
       const detail = this.apiKey?'connection error':(error.cause?.code ?? error.message);
-      throw requestError(`${this.label} connection failed: ${detail}`,url);
+      throw requestError(`${this.label} connection failed: ${detail}`,url,status,{category:connectionCategory(error),outcome});
     }
-    if (!response.ok) throw requestError(`${this.label} ${this.redact(url.pathname)} returned HTTP ${response.status}`,url,response.status);
+    if (!response.ok) {
+      const providerErrorCode=await fetchReportedCode(response,combined);
+      throw requestError(`${this.label} ${this.redact(url.pathname)} returned HTTP ${response.status}`,url,response.status,{providerErrorCode});
+    }
     try {
       return await response.json();
     } catch {
-      if (signal?.aborted) throw requestError(this.label+' call interrupted',url);
-      if (timeout.aborted) throw requestError(`${this.label} call timed out after ${this.timeoutMs} ms`,url);
-      throw requestError(`${this.label} ${this.redact(url.pathname)} returned invalid JSON`,url);
+      if (signal?.aborted) throw requestError(this.label+' call interrupted',url,undefined,{category:'cancelled'});
+      if (timeout.aborted) throw requestError(`${this.label} call timed out after ${this.timeoutMs} ms`,url,undefined,{category:'timeout'});
+      throw requestError(`${this.label} ${this.redact(url.pathname)} returned invalid JSON`,url,response.status,{category:'protocol',outcome:url.pathname.endsWith('/chat/completions')?'unknown':'not_dispatched'});
     }
   }
 
   async listModels(signal, { strict = false } = {}) {
     const body = await this.request(this.modelsUrl, { method: 'GET' }, signal);
-    if (!Array.isArray(body?.data)) throw requestError(this.label+' /models returned no model list');
+    if (!Array.isArray(body?.data)) throw requestError(this.label+' /models returned no model list',this.modelsUrl,undefined,{category:'protocol'});
     const listed = body.data.map(item => item?.id);
-    if (strict && !listed.every(validModelId)) throw requestError(this.label+' /models returned invalid model IDs');
+    if (strict && !listed.every(validModelId)) throw requestError(this.label+' /models returned invalid model IDs',this.modelsUrl,undefined,{category:'protocol'});
     const ids = listed.filter(id =>
       (this.openAICompatible || strict ? validModelId(id) : typeof id === 'string' && id.trim()) &&
       !this.containsCredential(id));
-    if (ids.length === 0) throw requestError(this.label+' /models returned no model IDs');
+    if (ids.length === 0) throw requestError(this.label+' /models returned no model IDs',this.modelsUrl,undefined,{category:'protocol'});
     return this.openAICompatible?[...new Set(ids)]:ids;
   }
 
