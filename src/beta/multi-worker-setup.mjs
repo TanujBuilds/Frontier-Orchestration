@@ -63,5 +63,6 @@ export async function collectMultiWorkerSetup(ask,output,{hostId,execution,nativ
  await validateMultiWorkerCredentials(candidate,{schema:1,entries});
  const settings=normalizeSettings(candidate);
  await validateMultiWorkerCredentials(settings,{schema:1,entries});
- return {settings,entries,presentation:'guided',workerLocation:null};
+ // Transient only: setup must also check entered identities against saved keys.
+ return {settings,rawSettings:candidate,entries,presentation:'guided',workerLocation:null};
 }

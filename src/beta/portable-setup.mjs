@@ -57,7 +57,11 @@ export async function setupPortable(paths,{ask,output,settings:provided,executio
  const configured=provided?{settings:normalizeSettings(provided),entries:{}}:await collectPortableSetup(ask,output,{execution,nativeCheckRuntime,existingSettings:old});const settings=configured.settings,credentials=await readCredentials(paths),nextCredentials={schema:1,entries:{...credentials.entries,...configured.entries}};
  // Validate secret-free public identity before publishing any preview or error.
  await validateSettingsCredentials(paths,settings,nextCredentials);
- if(configured.presentation==='guided')await validateMultiWorkerCredentials(settings,nextCredentials);
+ if(configured.presentation==='guided'){
+  // URL canonicalization can erase JSON backslashes before retained keys are known.
+  await validateMultiWorkerCredentials(configured.rawSettings,nextCredentials);
+  await validateMultiWorkerCredentials(settings,nextCredentials);
+ }
  // A question or preflight may suspend setup while another process rotates the
  // private store. Fence each later publication/probe against that same snapshot.
  const assertCurrentSetup=async()=>{
