@@ -86,6 +86,7 @@ try{
  const routing={version:1,rules:[{id:'backend',category:'backend',providerId:'worker-a'},{id:'frontend',category:'frontend',providerId:'worker-b'}],defaultWorkerId:'worker-a'};
  h=await installedHarness({bundle,root:path.join(root,'installed main'),profiles:[...profiles,reviewer,malformed],review,routing,credentials});harnesses.push(h);
  assert.equal(calls.filter(call=>call.method==='POST').length,0,'Setup must not infer without opt-in');
+ assert.equal(calls.length,0,'Declined setup discovery and inference must not contact workers');
  await h.start();const tools=await h.invoke('tools_list'),registry=await h.invoke('registry_list');
  assert.ok(tools.some(tool=>tool.name==='goal_prepare'));assert.ok(!tools.some(tool=>tool.name.startsWith('research_')));assert.ok(registry.modes.some(mode=>mode.id==='collaborative'));
  const help=await h.run(['--help']);assert.equal(help.code,0);assert.match(help.stdout,/Mosaic Beta/);

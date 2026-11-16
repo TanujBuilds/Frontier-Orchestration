@@ -66,7 +66,8 @@ export async function installedHarness({bundle,root,profiles,review='host',routi
  const settings={schema:2,host:{id:'cursor',options:{}},providers:profiles,defaults:{workerId:'worker-a',plannerWorkerId:'worker-a',review:review==='host'?{source:'host',hostId:'cursor'}:{source:'api',reviewer:{id:'fixture-reviewer',revision:'r1'}},routing},execution:{backend:'darwin-seatbelt',backendRevision:2,runtimeFingerprint:fingerprint},nativeCheckRuntime:{schema:1,artifactManifestPath,artifactManifestSha256:fingerprint},serviceMaxConcurrentTasks:2,capacityGroups:profiles.filter(profile=>profile.roles.includes('worker')).map(profile=>({id:profile.capacityGroup,limit:1}))};
  await writeFile(path.join(configDir,'credentials.json'),JSON.stringify({schema:1,entries:credentials}),{mode:0o600});
  const input=path.join(root,'setup-input.json');await writeFile(input,JSON.stringify(settings),{mode:0o600});
- const configured=await run(['setup','--config',input],'n\ny\n');assert.equal(configured.code,0,configured.stderr+'\n'+configured.stdout);
+ // Explicitly decline discovery and inference before approving the exact setup.
+ const configured=await run(['setup','--config',input],'n\nn\ny\n');assert.equal(configured.code,0,configured.stderr+'\n'+configured.stdout);
  assert.equal((await lstat(path.join(configDir,'settings.json'))).mode&0o777,0o600);
  const {Client}=await import(pathToFileURL(path.join(runtime,'node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js')));
  const {StdioClientTransport}=await import(pathToFileURL(path.join(runtime,'node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js')));
