@@ -81,17 +81,29 @@ export async function runQualification(options){
       const repo=path.join(root,'fixture');await cp(fixtures,repo,{recursive:true});
       await git(repo,'init','-q');await git(repo,'add','.');await git(repo,'-c','user.name=Mosaic Fixture','-c','user.email=fixture@example.invalid','commit','-qm','Native feasibility protected fixture');
       const dependencies=path.join(repo,'node_modules');await mkdir(dependencies);
-      let browserReady=false;
+      let browserReady=false,browserInput=null;
+      const sourceDependencies=path.join(sourceRoot,'node_modules');
       try{
-        const sourceDependencies=path.join(sourceRoot,'node_modules');
         const versions={};for(const name of ['playwright','playwright-core']){const p=path.join(sourceDependencies,name);await safePath(p);versions[name]=JSON.parse(await readFile(path.join(p,'package.json'),'utf8')).version;if(versions[name]!=='1.64.1')throw Error('Browser dependency version differs from pinned 1.64.1');}
         const browserDir=path.join(sourceDependencies,'.cache/ms-playwright');await safePath(browserDir);
         const chromium=path.join(browserDir,'chromium_headless_shell-1248/chrome-headless-shell-mac-arm64/chrome-headless-shell');
         const chromiumIdentity=await fileIdentity(chromium);
         if(chromiumIdentity.sha256!=='77d8278b1ac9d0687fad4e817ea83023ede09b1deef36e1864b49ba194ac9634')throw Error('Pinned Chromium bytes differ');
-        const selected={};for(const name of ['playwright','playwright-core','.cache/ms-playwright']){selected[name]=nativeDependencyInventory(path.join(sourceDependencies,name)).hash;await cp(path.join(sourceDependencies,name),path.join(dependencies,name),{recursive:true});if(nativeDependencyInventory(path.join(dependencies,name)).hash!==selected[name])throw Error('Copied dependency inventory differs');}
-        inventory.browser={versions,chromium:chromiumIdentity,selected,installed:true,executionProven:false};browserReady=true;
-      }catch(e){inventory.browser={installed:false,executionProven:false,detail:e.message.slice(0,1000)};}
+        const selected={};for(const name of ['playwright','playwright-core','.cache/ms-playwright'])selected[name]=nativeDependencyInventory(path.join(sourceDependencies,name)).hash;
+        browserInput={versions,chromium:chromiumIdentity,selected};
+      }catch(e){
+        if(e.code&&!['ENOENT','ENOTDIR','isolation'].includes(e.code))throw e;
+        inventory.browser={installed:false,executionProven:false,detail:e.message.slice(0,1000)};
+      }
+      // Once inputs are available, copying or verifying their destination is
+      // tool execution. Storage failures must not become missing prerequisites.
+      if(browserInput){
+        for(const [name,expected] of Object.entries(browserInput.selected)){
+          await cp(path.join(sourceDependencies,name),path.join(dependencies,name),{recursive:true});
+          if(nativeDependencyInventory(path.join(dependencies,name)).hash!==expected)throw Error('Copied dependency inventory differs');
+        }
+        inventory.browser={...browserInput,installed:true,executionProven:false};browserReady=true;
+      }
       const baseCommit=await git(repo,'rev-parse','HEAD');
       const executionPolicy={version:1,backend:'darwin-seatbelt',backendRevision:2,runtimeFingerprint:runtime.fingerprint};
       const readPaths=['src/','checks/'],writePaths=['src/'];

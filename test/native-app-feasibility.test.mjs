@@ -137,18 +137,19 @@ test('inspect returns the exact report/index bytes it hashed under concurrent ed
   await report.sealReport(root,{schema:1,exitCode:2,m001:'BLOCKED',toolStatus:'completed',capabilities:[]});
   const index=await readFile(path.join(root,'evidence-index.json'));
   const expectedHash=createHash('sha256').update(index).digest('hex');
-  const original=fs.readFile;let changed=false;
-  fs.readFile=async function(file,...args){
+  const original=fs.readFile,originalOpen=fs.open;let changed=false;
+  const replaceAfterReportRead=async file=>{
     if(String(file)===path.join(root,'REPORT.md')&&!changed){
       changed=true;
       await writeFile(path.join(root,'report.json'),JSON.stringify({schema:1,exitCode:0,m001:'READY',capabilities:[]}));
       await writeFile(path.join(root,'evidence-index.json'),JSON.stringify({schema:1,entries:[]}));
     }
-    return original.call(this,file,...args);
   };
+  fs.readFile=async function(file,...args){await replaceAfterReportRead(file);return original.call(this,file,...args);};
+  fs.open=async function(file,...args){await replaceAfterReportRead(file);return originalOpen.call(this,file,...args);};
   syncBuiltinESMExports();
   let inspected;
-  try{inspected=await report.inspectReport(root);}finally{fs.readFile=original;syncBuiltinESMExports();}
+  try{inspected=await report.inspectReport(root);}finally{fs.readFile=original;fs.open=originalOpen;syncBuiltinESMExports();}
   assert.equal(changed,true);assert.equal(inspected.report.exitCode,2);assert.equal(inspected.report.m001,'BLOCKED');assert.equal(inspected.indexSha256,expectedHash);
 });
 test('unsafe or missing explicitly supplied native manifest is refused before writes',async()=>{
@@ -186,4 +187,58 @@ test('scripted lifecycle safety fixture rejects a foreign cluster before migrati
   assert.equal(result.status,0,result.stderr);await assert.rejects(stat(marker),{code:'ENOENT'});
   const observation=JSON.parse(result.stdout);assert.equal(observation.steps.find(s=>s.name==='cluster_identity').passed,false);
   assert.match(observation.user,/^mosaic_[a-f0-9]{24}$/);
+});
+
+test('browser dependency copy failure is a tooling malfunction, not a missing prerequisite',async t=>{
+  if(process.env.MOSAIC_REQUIRE_NATIVE!=='1')return t.skip('Requires the pinned actual native prerequisite');
+  const fs=(await import('node:fs/promises')).default;
+  const {syncBuiltinESMExports}=await import('node:module');
+  const {runQualification}=await import('../scripts/native-app-feasibility/run.mjs');
+  const output=path.join(neutralParent,'copy-failure-'+crypto.randomUUID());
+  const original=fs.cp;let injected=false;
+  fs.cp=async function(from,to,...args){
+    if(String(to)===path.join(output,'fixture/node_modules/playwright')){
+      injected=true;throw Object.assign(new Error('Owned injected copy failure'),{code:'ENOSPC'});
+    }
+    return original.call(this,from,to,...args);
+  };
+  syncBuiltinESMExports();
+  let result;
+  try{result=await runQualification({output,requireNative:true,requireBrowser:true});}
+  finally{fs.cp=original;syncBuiltinESMExports();}
+  assert.equal(injected,true);
+  assert.equal(result.toolStatus,'malfunction');assert.equal(result.exitCode,1);
+  assert.equal(JSON.parse(await readFile(path.join(output,'evidence/tool-error.json'),'utf8')).code,'ENOSPC');
+});
+
+for(const kind of ['growth','symlink','fifo'])test(`inspection race refuses ${kind} after pathname validation`,async()=>{
+  const root=await temporary();
+  await report.sealReport(root,{schema:1,exitCode:2,m001:'BLOCKED',toolStatus:'completed',capabilities:[]});
+  const moduleUrl=new URL('../scripts/native-app-feasibility/report.mjs',import.meta.url).href;
+  const code=`
+    import fs from 'node:fs/promises';
+    import {spawnSync} from 'node:child_process';
+    import {syncBuiltinESMExports} from 'node:module';
+    import {inspectReport} from ${JSON.stringify(moduleUrl)};
+    const root=${JSON.stringify(root)},kind=${JSON.stringify(kind)},target=root+'/evidence-index.json';
+    const read=fs.readFile,open=fs.open;let injected=false;
+    const mutate=async file=>{
+      if(String(file)!==target||injected)return;injected=true;
+      if(kind==='growth')await fs.writeFile(target,Buffer.concat([await read(target),Buffer.alloc(4*1024*1024,32)]));
+      else{
+        await fs.rename(target,target+'.original');
+        if(kind==='symlink')await fs.symlink(target+'.original',target);
+        else if(spawnSync('/usr/bin/mkfifo',[target]).status!==0)throw Error('Owned FIFO creation failed');
+      }
+    };
+    fs.readFile=async function(file,...args){await mutate(file);return read.call(this,file,...args);};
+    fs.open=async function(file,...args){await mutate(file);return open.call(this,file,...args);};
+    syncBuiltinESMExports();
+    try{await inspectReport(root);console.log(JSON.stringify({injected,verified:true}));}
+    catch(error){console.log(JSON.stringify({injected,error:error.message}));process.exitCode=1;}
+  `;
+  const result=spawnSync(process.execPath,['--input-type=module','-e',code],{encoding:'utf8',timeout:3000});
+  assert.equal(result.status,1,'Inspection must reject the changed file without accepting it or blocking: '+result.stdout);
+  const observation=JSON.parse(result.stdout);assert.equal(observation.injected,true);
+  assert.match(observation.error,/bound|regular|ELOOP|symbolic/i);
 });

@@ -1,4 +1,5 @@
-import {mkdir,writeFile,readFile,readdir,lstat} from 'node:fs/promises';
+import {mkdir,writeFile,readFile,readdir,lstat,open} from 'node:fs/promises';
+import {constants} from 'node:fs';
 import path from 'node:path';
 import {safePath,hash} from './prerequisites.mjs';
 
@@ -38,7 +39,21 @@ export async function sealReport(root,data){
 }
 export async function inspectReport(root){
   await safePath(root);
-  const bounded=async relative=>{const file=path.join(root,relative);await safePath(file,{directory:false});const s=await lstat(file);if(s.size>4*1024*1024)throw Error('Inspection bytes exceed bound');return readFile(file);};
+  const bounded=async relative=>{
+    const file=path.join(root,relative);await safePath(file,{directory:false});
+    const handle=await open(file,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
+    try{
+      const before=await handle.stat(),limit=4*1024*1024;
+      if(!before.isFile())throw Error('Inspection requires a regular file');
+      if(before.size>limit)throw Error('Inspection bytes exceed bound');
+      const bytes=Buffer.alloc(before.size+1);let size=0;
+      while(size<bytes.length){const read=await handle.read(bytes,size,bytes.length-size,size);if(!read.bytesRead)break;size+=read.bytesRead;}
+      const after=await handle.stat();
+      if(size>limit)throw Error('Inspection bytes exceed bound');
+      if(size!==before.size||after.size!==before.size||after.mtimeMs!==before.mtimeMs||after.ctimeMs!==before.ctimeMs)throw Error('Inspection file changed during bounded read');
+      return bytes.subarray(0,size);
+    }finally{await handle.close();}
+  };
   const indexBytes=await bounded('evidence-index.json'),index=JSON.parse(indexBytes);
   if(index.schema!==1||!Array.isArray(index.entries)||index.entries.length>1002)throw Error('Invalid evidence index');
   const seen=new Set();let reportBytes;for(const entry of index.entries){
