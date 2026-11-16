@@ -12,9 +12,10 @@ export async function validateMultiWorkerCredentials(settings,proposedCredential
   if(typeof value==='string'){
    for(let decoded=value;;){
     if(secrets.some(secret=>decoded.includes(secret)))throw Error('Credential values must occur only in the private credential store');
+    // Consume JSON escape tokens together: an escaped backslash must survive
+    // until the next pass before it can introduce a Unicode escape.
     const next=decoded.replace(/%([a-f0-9]{2})/gi,(_,hex)=>String.fromCharCode(parseInt(hex,16)))
-     .replace(/\\u([a-f0-9]{4})/gi,(_,hex)=>String.fromCharCode(parseInt(hex,16)))
-     .replace(/\\(["\\/])/g,'$1');
+     .replace(/\\(?:u([a-f0-9]{4})|(["\\/]))/gi,(_,hex,literal)=>hex?String.fromCharCode(parseInt(hex,16)):literal);
     if(next===decoded)break;decoded=next;
    }
   }else if(value&&typeof value==='object')for(const item of Object.values(value))visit(item);

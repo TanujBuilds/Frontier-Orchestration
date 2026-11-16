@@ -60,3 +60,12 @@ for(const [form,encode] of [['slash',value=>value.replaceAll('/','\\/')],['unico
  const key='later/key',encoded=encode(key),io=guide({count:2,keys:[null,key],routes:['',''],...(field==='model'?{models:[encoded,'safe-model']}:{urls:['https://first.test/v1/'+encoded,'https://second.test/v1']})});
  await assert.rejects(collectPortableSetup(io.ask,io.output,runtime),/Credential values must occur only/);assert.ok(!io.text().includes(encoded));
 });
+const jsonIdentity=value=>JSON.stringify(value).slice(1,-1);
+for(const [form,encode] of [['json-unicode',value=>jsonIdentity(unicodeIdentity(value))],['percent-json-unicode',value=>encodeURIComponent(jsonIdentity(unicodeIdentity(value)))],['double-json-unicode',value=>jsonIdentity(jsonIdentity(unicodeIdentity(value)))]])for(const field of ['model','url'])test(`composed ${form} ${field} identity rejects a later key before returning settings`,async()=>{
+ const key='review/key',encoded=encode(key),io=guide({count:2,keys:[null,key],routes:['',''],...(field==='model'?{models:[encoded,'safe-model']}:{urls:['https://first.test/v1/'+encoded,'https://second.test/v1']})});
+ await assert.rejects(collectPortableSetup(io.ask,io.output,runtime),/Credential values must occur only/);assert.ok(!io.text().includes(encoded));assert.ok(io.prompts.every(({prompt})=>!prompt.includes(encoded)));
+});
+test('unrelated escaped identities remain unchanged in the guided settings and summary',async()=>{
+ const model='safe\\\\u006dodel\\/variant%2fraw',url='https://first.test/v1/safe%5Cu006dodel%2fvariant',io=guide({count:2,models:[model,'safe-model'],urls:[url,'https://second.test/v1'],keys:[null,'review/key'],routes:['','']}),result=await collectPortableSetup(io.ask,io.output,runtime);
+ assert.equal(result.settings.providers[0].model,model);assert.equal(result.settings.providers[0].baseUrl,url);assert.equal(result.entries['worker-2-key'],'review/key');const summary=formatPortableSetupSummary(result.settings);assert.ok(summary.includes(model));assert.ok(summary.includes(url));
+});
