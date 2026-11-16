@@ -1,5 +1,5 @@
 import {fileURLToPath} from 'node:url';
-import {readSettings as readPrivateSettings,previewSettingsMigration,applySettingsMigration,resumeSettingsMigration,validateSettingsCredentials} from './settings.mjs';
+import {readSettings as readPrivateSettings,readCredentials,configuredPolicies,previewSettingsMigration,applySettingsMigration,resumeSettingsMigration,validateSettingsCredentials} from './settings.mjs';
 import {setupPortable,portableSetupComplete,removePortableBindings} from './portable-setup.mjs';
 import {normalizeExecutionPolicy,normalizeNativeCheckRuntime,assertExecutionAvailable} from '../harness/execution.mjs';
 import {execFile} from 'node:child_process';
@@ -16,7 +16,9 @@ import {STRUCTURED_WORKER_PROTOCOL} from '../harness/provider-capabilities.mjs';
 import {atomic,entry,fileBytes,hash,jsonFile,localDirectory,saveJson,shellQuote,withLock} from './files.mjs';
 import {client} from './client.mjs';
 import {assertMaintenanceIdle,assertSettingsMaintenanceAllowed,assertBetaStartupReady,launchAgent,startLaunchAgent,stopForMaintenance,verifyLaunchAgent} from './service.mjs';
-import {canonical} from '../harness/contracts.mjs';
+import {canonical,digest} from '../harness/contracts.mjs';
+import {ProviderRegistry} from '../harness/providers/registry.mjs';
+import {discoverProvider,formatProviderDiagnostic} from './provider-diagnostics.mjs';
 import {getHost,normalizeHostSettings} from './hosts/index.mjs';
 
 const exec=promisify(execFile);
@@ -131,7 +133,7 @@ export const readSettings=readPrivateSettings;
 export {previewSettingsMigration,applySettingsMigration,resumeSettingsMigration};
 
 async function askSession(input,output,work){
- const queue=[];
+ const queue=[],interrupted=new AbortController();
  let waiter,closed=false,echo=false;
  const sink=new Writable({write(chunk,_,callback){if(echo)output.write(chunk);callback();}});
  if(output.isTTY){
@@ -144,17 +146,18 @@ async function askSession(input,output,work){
   if(waiter){const next=waiter;waiter=null;next(line);}else queue.push(line);
  });
  const finish=()=>{closed=true;const next=waiter;waiter=null;next?.(null);};
- rl.on('SIGINT',()=>rl.close());rl.on('close',finish);
+ rl.on('SIGINT',()=>{interrupted.abort();queue.length=0;rl.close();});rl.on('close',finish);
  const ask=async(prompt,{secret=false}={})=>{
+  if(interrupted.signal.aborted)throw Error('Setup interrupted. Run mosaic setup to resume.');
   if(secret&&(!input.isTTY||!output.isTTY))throw Error('Bearer keys can only be entered in an interactive terminal with terminal output.');
   output.write(prompt);
   try{
    const answer=queue.length?queue.shift():closed?null:await new Promise(resolve=>{waiter=resolve;echo=!secret;});
-   if(answer===null)throw Error('Setup interrupted. Run mosaic setup to resume.');
+   if(answer===null||interrupted.signal.aborted)throw Error('Setup interrupted. Run mosaic setup to resume.');
    return answer.trim();
   }finally{echo=false;if(secret)output.write('\n');}
  };
- try{return await work(ask);}finally{rl.close();}
+ try{return await work(ask,interrupted.signal);}finally{rl.close();}
 }
 
 const WORKER_PROBE_TIMEOUT_MS=10000;
@@ -289,7 +292,7 @@ export async function setup(paths,options={}){
  if(options.portable||options.settings||old?.schema===2||pending?.schema===2||manifest?.layout==='terminal-beta-v2'){
   let execution=options.execution,nativeCheckRuntime=options.nativeCheckRuntime;
   if(!execution&&!options.settings&&!pending){nativeCheckRuntime=await (await import('./package-contract.mjs')).readBundledNativeCheckRuntime(runtimeRoot);execution={backend:'darwin-seatbelt',backendRevision:2,runtimeFingerprint:nativeCheckRuntime.artifactManifestSha256};}
-  return askSession(input,output,ask=>setupPortable(paths,{...options,ask,output,execution,nativeCheckRuntime,codexRegistrations:registrations}));
+  return askSession(input,output,(ask,signal)=>setupPortable(paths,{...options,ask,output,execution,nativeCheckRuntime,codexRegistrations:registrations,signal:options.signal?AbortSignal.any([options.signal,signal]):signal}));
  }
  if(old?.host&&old.host.id!=='codex'){
   output.write(`The current host is ${old.host.id}. This interactive setup configures Codex only; existing settings and registrations are preserved. Use mosaic host-preview --host ${old.host.id} for that host's manual configuration path.\n`);
@@ -349,11 +352,11 @@ export async function setup(paths,options={}){
  });
 }
 
-export async function doctor(paths,output=process.stdout){
+export async function doctor(paths,output=process.stdout,options={}){
  const checks=[];
  const check=(name,ok,detail)=>checks.push({name,ok,detail});
- let settings;
- try{settings=await readSettings(paths);if(settings?.schema===2)await validateSettingsCredentials(paths,settings);}catch{settings=undefined;check('Settings',false,'Invalid private config or credentials. Run mosaic setup.');}
+ let settings,credentials;
+ try{settings=await readSettings(paths);if(settings?.schema===2){credentials=await readCredentials(paths);await validateSettingsCredentials(paths,settings,credentials);}}catch{settings=undefined;check('Settings',false,'Invalid private config or credentials. Run mosaic setup.');}
  try{
   if(settings&&!await setupComplete(paths))check('Setup',false,'Setup needs attention. Run mosaic setup to restore or resume its bindings.');
  }catch{check('Setup',false,'Cannot read the private beta binding receipt. Inspect the beta settings directory.');}
@@ -382,7 +385,25 @@ export async function doctor(paths,output=process.stdout){
  }
  try{await client(paths,{viewer:true})('tools_list');check('Coordinator',true,'Authenticated viewer connection ready.');}
  catch{check('Coordinator',false,paths.isolated?'Start the isolated instance with mosaic serve.':'Run mosaic setup to repair the LaunchAgent.');}
- if(settings?.schema===2){for(const profile of settings.providers)check('Provider '+profile.id,true,profile.displayName+' configured; connectivity/inference untested. No fallback.');check('Host capability',true,getHost(selectedHost).displayName+' documented and fixture-tested; actual host version unprobed.');}
+ const assertDoctorSnapshot=async()=>{
+  if(fingerprint(await readSettings(paths))!==fingerprint(settings)||fingerprint(await readCredentials(paths))!==fingerprint(credentials))throw Error('Settings or credentials changed while provider diagnostics were open');
+ };
+ if(settings?.schema===2){
+  if(options.providers===true){
+   await withLock(paths,async()=>{
+    await assertSettingsMaintenanceAllowed(paths);await assertDoctorSnapshot();
+    const workers=settings.providers.filter(profile=>profile.roles.includes('worker')),secrets=Object.values(credentials.entries),registry=workers.length?ProviderRegistry({profiles:settings.providers,credentialResolver:async ref=>{await assertDoctorSnapshot();return credentials.entries[ref];}}):null;
+    for(const profile of settings.providers){
+     if(!profile.roles.includes('worker')){check('Provider '+profile.id,true,profile.displayName+' configured API reviewer; discovery/inference untested (review requires bound task evidence).');continue;}
+     const diagnosticClient=registry.createClient({version:1,providerId:profile.id,revision:profile.revision,profileHash:digest(registry.get(profile.id,profile.revision)),policyHash:digest(configuredPolicies(settings).providerPolicy)});
+     const beforeRequest=async()=>{await assertSettingsMaintenanceAllowed(paths);await assertDoctorSnapshot();};
+     const report=await discoverProvider(diagnosticClient,profile,{secrets,beforeRequest});
+     await beforeRequest();check('Provider '+profile.id,!report.failed,formatProviderDiagnostic(report,{secrets}).trim());
+    }
+   });
+  }else for(const profile of settings.providers)check('Provider '+profile.id,true,profile.displayName+' configured; connectivity/inference untested. No fallback.');
+  check('Host capability',true,getHost(selectedHost).displayName+' documented and fixture-tested; actual host version unprobed.');
+ }
  else if(settings?.worker){
   const {profile,apiKey}=settings.worker;
   const requireAdvertised=requiresAdvertisedModel(profile);
@@ -399,7 +420,8 @@ export async function doctor(paths,output=process.stdout){
     unsupported?'Discovery is unsupported. The model is configured manually.':'Model discovery failed. Check the endpoint and bearer key.')+untested);
   }
  }else check('API worker',true,selectedHost==='codex'?'Codex only.':'No API worker configured.');
- for(const {name,ok,detail} of checks)output.write(`${ok?'OK':'CHECK'}  ${name} · ${detail}\n`);
+ const publish=()=>{for(const {name,ok,detail} of checks)output.write(`${ok?'OK':'CHECK'}  ${name} · ${detail}\n`);};
+ if(settings?.schema===2)await withLock(paths,async()=>{await assertDoctorSnapshot();publish();});else publish();
  return checks.every(item=>item.ok);
 }
 

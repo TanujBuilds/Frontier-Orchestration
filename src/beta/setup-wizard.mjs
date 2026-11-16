@@ -36,7 +36,7 @@ export async function collectPortableSetup(ask,output,{execution,nativeCheckRunt
  if(choice===5)return advanced(ask,hostId,{execution,nativeCheckRuntime});
  const workerLocation=['local','remote','api','none'][choice-1],providers=[],entries={};
  if(choice!==4){
-  output.write('Copy the API base URL and exact model ID from your existing server or API provider configuration. Mosaic uses its supported OpenAI-compatible worker transport; it will not contact the endpoint until you explicitly choose the optional inference test.\n');
+  output.write('Copy the API base URL and exact model ID from your existing server or API provider configuration. Mosaic uses its supported OpenAI-compatible worker transport; it will not contact the endpoint until you explicitly choose optional model discovery or the separate inference test.\n');
   if(choice===2)output.write('For another computer, supply an address reachable from this Mac. localhost means the computer running Mosaic, not the other computer; no particular tunnel is required.\n');
   const baseUrl=await ask('API base URL: '),model=await ask('Model ID: '),needsKey=yes(await ask('Does this endpoint require an API bearer key? [y/N] ')),credentialRef=needsKey?'worker-1-key':null;
   if(needsKey)entries[credentialRef]=await ask('Bearer key (hidden): ',{secret:true});
@@ -57,7 +57,7 @@ export function formatPortableSetupSummary(settings,{manualHost,workerLocation=n
  if(settings.defaults.review.source==='host')lines.push(`Reviewer: ${host.displayName} (selected coding app); review may use its cloud service, even with a local worker.`);
  else {const p=settings.providers.find(p=>p.id===settings.defaults.review.reviewer.id);lines.push(`Reviewer: separate API ${p.displayName}, ${p.model} at ${p.baseUrl} (${p.transport}). Approved review evidence goes to that endpoint.`);}
  lines.push('Host connection: '+(manualHost?'manual registration pending; saving settings does not connect the app.':'fixture-tested registration; actual app connection remains unverified.'));
- lines.push('Inference: untested until the separate optional fixed-message probe; that probe does not prove coding quality or app connection.');
+ lines.push('Discovery and inference: untested until their separate optional checks. A check does not prove coding quality or app connection; context capacity remains unverified.');
  lines.push('Review delivery is pull-based; closed apps wait durably. No automatic wakeup or fallback.');
  return lines.join('\n')+'\n';
 }

@@ -65,7 +65,7 @@ test('new extracted installed CLI saves simple one-worker and no-worker setup wi
   const installation=JSON.parse(await readFile(path.join(configDir,'installation.json'),'utf8'));
   const runtime=path.join(product,'versions',installation.version,'runtime');
   assert.equal(sha(await readFile(path.join(runtime,'src/beta/setup-wizard.mjs'))),sha(packagedWizard));
-  const answers=worker?['3','1',baseUrl,'installed-fixture-model','n','n','n','y']:['3','4','n','n','y'];
+  const answers=worker?['3','1',baseUrl,'installed-fixture-model','n','n','n','n','y']:['3','4','n','n','n','y'];
   // No injected settings, source imports, executable substitution or preflight bypass:
   // this is the installed CLI's own first-run path and bundled native identity check.
   const result=await run([path.join(runtime,'bin/node'),path.join(runtime,'src/beta/cli.mjs'),'--home',home,'setup'],{env:caseEnv,input:answers.join('\n')+'\n'});

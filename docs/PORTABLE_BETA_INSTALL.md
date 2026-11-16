@@ -97,13 +97,27 @@ use a cloud service even with a local worker. The summary shows the exact
 endpoint/model and capacity; technical settings are optional. Advanced setup
 retains multiple workers, specialty routes, concurrency and separate API review.
 Existing schema-2 settings use the advanced path and are replaced only after
-the exact preview and confirmation. Any connection/inference test requires a
-separate opt-in and proves only a fixed transport request, not coding quality
-or an actual app connection. Setup does not install a model,
+the exact preview and confirmation. Model discovery and inference each require
+a separate default-no opt-in after private credential validation. Discovery sends
+GET to each supplied worker base URL plus `/models`; configured authentication
+goes to that endpoint. An unsupported list or unlisted manual model can still be
+saved explicitly. Inference may incur provider cost and sends only the displayed
+fixed message, with at most 16 output tokens and one total 10-second deadline per
+worker. Advertised-model profiles require a fresh membership GET before the POST
+within that same deadline, even when standalone discovery was declined. A failed
+inference test aborts before saving. These transient checks do not establish
+coding quality, context capacity or an actual app connection. Review-only APIs
+remain untested; no-worker setup sends zero provider requests. Setup does not install a model,
 scan the network, change server settings, or require Tailscale. Follow the
 interactive preview for migration; cancel leaves existing settings intact.
 Secrets are held separately in owned 0600 credential storage. The existing core
 Mosaic installation, its state and unrelated host entries remain independent.
+
+`mosaic doctor` leaves schema-2 worker endpoints untouched. `mosaic doctor --providers`
+explicitly checks their model lists with GET only; it never sends inference.
+Authentication, transport and protocol failures fail that diagnostic; unsupported
+listing for a manually configured model is reported without claiming a coding
+failure. Legacy schema-1 doctor retains its existing discovery behavior.
 
 ## Update, rollback and interrupted maintenance
 

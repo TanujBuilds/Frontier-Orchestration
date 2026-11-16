@@ -16,7 +16,7 @@ const help=`Mosaic Beta
 
 mosaic                   Open setup or the read-only terminal observer
 mosaic setup             Configure the selected host, worker profiles and review
-mosaic doctor            Check private setup, package and documented/fixture capabilities
+mosaic doctor [--providers]  Check setup; optionally GET worker model lists (no inference)
 mosaic migrate           Preview lossless schema1 migration; ask before applying
 mosaic off               Stop new dispatch; retain running owners and saved work
 mosaic on                Allow dispatch with the same approved configuration
@@ -64,6 +64,8 @@ export async function main(args=process.argv.slice(2)){
   return runObserver({invoke:observerClient(paths,{source}),once:args.includes('--once')});
  }
  if(command==='rollback'){if(args.length!==1)throw Error('Use mosaic rollback VERSION');return (await import('./install.mjs')).rollbackVersion(paths,args[0]);}
+ let providerDiagnostics=false;
+ if(command==='doctor'){if(args.length>1||args.length===1&&args[0]!=='--providers')throw Error('Use mosaic doctor [--providers]');providerDiagnostics=args.shift()==='--providers';}
  if(args.length)throw Error('Use mosaic --help for command syntax');
  if(command==='recover')return (await import('./install.mjs')).recoverInstallation(paths);
  if(command==='off'||command==='on'){return withLock(paths,async()=>{if(command==='off'){await saveJson(paths.disabled,{schema:1,disabled:true});process.stdout.write('Mosaic is off. New dispatch is blocked; running owners and saved work are retained.\n');}else{await rm(paths.disabled,{force:true});process.stdout.write('Mosaic is on. Existing approval and execution guards still apply.\n');}});}
@@ -75,7 +77,7 @@ export async function main(args=process.argv.slice(2)){
    if(bytes){const manifest=await verifyVersion(path.join(paths.versions,receipt.version),receipt.version);valid=manifest.contentHash===receipt.contentHash;}
   }catch{}
   process.stdout.write(valid?'OK  Package integrity · installed version verified.\n':'CHECK  Package integrity · reinstall Mosaic Beta from a verified archive.\n');
-  if(!await doctor(paths)||!valid)process.exitCode=1;
+  if(!await doctor(paths,process.stdout,{providers:providerDiagnostics})||!valid)process.exitCode=1;
   return;
  }
  if(command==='serve')return serveBeta(paths,await readSettings(paths));
