@@ -128,3 +128,62 @@ test('host health observation validates token content and preserves connection r
   finally{await new Promise(resolve=>server.close(resolve));}
   const closed=await probeHost(target,'owned-token');assert.equal(closed.passed,false);assert.equal(closed.code,'ECONNREFUSED');
 });
+
+test('inspect returns the exact report/index bytes it hashed under concurrent edits',async()=>{
+  const fs=(await import('node:fs/promises')).default;
+  const {syncBuiltinESMExports}=await import('node:module');
+  const {createHash}=await import('node:crypto');
+  const root=await temporary();
+  await report.sealReport(root,{schema:1,exitCode:2,m001:'BLOCKED',toolStatus:'completed',capabilities:[]});
+  const index=await readFile(path.join(root,'evidence-index.json'));
+  const expectedHash=createHash('sha256').update(index).digest('hex');
+  const original=fs.readFile;let changed=false;
+  fs.readFile=async function(file,...args){
+    if(String(file)===path.join(root,'REPORT.md')&&!changed){
+      changed=true;
+      await writeFile(path.join(root,'report.json'),JSON.stringify({schema:1,exitCode:0,m001:'READY',capabilities:[]}));
+      await writeFile(path.join(root,'evidence-index.json'),JSON.stringify({schema:1,entries:[]}));
+    }
+    return original.call(this,file,...args);
+  };
+  syncBuiltinESMExports();
+  let inspected;
+  try{inspected=await report.inspectReport(root);}finally{fs.readFile=original;syncBuiltinESMExports();}
+  assert.equal(changed,true);assert.equal(inspected.report.exitCode,2);assert.equal(inspected.report.m001,'BLOCKED');assert.equal(inspected.indexSha256,expectedHash);
+});
+test('unsafe or missing explicitly supplied native manifest is refused before writes',async()=>{
+  const root=await temporary();await writeFile(path.join(root,'manifest.json'),'{}');
+  await symlink(path.join(root,'manifest.json'),path.join(root,'alias.json'));
+  for(const manifest of [path.join(root,'alias.json'),path.join(root,'missing.json')]){
+    const output=path.join(root,'new-'+path.basename(manifest));
+    const result=spawnSync(process.execPath,[cli,'--output',output],{env:{...process.env,MOSAIC_NATIVE_ARTIFACT_MANIFEST:manifest,MOSAIC_NATIVE_ARTIFACT_SHA256:'a'.repeat(64)},encoding:'utf8'});
+    assert.equal(result.status,1,result.stdout);await assert.rejects(stat(output),{code:'ENOENT'});
+  }
+});
+test('uncertain native connection keeps before/after host health and propagates owner uncertainty',async()=>{
+  const {canary}=await import('../scripts/native-app-feasibility/run.mjs');
+  assert.equal(typeof canary,'function');const root=await temporary();await mkdir(path.join(root,'evidence'));
+  const unknown=Object.assign(new Error('Lost native completion'),{executionOutcome:'unknown'});
+  await assert.rejects(canary({kind:'tcp',root,execute:async()=>{throw unknown;}}),e=>e===unknown);
+  const evidence=JSON.parse(await readFile(path.join(root,'evidence/canary-tcp-interrupted.json'),'utf8'));
+  assert.equal(evidence.before.passed,true);assert.equal(evidence.after.passed,true);assert.equal(evidence.state,'inconclusive');
+});
+test('canary does not hide a tooling malfunction as a completed blocked capability',async()=>{
+  const {canary}=await import('../scripts/native-app-feasibility/run.mjs');
+  assert.equal(typeof canary,'function');const root=await temporary();await mkdir(path.join(root,'evidence'));
+  const malfunction=Object.assign(new Error('Evidence storage unavailable'),{code:'ENOSPC'});
+  await assert.rejects(canary({kind:'tcp',root,execute:async()=>{throw malfunction;}}),e=>e===malfunction);
+});
+test('scripted lifecycle safety fixture rejects a foreign cluster before migration (no PostgreSQL proof)',async()=>{
+  const {chmod}=await import('node:fs/promises');
+  const root=await temporary(),marker=path.join(root,'migration-attempted');
+  const script=async(name,text)=>{const file=path.join(root,name);await writeFile(file,'#!/bin/sh\n'+text);await chmod(file,0o700);return file;};
+  const initdb=await script('initdb','exit 0\n');
+  const postgres=await script('postgres','exec /bin/sleep 10\n');
+  const psql=await script('psql',`case "$*" in\n*data_directory*) printf '/foreign/cluster\\n';;\n*CREATE*) /usr/bin/touch '${marker}';;\n*'SELECT email'*) printf 'member@example.invalid\\n';;\n*) printf '1\\n';;\nesac\n`);
+  const fixture=fileURLToPath(new URL('./fixtures/native-app-feasibility/checks/postgres.mjs',import.meta.url));
+  const result=spawnSync(process.execPath,[fixture,JSON.stringify({commands:{initdb,postgres,psql},port:54321})],{cwd:root,encoding:'utf8',timeout:15000});
+  assert.equal(result.status,0,result.stderr);await assert.rejects(stat(marker),{code:'ENOENT'});
+  const observation=JSON.parse(result.stdout);assert.equal(observation.steps.find(s=>s.name==='cluster_identity').passed,false);
+  assert.match(observation.user,/^mosaic_[a-f0-9]{24}$/);
+});

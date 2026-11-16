@@ -39,13 +39,14 @@ export async function sealReport(root,data){
 export async function inspectReport(root){
   await safePath(root);
   const bounded=async relative=>{const file=path.join(root,relative);await safePath(file,{directory:false});const s=await lstat(file);if(s.size>4*1024*1024)throw Error('Inspection bytes exceed bound');return readFile(file);};
-  const index=JSON.parse(await bounded('evidence-index.json'));
+  const indexBytes=await bounded('evidence-index.json'),index=JSON.parse(indexBytes);
   if(index.schema!==1||!Array.isArray(index.entries)||index.entries.length>1002)throw Error('Invalid evidence index');
-  const seen=new Set();for(const entry of index.entries){
+  const seen=new Set();let reportBytes;for(const entry of index.entries){
     if(typeof entry.path!=='string'||!(/^(report\.json|REPORT\.md|evidence\/[A-Za-z0-9_./-]+)$/.test(entry.path))||entry.path.split('/').some(p=>p==='..'||p==='')||seen.has(entry.path)||!Number.isSafeInteger(entry.bytes)||entry.bytes<0||!/^[a-f0-9]{64}$/.test(entry.sha256))throw Error('Unsafe evidence index entry');
     seen.add(entry.path);const bytes=await bounded(entry.path);if(bytes.length!==entry.bytes||hash(bytes)!==entry.sha256)throw Error('Evidence hash/bytes mismatch: '+entry.path);
+    if(entry.path==='report.json')reportBytes=bytes;
   }
   if(!seen.has('report.json')||!seen.has('REPORT.md'))throw Error('Report is not bound');
-  const report=JSON.parse(await bounded('report.json'));if(![0,1,2].includes(report.exitCode))throw Error('Invalid report exit code');
-  return {verified:true,indexSha256:hash(await bounded('evidence-index.json')),report};
+  const report=JSON.parse(reportBytes);if(![0,1,2].includes(report.exitCode))throw Error('Invalid report exit code');
+  return {verified:true,indexSha256:hash(indexBytes),report};
 }

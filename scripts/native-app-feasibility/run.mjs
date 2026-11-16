@@ -27,7 +27,7 @@ export async function probeHost(target,token){
     socket.setTimeout(2000,()=>finish({passed:false,code:'ETIMEDOUT'}));
   });
 }
-async function canary({kind,root,execute}){
+export async function canary({kind,root,execute}){
   const token=randomUUID();const server=net.createServer(socket=>{socket.on('error',()=>{});socket.end(token);});
   const endpoint=kind==='tcp'?{host:'127.0.0.1',port:0}:{path:path.join(root,'u')};
   let listening=false;
@@ -37,11 +37,21 @@ async function canary({kind,root,execute}){
     const target=kind==='tcp'?{host:'127.0.0.1',port:server.address().port}:endpoint;
     const before=await probeHost(target,token);
     // An unhealthy fixture never becomes a denial claim; keep independent lanes running.
-    let result=null;if(before.passed)result=await execute('connect',[JSON.stringify(target)]);
+    let result=null,executionError=null;
+    if(before.passed)try{result=await execute('connect',[JSON.stringify(target)]);}catch(error){executionError=error;}
     const after=await probeHost(target,token);
+    if(executionError){
+      await jsonFile(path.join(root,'evidence',`canary-${kind}-interrupted.json`),{state:'inconclusive',target,before,after,errorCode:executionError.code??null,executionOutcome:executionError.executionOutcome??null});
+      throw executionError;
+    }
     if(result?.observation&&JSON.stringify(result.observation.target)!==JSON.stringify(target))result.observation=null;
     return {state:classifyConnection({before,after,result,token}),detail:'Actual revision2 boundary connection; host token checked before and after',target,before,after,result};
-  }catch(e){if(e.executionOutcome==='unknown')throw e;return {state:'inconclusive',detail:'Canary fixture unavailable',errorCode:e.code??null};}
+  }catch(e){
+    // Only a known host-listener setup limitation is a capability observation.
+    // Execution and persistence failures retain their original exit semantics.
+    if(listening||!['EPERM','EACCES','EADDRINUSE','EAFNOSUPPORT','ENOSYS','ENAMETOOLONG'].includes(e.code))throw e;
+    return {state:'inconclusive',detail:'Canary fixture unavailable',errorCode:e.code};
+  }
   finally{if(listening)await new Promise(resolve=>server.close(resolve));else server.close();}
 }
 function functional(good,bad,kind,assertions){
@@ -54,6 +64,7 @@ export async function runQualification(options){
   const nativeConfig=process.env.MOSAIC_NATIVE_ARTIFACT_MANIFEST?{schema:1,artifactManifestPath:process.env.MOSAIC_NATIVE_ARTIFACT_MANIFEST,artifactManifestSha256:process.env.MOSAIC_NATIVE_ARTIFACT_SHA256}:null;
   if(nativeConfig&&(!/^[a-f0-9]{64}$/.test(nativeConfig.artifactManifestSha256??'')))throw Error('Native artifact requires an explicit SHA256 fingerprint');
   if(!nativeConfig&&process.env.MOSAIC_NATIVE_ARTIFACT_SHA256)throw Error('Native fingerprint requires its manifest');
+  if(nativeConfig)await safePath(nativeConfig.artifactManifestPath,{directory:false});
   let runtime=null,runtimeError=null;
   if(nativeConfig){try{runtime=validateNativeCheckRuntime(nativeConfig,nativeConfig.artifactManifestSha256);}catch(e){runtimeError={code:e.code??null,detail:e.message.slice(0,1000)};}}
   const root=options.output;

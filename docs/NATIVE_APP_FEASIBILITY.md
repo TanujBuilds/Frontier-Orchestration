@@ -46,10 +46,15 @@ node scripts/native-app-feasibility.mjs --inspect "$NEW_OWNED_ROOT"
 
 `--inspect` verifies evidence hashes and emits the saved report. It performs no
 execution, database startup, ownership reconciliation, Git action, or file write.
-It retains the saved exit class. Inspect rejects evidence aliases, traversal,
+It parses the same report/index bytes it hashed and retains the saved exit class.
+Inspect rejects evidence aliases, traversal,
 missing report bindings, excessive bytes and changed evidence. The index binds
 local evidence; it is not a signature against a party who can replace the entire
 run directory. Retain the handoff's independent index hash for that purpose.
+
+An explicitly supplied native manifest must be an existing canonical regular
+file before output creation; an absent runtime configuration instead records a
+missing prerequisite.
 
 Execution refuses existing roots, noncanonical or symlink paths and Git override
 environment variables before writes. `GIT_PAGER` is harmless and permitted;
@@ -109,7 +114,10 @@ query-result assertion. It uses its own trust/user/database fixture, empty Unix
 socket setting and ephemeral TCP port, with no personal configuration changes.
 The normal native policy can deny external executable/library/data access even
 before networking. Record that result without adding grants or running a host
-migration. The supervisor owns all descendants, including failed startup, and
+migration. A random per-run database role and an exact `data_directory` identity check
+against the owned cluster are required before any migration; a responding server
+on a reused port cannot authorize writes. The supervisor owns all descendants,
+including failed startup, and
 quiescence is still required. This optional path needs qualification on a host
 with real PostgreSQL; no such success is implied by missing-prerequisite tests.
 
@@ -122,7 +130,9 @@ MOSAIC_REQUIRE_NATIVE=1 MOSAIC_REQUIRE_BROWSER=1 \
 
 Required mode fails rather than skips if the actual host/runtime/browser inputs
 are unavailable. Without the flags, deterministic tests run and the explicit
-native/browser integration branch is marked skipped. Required tests retain their
+native/browser integration branch is marked skipped. A separately labeled
+scripted lifecycle regression checks wrong-cluster refusal; it supplies no actual
+PostgreSQL capability proof. Required tests retain their
 run directory and print its path. Use a neutral output parent for native work.
 
 Each run retains readable `REPORT.md`, bounded `report.json`, an
@@ -133,6 +143,9 @@ The live fixture/journal/coordinator state remains under that same root. Inspect
 verifies the sealed exported evidence; retained working state is diagnostic and
 is not silently accepted as sealed evidence.
 
+After-attempt host health is saved even when a connection execution throws;
+unknown executions propagate without launching further checks. Tooling failures
+retain exit 1 rather than masquerading as blocked capability observations.
 Unknown executions retain their owner and directory. The tool never force-cleans
 an uncertain owner, removes an earlier run or modifies a shared runtime. Failed
 attempts are evidence, not cleanup targets. No complete package/release suite,
