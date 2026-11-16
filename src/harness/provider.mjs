@@ -2,10 +2,13 @@ import { DeepSeekHttpAdapter, validModelId } from '../adapters/deepseek-http.mjs
 import { normalizeProviderCapabilities } from './provider-capabilities.mjs';
 import { streamCompletion, redactStream, validCompletionMetadata } from './stream.mjs';
 
-function failure(message, outcome, status) {
+function failure(message, outcome, status, details = {}) {
   const error = new Error(message);
   error.requestOutcome = outcome;
   if (status !== undefined) error.httpStatus = status;
+  if (['model_not_found','context_length_exceeded'].includes(details.providerErrorCode)) error.providerErrorCode = details.providerErrorCode;
+  if (['address','tls','connection','timeout','cancelled','protocol','model_not_advertised'].includes(details.diagnosticCategory)) error.diagnosticCategory = details.diagnosticCategory;
+  if (['model_discovery','inference'].includes(details.requestOperation)) error.requestOperation = details.requestOperation;
   return error;
 }
 
@@ -28,7 +31,7 @@ export class LocalProvider extends DeepSeekHttpAdapter {
     return true;
   }
 
-  async complete(messages, { signal, maxTokens = 12000, onContent, expectedModel, onModel, streaming = this.streaming } = {}) {
+  async complete(messages, { signal, maxTokens = 12000, onContent, expectedModel, onModel, beforeRequest, streaming = this.streaming } = {}) {
     let model, payload;
     try {
       if (typeof streaming !== 'boolean') throw Error(this.label + ' streaming must be boolean');
@@ -45,16 +48,20 @@ export class LocalProvider extends DeepSeekHttpAdapter {
       // A successful prior call does not prove the endpoint still advertises this model.
       if (this.capabilities?.modelDiscovery === 'advertised') {
         const ids = await this.listModels(signal, { strict: true });
-        if (!ids.includes(model)) throw Error('Configured provider model is not advertised by /models');
+        if (!ids.includes(model)) throw failure('Configured provider model is not advertised by /models','not_dispatched',undefined,{diagnosticCategory:'model_not_advertised',requestOperation:'model_discovery'});
       }
       payload = JSON.stringify({
         model, stream: streaming, max_tokens: maxTokens,
         ...(this.openAICompatible ? {} : { chat_template_kwargs: { enable_thinking: false } }),
         messages: this.redactData(messages),
       });
+      // Setup's snapshot guard must run after the asynchronous advertised-model
+      // preflight. The final runtime ownership check must remain uninterrupted
+      // from onModel through dispatch, including when no setup guard is present.
+      if(beforeRequest)await beforeRequest();
       onModel?.(model);
     } catch (error) {
-      throw failure(this.redact(error?.message ?? 'Provider request could not be prepared'), 'not_dispatched', error?.httpStatus);
+      throw failure(this.redact(error?.message ?? 'Provider request could not be prepared'), 'not_dispatched', error?.httpStatus, error);
     }
 
     const capture = streaming && this.apiKey && onContent ? redactStream(this.apiKey, onContent) : null;
@@ -71,7 +78,7 @@ export class LocalProvider extends DeepSeekHttpAdapter {
       }, signal);
       const choice = body?.choices?.[0];
       if (typeof choice?.message?.content !== 'string') {
-        throw failure(this.label + ' returned no content', 'unknown');
+        throw failure(this.label + ' returned no content', 'unknown',undefined,{diagnosticCategory:'protocol',requestOperation:'inference'});
       }
       result = {
         content: choice.message.content,
@@ -79,7 +86,7 @@ export class LocalProvider extends DeepSeekHttpAdapter {
         usage: body.usage ?? null,
         finishReason: choice.finish_reason ?? null,
       };
-      if (!validCompletionMetadata(result)) throw failure(this.label + ' returned invalid completion metadata', 'unknown');
+      if (!validCompletionMetadata(result)) throw failure(this.label + ' returned invalid completion metadata', 'unknown',undefined,{diagnosticCategory:'protocol',requestOperation:'inference'});
     }
 
     try {

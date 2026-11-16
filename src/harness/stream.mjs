@@ -1,11 +1,16 @@
 import http from 'node:http';
 import https from 'node:https';
 import { StringDecoder } from 'node:string_decoder';
-import { validModelId } from '../adapters/deepseek-http.mjs';
+import { validModelId, connectionCategory } from '../adapters/deepseek-http.mjs';
 
 // SSE framing repeats metadata per delta; bound the wire separately from model output.
 const MAX_WIRE=8*1024*1024,MAX_RESPONSE=512*1024,MAX_CAPTURE=128*1024;
-function failure(message,outcome='unknown',status){const e=new Error(message);e.requestOutcome=outcome;if(status!==undefined)e.httpStatus=status;return e;}
+function failure(message,outcome='unknown',status,category='protocol'){
+ const e=new Error(message);e.requestOutcome=outcome;e.requestOperation='inference';
+ if(status!==undefined)e.httpStatus=status;
+ if(['address','tls','connection','timeout','cancelled','protocol'].includes(category))e.diagnosticCategory=category;
+ return e;
+}
 export function validCompletionMetadata({model,usage,finishReason}){
  return (model===undefined||validModelId(model))&&
   (usage==null||typeof usage==='object'&&!Array.isArray(usage))&&
@@ -38,9 +43,10 @@ export function redactStream(secret,write){
 export function streamCompletion(url,body,{signal,timeoutMs,onContent,model,authHeaders={},label='DeepSeek'}){
  const timeout=AbortSignal.timeout(timeoutMs),combined=signal?AbortSignal.any([signal,timeout]):timeout;
  return new Promise((resolve,reject)=>{
-  let settled=false;
-  const fail=e=>{if(settled)return;settled=true;reject(e);request.destroy();};
+  let settled=false,observedStatus;
+  const fail=e=>{if(settled)return;settled=true;if(observedStatus!==undefined&&e.httpStatus===undefined)e.httpStatus=observedStatus;reject(e);request.destroy();};
   const request=(url.protocol==='https:'?https:http).request(url,{method:'POST',headers:{'content-type':'application/json','accept':'text/event-stream',...authHeaders},signal:combined},response=>{
+   observedStatus=response.statusCode;
    if(response.statusCode<200||response.statusCode>=300){fail(failure(`${label} stream returned HTTP ${response.statusCode}`,response.statusCode>=500?'unknown':'not_dispatched',response.statusCode));return;}
    if(!/^text\/event-stream(?:;|$)/i.test(response.headers['content-type']??'')){fail(failure(label+' streaming response is not SSE; completed-output mode must be explicitly selected'));return;}
    const decoder=new StringDecoder('utf8');let pending='',wireBytes=0,captured=0,content='',actualModel=null,usage=null,finishReason=null,done=false;
@@ -84,10 +90,10 @@ export function streamCompletion(url,body,{signal,timeoutMs,onContent,model,auth
      settled=true;resolve(result);
     }catch(e){fail(e);}
    });
-   response.on('aborted',()=>fail(failure(label+' stream disconnected')));
-   response.on('error',()=>fail(failure(label+' stream connection closed')));
+   response.on('aborted',()=>fail(failure(label+' stream disconnected','unknown',undefined,'connection')));
+   response.on('error',()=>fail(failure(label+' stream connection closed','unknown',undefined,'connection')));
   });
-  request.on('error',e=>{const message=signal?.aborted?label+' call interrupted':timeout.aborted?`${label} call timed out after ${timeoutMs} ms`:`${label} stream connection failed: ${e.code??'connection error'}`;fail(failure(message));});
+  request.on('error',e=>{const message=signal?.aborted?label+' call interrupted':timeout.aborted?`${label} call timed out after ${timeoutMs} ms`:`${label} stream connection failed: ${e.code??'connection error'}`;fail(failure(message,'unknown',undefined,signal?.aborted?'cancelled':timeout.aborted?'timeout':connectionCategory(e)));});
   request.end(body);
  });
 }
