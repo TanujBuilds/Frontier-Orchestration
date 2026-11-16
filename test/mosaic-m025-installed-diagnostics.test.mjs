@@ -97,7 +97,9 @@ test('extracted installed command separates discovery, inference and readiness w
  await coordinator.stop();
  // Both allowlisted provider-reported causes must travel the actual adapter/CLI.
  const configInput=path.join(root,'private-settings.json');await writeFile(configInput,before,{mode:0o600});
- for(const failure of ['model_not_found','context_length_exceeded']){
+ for(const failure of ['model_not_found','context_length_exceeded'])for(const streaming of [false,true]){
+  const selected=structuredClone(settings);selected.providers[0].streaming=streaming;selected.providers[0].capabilities.transports=[streaming?'sse':'json'];
+  await writeFile(configInput,JSON.stringify(selected),{mode:0o600});
   mode=failure;start=calls.length;r=await invoke(metadata,['setup','--config',configInput],'n\ny\ny\n');
   assert.notEqual(r.code,0);assert.deepEqual(calls.slice(start).map(c=>c.method),['POST']);
   assert.match(r.stdout,/provider.reported/i);assert.match(r.stdout,failure==='model_not_found'?/model.*not.*found/i:/context.*(?:limit|length|capacity)/i);assert.match(r.stdout,/next|check|choose/i);

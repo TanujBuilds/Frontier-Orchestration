@@ -39,6 +39,30 @@ function reportedCode(bytes){
   }catch{}
 }
 
+/** Read optional HTTP error metadata without withholding the known status. */
+export function readProviderErrorCode(response,signal){
+  return new Promise(resolve=>{
+    const chunks=[];let size=0,finished=false,timer;
+    const finish=complete=>{
+      if(finished)return;finished=true;
+      clearTimeout(timer);signal?.removeEventListener('abort',abort);
+      resolve(complete?reportedCode(chunks):undefined);
+      response.destroy();
+    };
+    const abort=()=>finish(false);
+    // Only a complete small JSON body can supply a code. Slow, disconnected or
+    // oversized bodies fall back to the already observed HTTP status.
+    timer=setTimeout(()=>finish(false),100);
+    signal?.addEventListener('abort',abort,{once:true});
+    response.on('data',chunk=>{size+=chunk.length;if(size>4096)finish(false);else chunks.push(chunk);});
+    response.on('end',()=>finish(true));
+    response.on('aborted',()=>finish(false));
+    response.on('error',()=>finish(false));
+    response.on('close',()=>finish(false));
+    if(signal?.aborted)finish(false);
+  });
+}
+
 export function connectionCategory(error){
   const code=error?.cause?.code??error?.code;
   if(['ECONNREFUSED','ENOTFOUND','EAI_AGAIN','ENETUNREACH','EHOSTUNREACH','EADDRNOTAVAIL'].includes(code))return 'address';
@@ -100,23 +124,9 @@ function requestWithoutHeaderDeadline(url, options, signal) {
       observedStatus=response.statusCode;
       response.on('error', rejectResponse);
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        const chunks=[];let size=0,finished=false,timer;
-        const finish=complete=>{
-          if(finished)return;finished=true;
-          clearTimeout(timer);signal?.removeEventListener('abort',abort);
-          resolve({ok:false,status:response.statusCode,...(complete?{providerErrorCode:reportedCode(chunks)}:{})});
-          response.destroy();
-        };
-        const abort=()=>finish(false);
-        observedErrorResponse=abort;
-        // A stalled optional body must never replace an already observed status.
-        timer=setTimeout(()=>finish(false),100);
-        signal?.addEventListener('abort',abort,{once:true});
-        response.on('data',chunk=>{size+=chunk.length;if(size>4096)finish(false);else chunks.push(chunk);});
-        response.on('end',()=>finish(true));
-        response.on('aborted',()=>finish(false));
-        response.removeListener('error',rejectResponse);response.on('error',()=>finish(false));
-        if(signal?.aborted)finish(false);
+        observedErrorResponse=()=>response.destroy();
+        response.removeListener('error',rejectResponse);
+        readProviderErrorCode(response,signal).then(providerErrorCode=>resolve({ok:false,status:response.statusCode,providerErrorCode}));
         return;
       }
       const chunks = [];

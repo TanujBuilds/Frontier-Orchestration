@@ -226,3 +226,18 @@ test('SSE-only real request obeys the same short deadline and unknown dispatched
  const d=await diagnostics(),f=await fixture(t,(_req,res)=>{res.writeHead(200,{'content-type':'text/event-stream'});res.flushHeaders();}),p=sseProfile(f.base),r=await d.probeProvider(client(p,{streaming:true}),p,{deadlineMs:35});
  assert.equal(r.inference.category,'timeout');assert.equal(r.inference.requestOutcome,'unknown');assert.equal(r.endpoint.state,'responded');assert.equal(f.calls.length,1);
 });
+
+for(const code of ['model_not_found','context_length_exceeded'])test(`SSE-only HTTP ${code} reports the bounded provider cause without raw body`,async t=>{
+ const d=await diagnostics(),f=await fixture(t,(_req,res)=>json(res,{error:{code,message:'PRIVATE '+secret}},400)),p=sseProfile(f.base),r=await d.probeProvider(client(p,{streaming:true}),p,{secrets:[secret]}),text=d.formatProviderDiagnostic(r);
+ assert.equal(r.inference.category,code);assert.equal(r.inference.httpStatus,400);assert.equal(r.inference.requestOutcome,'not_dispatched');assert.equal(r.endpoint.state,'responded');assert.equal(r.failed,true);assert.match(text,/provider-reported/i);assert.doesNotMatch(text+JSON.stringify(r),/PRIVATE|dummy-key/);assert.equal(f.calls.length,1);assert.equal(f.calls[0].body.stream,true);
+});
+
+for(const [name,body] of [['oversized',JSON.stringify({error:{code:'model_not_found'},padding:'x'.repeat(4096)})],['malformed','{"error":'],['unrecognized',JSON.stringify({error:{code:'not_allowlisted',message:'PRIVATE '+secret}})]])test(`SSE-only HTTP ${name} error body preserves ambiguous status without retry`,async t=>{
+ const d=await diagnostics(),f=await fixture(t,(_req,res)=>{res.writeHead(404,{'content-type':'application/json'});res.end(body);}),p=sseProfile(f.base),r=await d.probeProvider(client(p,{streaming:true}),p),text=d.formatProviderDiagnostic(r);
+ assert.equal(r.inference.category,'http');assert.equal(r.inference.httpStatus,404);assert.equal(r.inference.requestOutcome,'not_dispatched');assert.equal(r.endpoint.state,'responded');assert.doesNotMatch(text+JSON.stringify(r),/provider-reported|PRIVATE|dummy-key|not_allowlisted/);assert.equal(f.calls.length,1);
+});
+
+for(const deadlineMs of [35,10000])test(`SSE-only slow error body keeps known HTTP status within ${deadlineMs===35?'the request deadline':'the metadata budget'}`,async t=>{
+ const d=await diagnostics(),f=await fixture(t,(_req,res)=>{res.writeHead(503,{'content-type':'application/json'});res.flushHeaders();res.write('{"error":');}),p=sseProfile(f.base),start=Date.now(),r=await d.probeProvider(client(p,{streaming:true}),p,{deadlineMs}),text=d.formatProviderDiagnostic(r);
+ assert.equal(r.inference.category,'server');assert.equal(r.inference.httpStatus,503);assert.equal(r.inference.requestOutcome,'unknown');assert.equal(r.endpoint.state,'responded');assert.equal(f.calls.length,1);assert.ok(Date.now()-start<1000);assert.doesNotMatch(text+JSON.stringify(r),/provider-reported|PRIVATE|dummy-key/);
+});
