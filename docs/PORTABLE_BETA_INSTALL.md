@@ -94,8 +94,20 @@ running Mosaic; supply a reachable URL without any required tunnel product.
 Review defaults to the selected app. Approved task context goes to the supplied
 worker endpoint; remote/hosted workers send it off the Mac, and app review may
 use a cloud service even with a local worker. The summary shows the exact
-endpoint/model and capacity; technical settings are optional. Advanced setup
-retains multiple workers, specialty routes, concurrency and separate API review.
+endpoint/model and capacity; technical settings are optional. Choose Guided setup for two or three workers to give each its own URL, manual
+model ID and optional hidden key. Numbered choices select general, backend,
+frontend, tests, docs or design routes, plus the default and planner workers.
+Resolve conflicting specialties explicitly; these are your routing choices,
+not measured model quality. Mosaic generates neutral internal worker IDs.
+
+Total concurrency stays one unless you explicitly choose up to four tasks.
+Worker limits and shared-service limits also default to one. Canonical URL
+aliases share capacity automatically; use the numbered shared-service choice
+when different URLs reach the same physical server. The summary shows worker
+roles, routes, targets, key status, and shared limits. Extra profiles do not
+create inference slots. Guided setup asks discovery and inference consent
+separately for each numbered worker. Advanced setup retains the full technical
+configuration, larger pools and separate API review.
 Existing schema-2 settings use the advanced path and are replaced only after
 the exact preview and confirmation. Model discovery and inference each require
 a separate default-no opt-in after private credential validation. Discovery sends

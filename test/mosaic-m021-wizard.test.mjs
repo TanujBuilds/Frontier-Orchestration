@@ -33,7 +33,7 @@ test('simple bearer key uses hidden ask and private entries only',async()=>{
  const key='dummy-wizard-private-4935',io=simple({location:'3',url:'https://api.example/v1',key}),result=await collectPortableSetup(io.ask,io.output,runtime);assert.deepEqual(result.entries,{'worker-1-key':key});assert.equal(result.settings.providers[0].credentialRef,'worker-1-key');assert.deepEqual(io.prompts.filter(p=>p.options?.secret).map(p=>p.prompt),['Bearer key (hidden): ']);await validateSettingsCredentials(null,result.settings,{schema:1,entries:result.entries});assert.ok(!JSON.stringify(result.settings).includes(key));assert.ok(!io.text().includes(key));assert.ok(!formatPortableSetupSummary(result.settings).includes(key));
 });
 for(const [label,options,error] of [
- ['host menu',{host:'0'},/Invalid host choice/],['worker menu',{location:'6'},/Invalid worker setup choice/],
+ ['host menu',{host:'0'},/Invalid host choice/],['worker menu',{location:'7'},/Invalid worker setup choice/],
  ['blank URL',{url:''},/API base URL/],['userinfo URL',{url:'https://user:pass@example/v1'},/API base URL/],['query URL',{url:'https://api.example/v1?key=dummy'},/API base URL/],['fragment URL',{url:'https://api.example/v1#dummy'},/API base URL/],['unsupported scheme',{url:'file:///tmp/model'},/API base URL/],['blank model',{model:''},/Invalid API worker profile/],['model whitespace',{model:' model '},/Invalid API worker profile/]
 ])test(`simple invalid ${label} rejects without printing supplied identity`,async()=>{
  const io=simple(options);await assert.rejects(collectPortableSetup(io.ask,io.output,runtime),error);if(options.url)assert.ok(!io.text().includes(options.url));assert.ok(!io.text().includes('Mosaic setup summary'));

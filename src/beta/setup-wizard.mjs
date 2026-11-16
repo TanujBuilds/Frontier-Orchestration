@@ -1,3 +1,4 @@
+import {collectMultiWorkerSetup} from './multi-worker-setup.mjs';
 import {normalizeSettings} from './settings.mjs';
 import {getHost,HOST_IDS} from './hosts/index.mjs';
 
@@ -32,7 +33,8 @@ export async function collectPortableSetup(ask,output,{execution,nativeCheckRunt
  output.write('Mosaic coordinates work. Your coding app is the conversation and default review surface; a worker is an existing compatible local or API model server.\nApproved task context goes to the supplied worker endpoint. Remote and hosted endpoints send it off this Mac. Even a local worker does not make app review local: review may use the app\'s cloud service. Separate reviewer APIs are an advanced choice.\nNo automatic server discovery, model installation or inference. Choosing an app does not prove it is connected.\n');
  if(existingSettings)output.write('Existing settings detected: advanced setup will collect an explicit replacement. Cancelling preserves your current workers and review settings; inspect the exact replacement before applying.\n');
  const hostChoice=await ask('Mosaic portable setup\n  1. Codex\n  2. Claude Code\n  3. Cursor\n  4. Antigravity\nChoose host [1]: ')||'1',hostId=HOST_IDS[integer(hostChoice,1,4,'host choice')-1];
- const choice=existingSettings?5:integer(await ask('Worker setup\n  1. Model on this Mac\n  2. Model on another computer (for example a Spark)\n  3. Hosted API\n  4. No worker yet / use the coding app only\n  5. Advanced setup\nChoose worker setup [1]: ')||'1',1,5,'worker setup choice');
+ const choice=existingSettings?5:integer(await ask('Worker setup\n  1. Model on this Mac\n  2. Model on another computer (for example a Spark)\n  3. Hosted API\n  4. No worker yet / use the coding app only\n  5. Advanced setup\n  6. Guided setup for two or three workers\nChoose worker setup [1]: ')||'1',1,6,'worker setup choice');
+ if(choice===6)return collectMultiWorkerSetup(ask,output,{hostId,execution,nativeCheckRuntime,createProfile:profile});
  if(choice===5)return advanced(ask,hostId,{execution,nativeCheckRuntime});
  const workerLocation=['local','remote','api','none'][choice-1],providers=[],entries={};
  if(choice!==4){
@@ -50,7 +52,12 @@ export function formatPortableSetupSummary(settings,{manualHost,workerLocation=n
  const host=getHost(settings.host.id),workers=settings.providers.filter(p=>p.roles.includes('worker')),lines=['\nMosaic setup summary',`Coding app: ${host.displayName}.`];
  if(workers.length){
   if(workerLocation)lines.push('Worker location: '+({local:'this Mac',remote:'another computer',api:'hosted API'}[workerLocation]??workerLocation)+'.');
-  for(const worker of workers)lines.push(`${worker.displayName}: ${worker.model} at ${worker.baseUrl}; private bearer key ${worker.credentialRef?'configured':'not required'}.`);
+  for(const worker of workers){
+   const routes=settings.defaults.routing?.rules.filter(r=>r.providerId===worker.id).map(r=>r.category)??[],roles=[...(settings.defaults.workerId===worker.id?['default']:[]),...(settings.defaults.plannerWorkerId===worker.id?['planner']:[])],group=settings.capacityGroups.find(g=>g.id===worker.capacityGroup),members=workers.filter(p=>p.capacityGroup===worker.capacityGroup).map(p=>p.displayName);
+   lines.push(`${worker.displayName}: ${worker.model} at ${worker.baseUrl}; private bearer key ${worker.credentialRef?'configured':'not required'}.`);
+   lines.push(`  Role: worker${roles.length?', '+roles.join(', '):''}; chosen routes: ${routes.length?routes.join(', '):'none (available in the pool)'}. Worker limit: ${worker.concurrency}; shared service with ${members.join(', ')}: ${group.limit} slot${group.limit===1?'':'s'}.`);
+  }
+  if(settings.defaults.routing)lines.push('Specialties are chosen routes, not proof of model quality. Unassigned categories use the default worker.');
   lines.push(`Approved task context goes to the supplied worker endpoint${workerLocation==='remote'||workerLocation==='api'?' off this Mac':''}.`);
   lines.push(`Concurrency: ${settings.serviceMaxConcurrentTasks} service slot${settings.serviceMaxConcurrentTasks===1?'':'s'}; worker slots ${workers.map(p=>p.concurrency).join(', ')}; capacity group slots ${settings.capacityGroups.map(g=>g.limit).join(', ')}.`);
  }else lines.push('No worker configured: local model delegation is not ready; use the coding app only.');

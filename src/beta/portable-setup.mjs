@@ -6,6 +6,7 @@ import {ProviderRegistry} from '../harness/providers/registry.mjs';
 import {digest} from '../harness/contracts.mjs';
 import {normalizeSettings,readCredentials,readSettings,configuredPolicies,validateSettingsCredentials} from './settings.mjs';
 import {getHost,HOST_IDS} from './hosts/index.mjs';
+import {validateMultiWorkerCredentials} from './multi-worker-setup.mjs';
 import {collectPortableSetup,formatPortableSetupSummary} from './setup-wizard.mjs';
 import {SETUP_PROBE_MESSAGE,createProviderDiagnostic,discoverProvider,probeProvider,formatProviderDiagnostic} from './provider-diagnostics.mjs';
 import {atomic,entry,hash,jsonFile,localDirectory,saveJson,shellQuote,withLock} from './files.mjs';
@@ -56,6 +57,7 @@ export async function setupPortable(paths,{ask,output,settings:provided,executio
  const configured=provided?{settings:normalizeSettings(provided),entries:{}}:await collectPortableSetup(ask,output,{execution,nativeCheckRuntime,existingSettings:old});const settings=configured.settings,credentials=await readCredentials(paths),nextCredentials={schema:1,entries:{...credentials.entries,...configured.entries}};
  // Validate secret-free public identity before publishing any preview or error.
  await validateSettingsCredentials(paths,settings,nextCredentials);
+ if(configured.presentation==='guided')await validateMultiWorkerCredentials(settings,nextCredentials);
  // A question or preflight may suspend setup while another process rotates the
  // private store. Fence each later publication/probe against that same snapshot.
  const assertCurrentSetup=async()=>{
@@ -75,7 +77,7 @@ export async function setupPortable(paths,{ask,output,settings:provided,executio
  const adapter=getHost(settings.host.id),manualHost=!paths.isolated,io=await hostIo(paths,{...(settings.host.id==='codex'?{codexRegistrations,codexPath:settings.codexPath}:{})}),existing=manualHost?{}:await io.read(adapter.previewRegistration({paths,launcher:paths.launcher}).target);
  let hostPreview;const existingReceipt=await io.readReceipt(path.join(paths.configDir,`host-${settings.host.id}-binding.json`));if(existingReceipt&&!manualHost){const selected=settings.host.id==='codex'?existing.registration:existing.mcpServers?.['mosaic-beta'];if(fingerprint(selected??null)!==existingReceipt.entryHash)throw Error('Owned host entry was customized; preserve it before setup');const clean=structuredClone(existing);if(settings.host.id==='codex')clean.registration=null;else {delete clean.mcpServers['mosaic-beta'];if(!existingReceipt.hadMcpServers&&!Object.keys(clean.mcpServers).length)delete clean.mcpServers;}hostPreview=adapter.previewRegistration({paths,launcher:paths.launcher,existing:clean});hostPreview.resumeOwned=true;delete hostPreview.resumeOwned;}else hostPreview=adapter.previewRegistration({paths,launcher:paths.launcher,existing});
  await withCurrentSetup(()=>output.write('\n'+formatPortableSetupSummary(settings,{manualHost,workerLocation:configured.workerLocation})+'\n'));
- const showDetails=configured.presentation!=='simple'||yes(await ask('Show technical settings details? [y/N] '));
+ const showDetails=!['simple','guided'].includes(configured.presentation)||yes(await ask('Show technical settings details? [y/N] '));
  await withCurrentSetup(()=>{
  if(showDetails)output.write('Exact private setup preview (provider references only)\n'+JSON.stringify(settings,null,2)+'\n');
  output.write('Host target: '+hostPreview.target+'\nReviewed entry: '+JSON.stringify(hostPreview.entry)+'\nHost: '+adapter.displayName+' · '+(manualHost?'manual configuration required; no host file will be changed':'fixture-tested registration; actual host compatibility unprobed')+'.\n'+(manualHost?(settings.host.id==='codex'?'Review this supported Codex CLI command and run it yourself after preserving any existing mosaic-beta entry:\n'+[hostPreview.command,...hostPreview.argv].map(shellQuote).join(' '):'Review and merge this snippet without changing unrelated settings:\n'+JSON.stringify({mcpServers:{'mosaic-beta':hostPreview.entry}},null,2))+'\nLoad the MCP connection in '+adapter.displayName+' and inspect its Mosaic tools; host discovery remains unverified.\n':'')+'No fallback. Existing server only; no model installation.\n');
@@ -85,27 +87,32 @@ export async function setupPortable(paths,{ask,output,settings:provided,executio
  const clientFor=profile=>registry.createClient({version:1,providerId:profile.id,revision:profile.revision,profileHash:digest(registry.get(profile.id,profile.revision)),policyHash:digest(configuredPolicies(settings).providerPolicy)});
  const publishReport=profile=>withCurrentSetup(()=>output.write(formatProviderDiagnostic(reports.get(profile.id),{secrets})));
  await withCurrentSetup(()=>output.write('Optional model discovery sends GET to each configured worker URL below, with configured authentication sent to that supplied endpoint. It sends no project files, task evidence, reviewer request or inference. One request per worker, at most 10 seconds each; no retries or fallback.\n'+workers.map(profile=>'GET '+profile.baseUrl+'/models').join('\n')+(workers.length?'\n':'No worker configured: zero provider requests.\n')));
- const runDiscovery=yes(await ask('Run optional model discovery check? [y/N] '));
- await withCurrentSetup(async()=>{
-  if(runDiscovery)for(const profile of workers){
-   const report=await discoverProvider(clientFor(profile),profile,{previous:reports.get(profile.id),secrets,beforeRequest:assertCurrentSetup,signal});
-   await assertCurrentSetup();reports.set(profile.id,report);
-  }
- });
- if(runDiscovery)for(const profile of workers)await publishReport(profile);
+ const guided=configured.presentation==='guided';
+ const runDiscovery=guided?null:yes(await ask('Run optional model discovery check? [y/N] '));
+ for(const [i,profile] of workers.entries()){
+  const selected=guided?yes(await ask(`Worker ${i+1}: run optional model discovery check? [y/N] `)):runDiscovery;
+  await withCurrentSetup(async()=>{
+   if(selected){const report=await discoverProvider(clientFor(profile),profile,{previous:reports.get(profile.id),secrets,beforeRequest:assertCurrentSetup,signal});await assertCurrentSetup();reports.set(profile.id,report);}
+  });
+  if(selected)await publishReport(profile);
+ }
  await withCurrentSetup(()=>output.write('Optional inference sends the exact fixed setup message below (setup-only) to each supplied worker endpoint, with configured authentication. It may incur provider cost. No project files, task evidence or reviewer request are sent. Maximum output: 16 tokens; one total 10-second deadline per worker, including any required fresh membership GET. No retries or fallback.\nMessage: '+SETUP_PROBE_MESSAGE+'\n'+workers.map(profile=>'POST '+profile.baseUrl+'/chat/completions'+(profile.capabilities.modelDiscovery==='advertised'?'\nRequired fresh membership GET '+profile.baseUrl+'/models before POST (included in the same total deadline).':'')).join('\n')+(workers.length?'\n':'No worker configured: zero provider requests.\n')));
- const runProbe=yes(await ask('Run optional inference connectivity test with that fixed setup-only message? [y/N] '));
- await withCurrentSetup(async()=>{
-  if(runProbe)for(const profile of workers){
-   const report=await probeProvider(clientFor(profile),profile,{previous:reports.get(profile.id),secrets,beforeRequest:assertCurrentSetup,signal});
-   await assertCurrentSetup();reports.set(profile.id,report);
-   // Revalidate before every publication, including failed diagnostic evidence.
-   output.write(formatProviderDiagnostic(report,{secrets}));
-   if(report.failed)throw Error('Setup connectivity probe failed; saved settings remain unchanged');
-  }
-  else output.write('Connectivity/inference: untested; zero setup POSTs.\n');
- });
- if(!runProbe)for(const profile of workers)await publishReport(profile);
+ const runProbe=guided?null:yes(await ask('Run optional inference connectivity test with that fixed setup-only message? [y/N] '));
+ let anyProbe=false;
+ for(const [i,profile] of workers.entries()){
+  const selected=guided?yes(await ask(`Worker ${i+1}: run optional inference connectivity test with that fixed setup-only message? [y/N] `)):runProbe;
+  await withCurrentSetup(async()=>{
+   if(selected){
+    anyProbe=true;
+    const report=await probeProvider(clientFor(profile),profile,{previous:reports.get(profile.id),secrets,beforeRequest:assertCurrentSetup,signal});
+    // Revalidate before every publication, including failed diagnostic evidence.
+    await assertCurrentSetup();reports.set(profile.id,report);output.write(formatProviderDiagnostic(report,{secrets}));
+    if(report.failed)throw Error('Setup connectivity probe failed; saved settings remain unchanged');
+   }
+  });
+  if(!selected)await publishReport(profile);
+ }
+ if(!anyProbe)await withCurrentSetup(()=>output.write('Connectivity/inference: untested; zero setup POSTs.\n'));
  await withCurrentSetup(()=>{
   for(const profile of settings.providers)if(!profile.roles.includes('worker'))output.write('API reviewer '+profile.id+': configured; inference untested (review requires bound task evidence).\n');
   if(!workers.length)output.write('No worker diagnostics: discovery/inference untested; zero provider requests.\n');
