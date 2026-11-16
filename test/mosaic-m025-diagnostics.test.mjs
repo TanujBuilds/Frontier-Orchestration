@@ -204,6 +204,26 @@ for(const cancelled of [false,true])test(`advertised membership ${cancelled?'can
  assert.equal(r.inference.operation,'inference_preflight');assert.equal(r.inference.requestOutcome,'not_dispatched');assert.deepEqual(f.calls.map(c=>c.method),['GET']);assert.doesNotMatch(text,/dispatched inference|outcome.*uncertain|uncertain.*outcome/i);assert.equal(r.endpoint.state,cancelled?'unknown':'responded');
 });
 
+for(const outage of ['disconnect','deadline','invalid JSON'])for(const advertised of [false,true])test(`JSON ${advertised?'membership':'inference'} 200 ${outage} keeps responder evidence separate from failure status`,async t=>{
+ const d=await diagnostics(),f=await fixture(t,(_req,res)=>{
+  res.writeHead(200,{'content-type':'application/json'});res.flushHeaders();
+  if(outage==='invalid JSON')return res.end('{');
+  res.write('{');if(outage==='disconnect')setTimeout(()=>res.destroy(),5);
+ }),p=profile(f.base,advertised),c=client(p,{timeoutMs:100});
+ await assert.rejects(c.complete([]),error=>{
+  assert.equal(error.httpStatus,undefined);assert.equal(error.observedHttpStatus,200);
+  assert.equal(error.requestOperation,advertised?'model_discovery':'inference');
+  assert.equal(error.requestOutcome,advertised?'not_dispatched':'unknown');return true;
+ });
+ const r=await d.probeProvider(c,p,{deadlineMs:100}),observation=advertised?r.inference.preflight:r.inference;
+ assert.equal(r.endpoint.state,'responded');assert.equal(r.endpoint.observedHttpStatus,200);
+ assert.equal(observation.httpStatus,undefined);assert.equal(observation.observedHttpStatus,200);
+ assert.equal(r.inference.category,outage==='invalid JSON'?'protocol':outage==='deadline'?'timeout':'connection');
+ assert.equal(r.inference.requestOutcome,advertised?'not_dispatched':'unknown');
+ assert.match(d.formatProviderDiagnostic(r),/HTTP 200 response observed/);
+ assert.deepEqual(f.calls.map(c=>c.method),advertised?['GET','GET']:['POST','POST']);
+});
+
 for(const [status,want] of [[401,'authentication'],[403,'authentication'],[429,'rate_limit'],[503,'server']])test(`HTTP ${status} remains primary when an error body reports model_not_found`,async t=>{
  const d=await diagnostics(),f=await fixture(t,(_req,res)=>json(res,{error:{code:'model_not_found'}},status)),p=profile(f.base),r=await d.probeProvider(client(p),p);
  assert.equal(r.inference.category,want);assert.equal(r.inference.httpStatus,status);assert.equal(r.endpoint.state,'responded');

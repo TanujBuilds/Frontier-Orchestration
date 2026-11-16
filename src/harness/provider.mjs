@@ -5,7 +5,9 @@ import { streamCompletion, redactStream, validCompletionMetadata } from './strea
 function failure(message, outcome, status, details = {}) {
   const error = new Error(message);
   error.requestOutcome = outcome;
-  if (status !== undefined) error.httpStatus = status;
+  if (Number.isInteger(status) && status >= 300 && status <= 599) error.httpStatus = status;
+  const observed = details.observedHttpStatus ?? status;
+  if (Number.isInteger(observed) && observed >= 200 && observed < 300) error.observedHttpStatus = observed;
   if (['model_not_found','context_length_exceeded'].includes(details.providerErrorCode)) error.providerErrorCode = details.providerErrorCode;
   if (['address','tls','connection','timeout','cancelled','protocol','model_not_advertised'].includes(details.diagnosticCategory)) error.diagnosticCategory = details.diagnosticCategory;
   if (['model_discovery','inference'].includes(details.requestOperation)) error.requestOperation = details.requestOperation;

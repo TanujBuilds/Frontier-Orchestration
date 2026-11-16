@@ -44,7 +44,9 @@ function deadline(signal,deadlineMs=10000){
  return {timeout,signal:signal?AbortSignal.any([signal,timeout]):timeout};
 }
 function failure(error,{signal,timeout}){
- const status=Number.isInteger(error?.httpStatus)&&error.httpStatus>=100&&error.httpStatus<=599?error.httpStatus:undefined;
+ const status=Number.isInteger(error?.httpStatus)&&error.httpStatus>=300&&error.httpStatus<=599?error.httpStatus:undefined;
+ const observed=error?.observedHttpStatus??error?.httpStatus;
+ const observedStatus=Number.isInteger(observed)&&observed>=200&&observed<300?observed:undefined;
  let category;
  if(status===401||status===403)category='authentication';
  else if(status===429)category='rate_limit';
@@ -55,10 +57,10 @@ function failure(error,{signal,timeout}){
  else if(timeout.aborted)category='timeout';
  else if(categories.has(error?.diagnosticCategory))category=error.diagnosticCategory;
  else category='unknown';
- return {category,...(status===undefined?{}:{httpStatus:status}),requestOutcome:error?.requestOutcome==='not_dispatched'?'not_dispatched':'unknown'};
+ return {category,...(status===undefined?{}:{httpStatus:status}),...(observedStatus===undefined?{}:{observedHttpStatus:observedStatus}),requestOutcome:error?.requestOutcome==='not_dispatched'?'not_dispatched':'unknown'};
 }
 function endpointFailure(info){
- if(info.httpStatus!==undefined||info.category==='protocol'||info.category==='model_not_advertised')return {state:'responded',...(info.httpStatus===undefined?{}:{httpStatus:info.httpStatus})};
+ if(info.httpStatus!==undefined||info.observedHttpStatus!==undefined||info.category==='protocol'||info.category==='model_not_advertised')return {state:'responded',...(info.httpStatus===undefined?{}:{httpStatus:info.httpStatus}),...(info.observedHttpStatus===undefined?{}:{observedHttpStatus:info.observedHttpStatus})};
  if(['address','tls','connection'].includes(info.category))return {state:'transport_failed'};
  return {state:'unknown'};
 }
@@ -67,7 +69,7 @@ function observeEndpoint(report,operation,observation){
  // A later failed transport does not erase a prior HTTP response. The operation
  // list keeps the timing and provenance of that limited responder evidence.
  const responded=observations.findLast(value=>value.state==='responded');
- report.endpoint={...(responded?{state:'responded',...(responded.httpStatus===undefined?{}:{httpStatus:responded.httpStatus})}:observation),observations};
+ report.endpoint={...(responded?{state:'responded',...(responded.httpStatus===undefined?{}:{httpStatus:responded.httpStatus}),...(responded.observedHttpStatus===undefined?{}:{observedHttpStatus:responded.observedHttpStatus})}:observation),observations};
 }
 function discoveryFailure(info,operation){
  return {...discoveryState(operation),state:[404,405].includes(info.httpStatus)?'unsupported':'failed',...info};
@@ -150,6 +152,11 @@ function guidance(observation,step){
  }
 }
 
+function httpEvidence(observation){
+ if(Number.isInteger(observation.httpStatus))return ` (HTTP ${observation.httpStatus})`;
+ if(Number.isInteger(observation.observedHttpStatus))return ` (HTTP ${observation.observedHttpStatus} response observed)`;
+ return '';
+}
 /** Fixed wording plus validated bounded identities; never raw exceptions/bodies. */
 export function formatProviderDiagnostic(report,{secrets=[]}={}){
  const label=safeIdentity(report.providerId,secrets)??'[redacted]';
@@ -162,11 +169,11 @@ export function formatProviderDiagnostic(report,{secrets=[]}={}){
   lines.push(`Model discovery: listed; selected model ${selected}${d.operation==='inference_preflight'?' (fresh inference membership GET)':''}.${models.length?' Models: '+models.join(', ')+'.':''}`);
   if(d.category==='model_not_advertised')lines.push(guidance(d,'Discovery'));
  }else if(d.state==='unsupported')lines.push('Model discovery: unsupported'+(Number.isInteger(d.httpStatus)?` (HTTP ${d.httpStatus})`:'')+'. Next: check the supplied base path; an explicit manual model is allowed.');
- else if(d.state==='failed')lines.push('Model discovery failed'+(Number.isInteger(d.httpStatus)?` (HTTP ${d.httpStatus})`:'')+'. '+guidance(d,'Discovery'));
+ else if(d.state==='failed')lines.push('Model discovery failed'+httpEvidence(d)+'. '+guidance(d,'Discovery'));
  else lines.push('Model discovery: not checked.');
  const i=report.inference??{state:'not_checked'};
  if(i.state==='response_received')lines.push('Inference: response received from the fixed-message test.');
- else if(i.state==='failed')lines.push((i.operation==='inference_preflight'?'Inference membership check':'Inference')+' failed'+(Number.isInteger(i.httpStatus)?` (HTTP ${i.httpStatus})`:'')+'. '+guidance(i,'Inference'));
+ else if(i.state==='failed')lines.push((i.operation==='inference_preflight'?'Inference membership check':'Inference')+' failed'+httpEvidence(i)+'. '+guidance(i,'Inference'));
  else lines.push('Inference: not checked.');
  lines.push('Coding qualification: untested; coding context capacity is unverified. Host connection: unverified.');
  return lines.join('\n')+'\n';

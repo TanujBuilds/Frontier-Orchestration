@@ -23,7 +23,10 @@ const diagnosticCategories=new Set(['address','tls','connection','timeout','canc
 function requestError(message,url,status,metadata={}){
   const error=new Error(message);
   error.requestOutcome=url?.pathname.endsWith('/chat/completions')&&(status===undefined||status>=500)?'unknown':'not_dispatched';
-  if(status!==undefined)error.httpStatus=status;
+  // Runtime reconnect policies consume httpStatus as an HTTP failure. Successful
+  // headers prove a responder even when the body fails, but are not a rejection.
+  if(Number.isInteger(status)&&status>=300&&status<=599)error.httpStatus=status;
+  else if(Number.isInteger(status)&&status>=200&&status<300)error.observedHttpStatus=status;
   if(url)error.requestOperation=url.pathname.endsWith('/chat/completions')?'inference':'model_discovery';
   if(diagnosticCategories.has(metadata.category))error.diagnosticCategory=metadata.category;
   if(providerErrorCodes.has(metadata.providerErrorCode))error.providerErrorCode=metadata.providerErrorCode;
@@ -112,7 +115,7 @@ function requestWithoutHeaderDeadline(url, options, signal) {
   return new Promise((resolve, reject) => {
     let observedErrorResponse,observedStatus;
     const rejectResponse=error=>{
-      if(observedStatus!==undefined)error.httpStatus=observedStatus;
+      if(observedStatus!==undefined)error.observedHttpStatus=observedStatus;
       reject(error);
     };
     const transport = url.protocol === 'https:' ? https : http;
@@ -215,7 +218,8 @@ export class DeepSeekHttpAdapter {
     try {
       response = await this.fetchImpl(url, { ...options, headers:{...options.headers,...this.authHeaders}, signal: combined }, combined);
     } catch (error) {
-      const status=Number.isInteger(error?.httpStatus)&&error.httpStatus>=100&&error.httpStatus<=599?error.httpStatus:undefined;
+      const observed=error?.httpStatus??error?.observedHttpStatus;
+      const status=Number.isInteger(observed)&&observed>=200&&observed<=599?observed:undefined;
       const outcome=url.pathname.endsWith('/chat/completions')?'unknown':'not_dispatched';
       if (signal?.aborted) throw requestError(this.label+' call interrupted',url,status,{category:'cancelled',outcome});
       if (timeout.aborted) throw requestError(`${this.label} call timed out after ${this.timeoutMs} ms`,url,status,{category:'timeout',outcome});
@@ -229,8 +233,8 @@ export class DeepSeekHttpAdapter {
     try {
       return await response.json();
     } catch {
-      if (signal?.aborted) throw requestError(this.label+' call interrupted',url,undefined,{category:'cancelled'});
-      if (timeout.aborted) throw requestError(`${this.label} call timed out after ${this.timeoutMs} ms`,url,undefined,{category:'timeout'});
+      if (signal?.aborted) throw requestError(this.label+' call interrupted',url,response.status,{category:'cancelled',outcome:url.pathname.endsWith('/chat/completions')?'unknown':'not_dispatched'});
+      if (timeout.aborted) throw requestError(`${this.label} call timed out after ${this.timeoutMs} ms`,url,response.status,{category:'timeout',outcome:url.pathname.endsWith('/chat/completions')?'unknown':'not_dispatched'});
       throw requestError(`${this.label} ${this.redact(url.pathname)} returned invalid JSON`,url,response.status,{category:'protocol',outcome:url.pathname.endsWith('/chat/completions')?'unknown':'not_dispatched'});
     }
   }
