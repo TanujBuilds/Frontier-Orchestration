@@ -47,7 +47,54 @@ async function realFixture(){const root=await mkdtemp(path.join(os.tmpdir(),'har
 function logical(c){return JSON.stringify(['records','submissions','commands','events','requests'].map(table=>c.store.db.prepare('SELECT * FROM '+table+' ORDER BY rowid').all()));}
 test('real read-only API observes delayed completion and already-finished state without fake events or mutations',async()=>{const f=await realFixture();try{const before=f.c.getTask(f.task.id);const timer=setTimeout(()=>f.c.finishNativeText({taskId:f.task.id,content:'Fixture completed'},'finish'),350);const r=await(await helper())({invoke:waitClient(f.root),target:'task',id:f.task.id,timeoutMs:2000});clearTimeout(timer);assert.equal(r.outcome,'ready');assert.equal(r.status,'accepted');assert.ok(f.seen.includes('events_wait'));const final=f.c.getTask(f.task.id);assert.equal(final.deadline,before.deadline);assert.deepEqual(final.spent,before.spent);const snapshot=logical(f.c);f.seen.length=0;assert.equal((await(await helper())({invoke:waitClient(f.root),target:'task',id:f.task.id})).status,'accepted');assert.deepEqual(f.seen,['task_get']);assert.equal(logical(f.c),snapshot);}finally{await f.close();}});
 test('actual viewer credential gets denial with no operator fallback',async()=>{const f=await realFixture();try{await writeFile(path.join(f.root,'connection.json'),JSON.stringify({url:f.api.url,token:f.viewer}));const snapshot=logical(f.c),r=await run(['wait','--root',f.root,'--task',f.task.id]);assert.equal(r.code,2);assert.equal(JSON.parse(r.stdout).reason,'access_denied');assert.equal(logical(f.c),snapshot);assert.deepEqual(f.seen,[]);}finally{await f.close();}});
-test('SIGINT and SIGKILL waiter lifecycle leave same task, deadlines, counters and ownership unchanged',async()=>{const f=await realFixture();try{for(const signal of ['SIGINT','SIGKILL']){const snapshot=logical(f.c),child=spawn(process.execPath,[cli,'wait','--root',f.root,'--task',f.task.id,'--timeout-ms','800'],{stdio:['ignore','pipe','pipe']});let stdout='';child.stdout.on('data',b=>stdout+=b);await new Promise(r=>setTimeout(r,200));child.kill(signal);const ended=await new Promise(r=>child.on('exit',(code,killed)=>r({code,killed})));if(signal==='SIGINT'){assert.equal(ended.code,3);assert.equal(JSON.parse(stdout).outcome,'cancelled');}else assert.equal(ended.killed,'SIGKILL');assert.equal(logical(f.c),snapshot);}f.c.finishNativeText({taskId:f.task.id,content:'After observer restart'},'finish');const snapshot=logical(f.c),r=await run(['wait','--root',f.root,'--task',f.task.id]);assert.equal(r.code,0);assert.equal(JSON.parse(r.stdout).status,'accepted');assert.equal(logical(f.c),snapshot);}finally{await f.close();}});
+test('SIGINT and SIGKILL waiter lifecycle leave same task, deadlines, counters and ownership unchanged', {timeout:30000}, async()=>{
+ const f=await realFixture();
+ const bounded=async(promise,ms,message)=>{let timer;try{return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error(message)),ms);})]);}finally{clearTimeout(timer);}};
+ const startupDelay='data:text/javascript,'+encodeURIComponent('await new Promise(resolve=>setTimeout(resolve,350));');
+ try{
+  for(const signal of ['SIGINT','SIGKILL']){
+   const snapshot=logical(f.c),seenBefore=f.seen.length;
+   const child=spawn(process.execPath,['--import',startupDelay,cli,'wait','--root',f.root,'--task',f.task.id,'--timeout-ms','10000'],{stdio:['ignore','pipe','pipe']});
+   let stdout='',stderr='',closed;
+   child.stdout.on('data',b=>stdout+=b);child.stderr.on('data',b=>stderr+=b);
+   const ended=new Promise(resolve=>{
+    child.once('error',error=>{closed={error};resolve(closed);});
+    child.once('close',(code,killed)=>{closed={code,killed};resolve(closed);});
+   });
+   try{
+    // This request can only occur after the CLI has installed its signal
+    // handlers and entered observation. The preload makes slow startup real.
+    const readyDeadline=Date.now()+5000;
+    while(!f.seen.slice(seenBefore).includes('task_get')){
+     assert.equal(closed,undefined,'Waiter exited before observing: '+stderr);
+     assert.ok(Date.now()<readyDeadline,'Waiter did not enter observation before the startup deadline');
+     await new Promise(resolve=>setTimeout(resolve,10));
+    }
+    assert.equal(child.kill(signal),true);
+    const result=await bounded(ended,5000,'Waiter did not terminate after '+signal);
+    assert.equal(result.error,undefined);
+    if(signal==='SIGINT'){
+     assert.equal(result.code,3,stderr);assert.equal(JSON.parse(stdout).outcome,'cancelled');
+    }else assert.equal(result.killed,'SIGKILL');
+    assert.equal(logical(f.c),snapshot);
+   }finally{
+    if(child.exitCode===null&&child.signalCode===null)child.kill('SIGKILL');
+    await bounded(ended,3000,'Owned waiter did not close after cleanup');
+   }
+  }
+  f.c.finishNativeText({taskId:f.task.id,content:'After observer restart'},'finish');
+  const snapshot=logical(f.c),observer=spawn(process.execPath,[cli,'wait','--root',f.root,'--task',f.task.id,'--timeout-ms','2000'],{stdio:['ignore','pipe','pipe']});
+  let output='',errors='';observer.stdout.on('data',b=>output+=b);observer.stderr.on('data',b=>errors+=b);
+  const observed=new Promise(resolve=>{observer.once('error',error=>resolve({error}));observer.once('close',(code,killed)=>resolve({code,killed}));});
+  try{
+   const r=await bounded(observed,5000,'Restarted observer did not terminate');
+   assert.equal(r.error,undefined);assert.equal(r.code,0,errors);assert.equal(JSON.parse(output).status,'accepted');assert.equal(logical(f.c),snapshot);
+  }finally{
+   if(observer.exitCode===null&&observer.signalCode===null)observer.kill('SIGKILL');
+   await bounded(observed,3000,'Owned restarted observer did not close after cleanup');
+  }
+ }finally{await f.close();}
+});
 const launcher=fileURLToPath(new URL('../.agents/skills/frontier-harness/scripts/harness.mjs',import.meta.url));
 async function runLauncher(args,env){return new Promise((resolve,reject)=>{const child=spawn(process.execPath,[launcher,...args],{env:{...process.env,...env},stdio:['ignore','pipe','pipe']});let stdout='',stderr='';child.stdout.on('data',b=>stdout+=b);child.stderr.on('data',b=>stderr+=b);child.on('error',reject);child.on('exit',code=>resolve({code,stdout,stderr}));});}
 test('portable launcher cannot infer wait root from private config and preserves invalid-input exit2',async()=>{const f=await serverFixture((req,res)=>res.end(JSON.stringify({id:'saved-id',status:'accepted'})));try{const config=path.join(f.root,'launcher.json');await writeFile(config,JSON.stringify({dataDir:f.root}));const env={FRONTIER_HARNESS_CONFIG:config};const missing=await runLauncher(['wait','--task','saved-id'],env);assert.equal(missing.code,2);assert.equal(f.seen.length,0);const invalid=await runLauncher(['wait','--root',f.root,'--task','saved-id','--timeout-ms','NaN'],env);assert.equal(invalid.code,2);const ready=await runLauncher(['wait','--root',f.root,'--task','saved-id'],env);assert.equal(ready.code,0,ready.stderr);assert.equal(JSON.parse(ready.stdout).status,'accepted');}finally{await f.close();}});

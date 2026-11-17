@@ -1,0 +1,35 @@
+name: Portable source checks
+
+'on':
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  portable-source:
+    name: Portable source (Node 24.22.0 / Ubuntu)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Use the tested development runtime
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.22.0'
+          package-manager-cache: false
+      - name: Install exact locked dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Report runtime and selected source gates
+        run: |
+          node --version
+          npm --version
+          git --version
+          python3 --version
+          npm run --silent test:source -- --list
+      - name: Run portable source tests
+        run: npm run test:source
