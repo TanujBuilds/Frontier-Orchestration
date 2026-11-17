@@ -1,90 +1,74 @@
-# Frontier Orchestrator
+# Mosaic
 
-A frontier-reviewed application that lets a local model plan and do bounded work, while a frontier model independently judges the result. The application keeps one task record and plan so the user does not have to move context between models by hand. Coding jobs spend scarce frontier usage on passing-stage reviews by default, with optional explicit guidance before a stage starts.
+Mosaic coordinates bounded coding work between your coding app and an existing model API. You describe the outcome, review the scope, checks and limits, and keep one record of the plan, implementation, review and corrections.
 
-The opt-in Codex + DeepSeek collaboration package adds four modes, native
-candidate worktrees and a read-only observer while preserving the legacy review
-workflow. Its [current engineering status](docs/superpowers/plans/2026-10-29-codex-deepseek/ENGINEERING_STATUS.md)
-is separate from final release acceptance; live research, overnight and installed
-promotion gates remain incomplete.
+**Experimental MIT source preview — November 16, 2026.** The source is public at [TanujBuilds/Mosaic](https://github.com/TanujBuilds/Mosaic). There is no published, qualified binary download or one-command installer. Local package verification does not establish a clean-Mac installation, compatibility with your app account, or model quality.
 
-## First live milestone
+## The coding workflow
 
-Give the application a substantial project-design brief from the Mac terminal. Codex plans and delegates one focused assignment. DeepSeek, served as one distributed model across two Sparks, answers it. Codex reviews the answer and may request one focused revision. The overnight coding workflow extends this loop to sequential implementation stages in an isolated Mac worktree. A read-only local browser timeline now displays saved jobs; browser controls remain later work.
+Start with one worker: an already-running OpenAI-compatible API on your Mac, another computer, or a hosted service. Mosaic connects to that service; it does not install models or manage their servers.
 
-For the first personal build, the frontier adapter uses a locally signed-in Codex CLI. The local adapter calls an already-running DeepSeek endpoint. The coordinator and task log preserve one accepted plan and bounded attempts. Model output does not directly authorize a file write or shell command.
+1. Choose a coding app and workflow. The portable setup offers Codex, Claude Code, Cursor and Antigravity as host choices, with review through the selected app by default. Actual app connection remains a separate verification step.
+2. Prepare an exact goal: repository revision, readable and writable paths, protected check commands, worker, review source, deadline and call limits. Review the concrete scope before activation.
+3. The worker implements bounded assignments in an isolated candidate. The coordinator controls permitted edits, execution and capacity.
+4. Protected checks run before review. The reviewer examines the checked diff and evidence, accepts it or requests focused corrections within the remaining limits.
+5. Review acceptance and integration are separate steps. The result records what passed, what changed, and what remains blocked or unverified.
 
-## Overnight coding workflow
+Workflows retain different roles: collaborative work allows Codex and API-worker implementation; DeepSeek-only excludes Codex implementation, review and fallback; Codex-only makes no DeepSeek calls; overnight review uses API-worker implementation with bounded review after passing checks. The historical `deepseek` actor/mode names remain protocol identifiers for the configured API worker. See [mode and lifecycle details](docs/MOSAIC_CODING_CORE.md).
 
-Ask from a Codex CLI or OpenCode session in this repository: **“Use overnight-build to build this feature in [project].”** DeepSeek drafts the stages for your approval and implements them; the coordinator runs the approved checks; Codex automatically reviews only stages whose checks pass. You can explicitly request one Codex hint before a stage starts. Five DeepSeek attempts and two Codex review calls per stage, an eight-hour deadline, durable resume, extra-attempt recovery, and a morning report are included.
+You can optionally configure two or three workers with specialties, a default worker and a planner. Routes are explicit choices, not measured coding ability. Profiles that reach the same physical service must share capacity; adding profiles does not create inference slots. Two machines serving one distributed model API count as **one endpoint**. Guided setup defaults total, worker and shared-service concurrency to one; higher limits require an explicit choice.
 
-See [the Mac setup and command guide](docs/OVERNIGHT.md) and [dated verification results](docs/VERIFICATION.md). To prepare the disposable React/TypeScript pilot:
+## Try the source
 
-```sh
-npm run pilot -- /path/to/new-disposable-pilot
-```
-
-Once an approved project job starts, `npm run --silent project -- watch --job JOB_ID` shows its saved Codex → DeepSeek → Codex handoffs live. Add `--once` to replay and exit, or `--full` to inspect exact private event payloads.
-
-To see the same handoffs in a browser, run this in **Mac Terminal**:
+Use Node.js **24.22.0**, the runtime pinned by the current package builder, and npm. Git is needed for the checkout and coding worktrees. The portable package target is Apple Silicon macOS; a broader platform support matrix has not been qualified.
 
 ```sh
-npm run dashboard -- --job JOB_ID
+git clone https://github.com/TanujBuilds/Mosaic.git
+cd Mosaic
+node --version
+npm ci --ignore-scripts
+node src/demo.mjs "Describe a fake note-taking workflow; do not access files or external services."
+node --test test/coordinator.test.mjs
 ```
 
-Open the loopback URL printed by the command. The page updates from the local JSONL job log every two seconds and shows stage status, model handoffs, checks, recorded screenshots, and expandable private payloads. It is read-only and listens only on 127.0.0.1. Closing the browser does not stop a background job; stop the viewer with Ctrl-C in its Terminal. Use `--port 0` if the default port is already occupied.
+The demo needs no credentials or model endpoint. It prints **FAKE MODEL DEMO**, automatically approves a fake plan, exercises an answer/review/revision sequence, and writes an ignored JSONL event log under `.data/jobs/`. It makes no model calls, applies no task file edits and runs no protected coding checks. Its `accepted` result proves the fake coordinator flow only. The focused test uses in-process doubles; it is not a live-model test. Both can run without installing dependencies.
 
-## Run the first live terminal workflow
-
-Run these commands in **Mac Terminal** from this repository. The brief is sent to the signed-in Codex CLI for planning and review. The focused assignment and any revision go to the configured DeepSeek API; no model is given an app tool for editing files or running commands.
+After dependency preparation, inspect the current entry points without starting services or changing setup:
 
 ```sh
-codex login status
-export DEEPSEEK_BASE_URL='http://localhost:<forwarded-port>/v1'
-npm run live -- --brief examples/design-brief.md
+node src/beta/cli.mjs --help
+node src/harness/cli.mjs --help
 ```
 
-Replace `<forwarded-port>` with the port of an existing Mac-to-head-Spark forward. Set `DEEPSEEK_MODEL_ID` only if `/v1/models` advertises more than one model or you want to pin a specific advertised ID. `FRONTIER_MODEL_ID` optionally selects an available Codex CLI model; otherwise the signed-in CLI default is used. The application checks `/v1/models` after plan approval. It does not start or configure the Spark service or tunnel.
+The core requires Node 24 or newer even though the older root package metadata still declares a lower engine floor. A source checkout is not a personal installation. Running setup, registering an MCP bridge or starting a real task needs its own private configuration and explicit scope. Do not use an unrestricted `npm test` as a quick smoke: the repository also contains native, browser and installed-package gates requiring prepared inputs.
 
-If you need a forward, establish it in another **Mac Terminal** session using your own head host and API port, then check the model list before running the job:
+## Which entry point is which?
 
-```sh
-ssh -N -L <forwarded-port>:127.0.0.1:<api-port> <head-ssh-host>
-curl "$DEEPSEEK_BASE_URL/models"
-```
+| Path | Purpose | Boundary |
+| --- | --- | --- |
+| [Original demo](src/demo.mjs) and [terminal handoff](docs/MVP.md) | Fake JSONL coordinator; original text-only Codex → DeepSeek → Codex milestone | Text handoff and historical live observations are separate from current coding qualification. |
+| [Legacy overnight workflow](docs/OVERNIGHT.md) | Sequential staged coding in a Mac worktree with protected checks and review | DeepSeek plans and implements; Codex reviews passing stages, with optional explicitly requested pre-stage guidance and no Codex code rescue. |
+| [Opt-in coding core](docs/MOSAIC_CODING_CORE.md) | Four modes, versioned goals/tasks, native candidates, routing, recovery and observer | The `frontier-harness` bridge and installed core have their own state and lifecycle. Research remains parked. |
+| [Portable beta](docs/TERMINAL_BETA.md) | `mosaic` setup, diagnostics, terminal observer and separate `mosaic-beta` bridge | Local Darwin arm64 package candidate, not a published release. It does not migrate core goals or approvals. |
 
-The terminal displays the full plan and requires `y` before dispatch. It then displays every answer and review, final status, job ID, and path to the ignored JSONL log under `.data/jobs/`. Rejection or EOF pauses the job. Exit codes are `0` accepted, `2` paused/blocked/needs-review, and `1` failed. Provider failures retain prior events; rerunning starts a new job. Briefs and answers remain in the local log, so use a brief you are willing to send to Codex and keep that ignored directory private.
+For package development, read [installation and recovery](docs/PORTABLE_BETA_INSTALL.md), [native check artifact requirements](docs/NATIVE_CHECK_ARTIFACT.md), and [release evidence](docs/PORTABLE_BETA_RELEASE.md). These are local candidate instructions, with dated historical examples. No archive URL, Homebrew tap, signing identity or authenticated public installer is supplied here.
 
-The local endpoint is optional for an offline exercise:
+## What is established?
 
-```sh
-npm run live -- --brief examples/design-brief.md --fake
-```
+The [November 16 source checkpoint summary](CHANGELOG.md) records accepted source, owned fixture and disposable installed-package evidence: versioned coordination, explicit routing and shared capacity, review/recovery, setup diagnostics and guided multiple-worker configuration. Local archives `0.1.0-beta.184` and `.185` were verified against that checkpoint; those version labels are **not public releases**. This documentation update does not rerun the full package qualification.
 
-This exercises the same terminal approval and log path with fake model responses. `npm test` checks the coordinator, both adapters with mock responses, and the fake terminal flow.
+Selecting an app, listing models, or passing a small inference probe does not establish an actual host connection, coding quality or usable context capacity. Actual host discovery/calls (M003), useful ordinary owner projects (M079), three independently addressable qualified workers (M063), clean-Mac use and authenticated distribution remain separate gates. M063 remains unproven. The protected native network/Postgres proof (M001) remains blocked: the accepted boundary denies TCP/Unix access and the required Postgres demonstration is absent.
 
-## Run the original fake coordinator demo
+Review through an app is pull-based. An inactive or disconnected app leaves a durable review wait; Mosaic does not promise to wake its chat or silently switch to an API reviewer. Explicit API review can run automatically in collaborative or overnight mode when the approved policy permits it and the reviewer is available. Legacy detached overnight review has its own configured reviewer.
 
-Node.js 24 is installed on the development Mac. The initial coordinator uses only Node's built-in modules and fake model adapters, so it can run without credentials or the Sparks:
+## Context and authority
 
-```sh
-npm run demo -- "Fix a small bug and explain the change"
-```
+Approved task context goes to the configured worker endpoint. A worker on another computer or a hosted API receives that context off the Mac. Review in a coding app can use a cloud service even when the worker is local; an explicitly selected API reviewer has separate credentials and usage. Keep task logs, private settings, keys and raw evidence out of public issues and commits.
 
-This writes an event log under `.data/jobs/` and prints the frontier → local → frontier → local → frontier handoff. Every model response in this command is fake; it is a coordinator demonstration.
+The coordinator owns exact approvals, plan versions, paths, checks, budgets and execution ownership. Reading these docs, choosing a mode or receiving model text grants no execution permission, spending allowance or mode transition. Interrupted or uncertain work retains its holds until recovery establishes ownership and quiescence.
 
-See [docs/PRODUCT_CONTEXT.md](docs/PRODUCT_CONTEXT.md) for the product background and [docs/MVP.md](docs/MVP.md) for the first live milestone.
+## Explore and contribute
 
-## License
+Read the [architecture and code map](docs/ARCHITECTURE.md), [current product context](docs/PRODUCT_CONTEXT.md), and [milestone history](docs/MVP.md). For a bug, provide the commit/package version, platform, expected and actual behavior, and a small redacted reproduction through [GitHub issues](https://github.com/TanujBuilds/Mosaic/issues). Pull requests should identify scope and exact checks, and distinguish fixtures from real host/model evidence. Security reporting has an unresolved private-channel gap; read [SECURITY.md](SECURITY.md) before sharing vulnerability details.
 
-MIT. See [LICENSE](LICENSE).
-
-## Status (2026-10-22)
-
-The signed-in Codex CLI, overnight coordinator, protected Mac worktree, detached runner, skill, terminal timeline, and read-only browser timeline are implemented. DeepSeek plans and implements coding jobs, checks gate every automatic Codex review call, and no Codex rescue exists. An explicit command can request one Codex hint before a stage starts. On October 21 the real text handoff completed with two DeepSeek answers and two Codex reviews; its final status was `needs_review` after the one-revision limit. The real two-stage coding pilot then finished `accepted`: DeepSeek built and revised a responsive UI shell, protected layout checks passed, Codex reviewed the recorded diffs and screenshots, and both stages were committed in an isolated worktree. This narrow pilot does not cover interactions, persistence, or the full four-stage Night Shift release gate. See [verification details](docs/VERIFICATION.md).
-
-On October 22 a new two-stage live pilot exercised the DeepSeek-planned, review-only workflow. Both stages were accepted after passing the protected layout check, with exactly two Codex review calls and no Codex planning or guidance call. The generated mobile layout still has excessive space in the form; the full Night Shift feature gate remains open.
-
-## Approved coding backlog
-
-The [task-queue workflow](docs/TASK_QUEUE.md) runs fresh approved coding jobs sequentially with persistent priorities, aggregate budgets, stop and crash recovery. Invoke the repository skill at `.agents/skills/task-queue/SKILL.md`, or run `npm run queue -- help`.
+Mosaic is licensed under [MIT](LICENSE). Internal `frontier-*` package and protocol names are retained for compatibility.

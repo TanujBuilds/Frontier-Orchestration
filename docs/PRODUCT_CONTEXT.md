@@ -1,101 +1,50 @@
 # Product context and decisions
 
-## Personal coding-core release direction — 2026-11-04
+Current orientation: November 16, 2026. Mosaic is an experimental MIT source preview at [TanujBuilds/Mosaic](https://github.com/TanujBuilds/Mosaic). The accepted source checkpoint is `a23bae40d733fd711075ca798f83fbe9cc5ac633`; the [changelog](../CHANGELOG.md) separates its local verification from public binary qualification. Machine-specific handoff notes and raw task evidence stay private and outside Git.
 
-The owner explicitly chose personal Codex discovery across projects, all four coding modes, login startup, the existing skills/MCP packaging route, and bounded installed live checks. This delivery has its own coding-core acceptance and does not claim the original research/full-product gates passed. Research stays parked. Preserve the single portable coordinator for later clients. See [ordinary use and release boundary](MOSAIC_CODING_CORE.md). Implementation, personal activation and demonstrated installed readiness remain separately evidenced.
+## Purpose and current direction
 
-## Current opt-in collaboration direction — 2026-10-30
+Using several models on one job means carrying context between tools, reconciling plans and deciding which results to trust. Mosaic keeps one versioned goal, bounded assignments, checks and review evidence so the user can see what was done and what remains uncertain. Useful checked results with less manual coordination are the goal; model activity alone is not success.
 
-The owner approved the Codex + DeepSeek Collaboration Package: Codex app/CLI is
-the conversation and control surface; one durable MCP coordinator supplies
-scoped delegation, native candidate worktrees, four pinned modes and bounded
-learning. In opt-in collaborative mode, main Codex and native implementers may
-write substantial work in separately owned candidates while DeepSeek executes
-sequentially. Main Codex reviews and serializes integration. The read-only
-observer shows reported native progress and captured worker activity. The harness
-CLI provides a bounded observation-only `wait` process for task/operation state,
-so long waits run outside model turns. Events are hints; saved task state remains
-authoritative. An inactive Codex chat does not wake itself on an MCP event.
+The common path uses a coding app, one already-running worker API and the local coordinator. A worker can run locally, on another computer or through a hosted API. Optional specialty routing adds profiles with explicit shared-capacity limits. Two machines serving one distributed model are still one API endpoint. The application integrates with an existing service; model deployment, weights, tunnels and server tuning are outside its responsibility.
 
-The review-only role rules below describe the preserved legacy overnight
-workflow. They do not prohibit native implementation in an explicitly approved
-collaborative or Codex-only goal. DeepSeek-only forbids Codex execution/review
-fallback; an inactive collaborative conversation waits for its host.
+## Roles and modes
 
-Implementation and release verification are separate. The isolated package
-branch has reviewed local components and disposable installed pilots; final
-personal activation remains gated by host integration, remaining live pilots
-and the research report gate. See the execution package under
-`docs/superpowers/plans/2026-10-29-codex-deepseek/`.
+- **User:** chooses the outcome and workflow, authorizes the exact scope/checks/limits, and approves any required expansion or transition.
+- **Coordinator:** owns plan versions, approval hashes, task state, routes, capacity, execution ownership, evidence and integration guards. Model text is a proposal or result, never execution authority.
+- **API worker:** plans or implements bounded work where the selected mode allows it. The stable `deepseek` protocol alias does not require that every configured worker be DeepSeek.
+- **Coding app/native actor:** provides the control and review surface; may also implement in explicitly selected collaborative or Codex-only goals. App-based review can use cloud inference even with a local worker.
 
+| Workflow | Implementation and review boundary |
+| --- | --- |
+| Collaborative | Native Codex and API workers may implement in separately owned candidates. Main Codex normally reviews and integrates; an explicitly approved API review policy can supply review, with integration separately guarded. |
+| DeepSeek-only | API-worker planning and implementation; protected checks govern acceptance. No Codex implementation, review or fallback. |
+| Codex-only | Native Codex implementation with no DeepSeek calls. |
+| Overnight review | API-worker implementation with bounded review after passing checks. The preserved legacy workflow has the stricter review-only frontier roles below. |
 
-This is the public handoff for Frontier Orchestrator. It describes the current direction rather than every idea in the original October 2026 brief. The developer's local `PROJECT_MEMORY.md` may contain hardware-specific observations and is intentionally excluded from Git.
+An explicit current choice takes precedence over an active goal's pinned mode, then an explicitly owner-saved project preference. If none exists, ask once. Selection is not dispatch or spending authorization. A different mode requires a supported authorized transition or separately authorized goal and preserves prior deadlines, spending and ownership. See [coding-core behavior](MOSAIC_CODING_CORE.md).
 
-## Why this exists
+## What exists and what is not yet proven
 
-Using several models on one job currently means copying prompts and responses between tools, reconstructing context, and reconciling different plans. Frontier Orchestrator should let a user state the outcome once. The application carries one accepted plan, assigns focused work, records what happened, and shows what was checked and what remains uncertain.
+The original JSONL fake coordinator and text terminal handoff remain available. The sequential overnight runner has protected worktrees/checks, review and durable reports. The opt-in four-mode coding core adds versioned goals/tasks, native candidates, routing/capacity and recovery. Portable beta adds separate setup, diagnostics, host previews, a terminal observer and locally built Darwin arm64 packages. See the [architecture](ARCHITECTURE.md) for source locations and distinct state stores.
 
-Success means a useful result with less manual coordination. A large amount of local-model activity by itself is not success.
+The November 16 M027 acceptance covers source, owned fixtures and disposable installed-package proof. Listing models and fixed-message inference tests establish limited connectivity evidence, not coding quality, context capacity or an actual app connection. Actual host discovery/calls (M003), useful ordinary owner projects (M079), three real independently addressable workers (M063), clean-Mac use and distribution authenticity remain separate requirements. A first owner task alone does not close M079. M001 remains blocked by the native TCP/Unix boundary and absent Postgres proof. Public source availability does not waive these gates.
 
-## Current role split
+Host review is pulled by an active conversation. A disconnected app retains a durable wait; no automatic chat wakeup or silent API fallback is promised. Explicit API review can run automatically in collaborative or overnight mode under its approved policy and limits. Legacy detached overnight review has its own configured reviewer. Research remains parked in this coding-core scope; historical research packets grant no new authority.
 
-The optional Frontier Harness approved on2026-10-28 adds versioned collaboration
-modes and bounded learning; see [HARNESS.md](HARNESS.md). Its collaborative mode
-allows direct Codex execution and takeover. The role split below remains the
-contract for existing text and overnight workflows, rather than restricting
-explicitly selected harness modes. The harness remains under validation.
+## Development, privacy and release boundaries
 
-- **User:** states the goal and accepts the first plan for the initial workflow.
-- **Local model:** turns the brief into an ordered plan and does substantial, well-scoped implementation work. The first integration calls an already-running DeepSeek service through its OpenAI-compatible API.
-- **Frontier model:** independent reviewer by default. It judges finished evidence against the approved plan and may request focused corrections. An explicit, optional one-call pre-stage guidance path is available when needed; Codex does not write routine assignments or edit code. The first personal integration is a signed-in Codex CLI on the user's Mac, which is a scarce usage window.
-- **Coordinator:** owns the task record, accepted plan/version, assignments, results, attempt limits, permissions, and event log. Model text is a proposal or result; it does not authorize a file write or shell command.
+The repository's own source development can use native Codex under an explicitly selected scope; those development tools are separate from the application's worker adapters. Preserve the stricter legacy overnight roles when working through that mode. A document, skill, model response or setup choice grants no permission to run commands, edit files, contact providers or expose task content to a cloud service.
 
-The current DeepSeek deployment uses two DGX Spark machines to run **one distributed model service**. The head serves one API and the second machine participates in inference. They are not two independently addressable agents in the initial product. Other hardware and local model services should be connectable later through the adapter boundary.
+Approved context goes to the selected worker; remote/hosted workers receive it off the Mac. App review may use its cloud provider, and API review has separate authentication and usage. Keep endpoints, credentials, personal paths, private manifests, logs and raw databases outside tracked public files. Keep unknown usage and actual model identity unknown rather than inferring them from an actor name.
 
-```mermaid
-flowchart LR
-  User --> Coordinator
-  Coordinator -->|brief and plan request| Local[Local model adapter]
-  Local -->|ordered plan| Coordinator
-  Coordinator -->|bounded stage and failing checks| Local
-  Local --> Head[DeepSeek API on head Spark]
-  Head <-->|distributed inference| Worker[Worker Spark]
-  Coordinator -->|diff, checks, screenshots| Frontier[Frontier review adapter]
-  Frontier -->|review decision| Coordinator
-```
+The source is public, while qualified binary publication remains pending. Local archive labels and checksums are not public releases or publisher signatures. Do not rename working `frontier-*` identifiers for presentation, silently rewrite runtime/approval pins, or treat an uncertain owner as free capacity.
 
-The split exists because frontier usage is the scarce resource. A local model may be slower, but it can plan and iterate indefinitely; every Codex call is a real cost. Automatic Codex usage is independent review of work that already passes its checks, at most twice per stage. The owner may explicitly request one guidance call before an unfinished stage starts.
+## Dated decision history
 
-## Build sequence
-
-1. **Existing foundation:** a Node.js coordinator and append-only local event log can show the full handoff with fake model responses. This is a workflow demonstration, not live integration.
-2. **First live proof:** from the Mac terminal, give Codex a substantial project-design request. Codex proposes one focused assignment; after the user accepts the plan, DeepSeek answers; Codex reviews the answer and may request one revision. The command displays the answer, review, and final status. See [MVP.md](MVP.md).
-3. **Overnight coding proof:** approve a DeepSeek-drafted (or template) staged plan, then execute sequential DeepSeek coding attempts in an isolated Mac Git worktree. Run protected checks; Codex reviews only stages whose checks pass, and accepted stages are checkpointed. Five local attempts and two review rounds bound each stage; a stopped stage resumes with more DeepSeek attempts rather than a Codex repair. See [OVERNIGHT.md](OVERNIGHT.md).
-4. **Browser view:** a read-only local timeline now shows saved job history, handoffs, checks, and screenshots. Browser controls and broader interface work follow the live model loop.
-
-The current project does not need model installation, Spark runtime management, parallel agents, automatic model selection, team accounts, billing, or long-term memory across unrelated projects.
-
-## Development and release boundaries
-
-Codex is the main development agent for this repository. DeepSeek through OpenCode may provide occasional second reviews while the local service is reachable. That development practice is separate from the application's model adapters.
-
-The Spark deployment and OpenCode tuning belong to a separate project. This repository integrates with an existing API; it should not change model weights, runtime configuration, or server startup as part of app work. Keep credentials and machine-specific network details outside tracked files. As of 2026-10-20, the repository is private with an intent to publish later, so tracked history should already be safe to share.
-
-## Decision history
-
-The original October 2026 “Local AI Orchestrator” brief established the coordination problem and explored several possible model roles, including local-first planning. Those were proposals, not final requirements. Subsequent discussion chose frontier-led planning and review, then the terminal-based project-design handoff as the first live milestone. On 2026-10-21 the owner reversed the planning role: a real dashboard job consumed nearly the entire Codex usage window while Codex planned, wrote per-stage assignments, reviewed every attempt and rescued exhausted stages. DeepSeek now plans and implements; automatic frontier use is restricted to independent review of passing work. On 2026-10-22 the owner additionally allowed explicit, bounded pre-stage guidance. When sources differ, use the most recent explicit decision recorded here and in [MVP.md](MVP.md).
-
-## Overnight workflow decision (2026-10-21)
-
-The owner approved the scoped coding milestone with a review-only frontier: 1–10 ordered stages drafted by DeepSeek (or a deterministic template), five DeepSeek attempts per stage, at most two Codex review rounds per stage, no Codex planning by default, and no Codex code edits at any point. Eight hours by default and a thirty-minute provider reconnect window remain. The Mac owns the worktree and check execution. Approvals bind exact plan versions and permissions. Dependencies are prepared beforehand; expansion pauses for a newly approved plan. A disposable React/TypeScript task board is the first pilot. Fake/stub checks can proceed while the Sparks are unavailable; the release gate still requires real DeepSeek multi-stage execution with real Codex reviews.
-
-## Opt-in collaboration package (2026-10-31)
-
-The approved collaboration harness adds Codex-led native implementation,
-DeepSeek-only, Codex-only and overnight-review presets. Its coordinator owns
-approvals, scope and spending; Codex remains the conversation/control interface
-and the observer is read-only. This opt-in role split permits reviewed native
-implementation and does not change the legacy overnight review-only workflow
-above. The [engineering status](superpowers/plans/2026-10-29-codex-deepseek/ENGINEERING_STATUS.md)
-distinguishes local implementation, historical live evidence and unpassed final
-release gates. No personal promotion is implied by a locally passing candidate.
+- **October 2026:** the original “Local AI Orchestrator” brief explored model roles. The first milestone became a text-only Codex → DeepSeek → Codex handoff; see [MVP history](MVP.md).
+- **October 21, 2026:** after frontier-heavy planning and rescue exhausted a usage window, the owner selected review-only frontier operation for legacy overnight coding. DeepSeek drafts 1–10 ordered stages and implements them; defaults are five attempts and at most two Codex reviews per stage, eight hours, and a thirty-minute provider reconnect window. No routine Codex assignments, default Codex planning, code edits or repair fallback are allowed in that workflow. Protected checks precede automatic review; scope expansion needs a newly approved plan.
+- **October 22, 2026:** the owner additionally allowed one optional, explicitly requested Codex guidance call before a legacy stage starts. It does not authorize Codex implementation or rescue. Historical narrow pilots do not close the full overnight feature gate; see [verification](VERIFICATION.md) and [overnight contract](OVERNIGHT.md).
+- **November 4, 2026:** a separately scoped personal coding core established four explicit modes. Collaborative and Codex-only modes allow native implementation; this exception does not change the legacy overnight restrictions. That personal installation history is not portable-host qualification.
+- **November 12–16, 2026:** local portable package, setup, diagnostic and guided multiple-worker work was accepted in source/fixture/installed scopes. Public host/model and clean-machine gates remain distinct.
+- **November 16, 2026:** the owner prioritized public GitHub source and convenient download preparation, superseding earlier GitHub-last notes. The repository became a public MIT source preview; qualified binary publication remains pending.
