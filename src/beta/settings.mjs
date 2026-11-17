@@ -1,6 +1,7 @@
 import path from 'node:path';
 import {rm} from 'node:fs/promises';
-import {openSync,closeSync,fstatSync,lstatSync,readFileSync,realpathSync,constants} from 'node:fs';
+import {openSync,closeSync,fstatSync,lstatSync,readSync,realpathSync,constants} from 'node:fs';
+import {constants as bufferConstants} from 'node:buffer';
 import {canonical,identifier} from '../harness/contracts.mjs';
 import {normalizeProfile,normalizeLegacyWorkerProfile,normalizeProviderPolicy,profileIdentity} from '../harness/providers/contracts.mjs';
 import {normalizeReviewPolicy} from '../harness/review/contracts.mjs';
@@ -47,11 +48,17 @@ async function ownedJson(file,{max=131072}={}){const info=await entry(file);if(i
 function privateJsonSync(paths,file,{max=131072}={}){
  let fd;
  try{
+  if(!Number.isSafeInteger(max)||max<0||max>=bufferConstants.MAX_LENGTH||!Number.isInteger(constants.O_NOFOLLOW)||!constants.O_NOFOLLOW||!Number.isInteger(constants.O_NONBLOCK)||!constants.O_NONBLOCK)throw Error();
   const home=realpathSync(paths.home),expected=path.join(home,path.relative(paths.home,file));
   const directories=()=>{for(const directory of [paths.root,paths.configDir]){const relative=path.relative(paths.home,directory),info=lstatSync(directory);if(relative.startsWith('..'+path.sep)||relative==='..'||path.isAbsolute(relative)||!info.isDirectory()||info.isSymbolicLink()||info.uid!==process.getuid()||info.mode&0o077||realpathSync(directory)!==path.join(home,relative))throw Error();}};
-  directories();fd=openSync(file,constants.O_RDONLY|constants.O_NOFOLLOW);
-  const verify=()=>{const info=fstatSync(fd),named=lstatSync(file);if(!info.isFile()||info.size>max||info.uid!==process.getuid()||info.mode&0o077||!named.isFile()||named.isSymbolicLink()||named.dev!==info.dev||named.ino!==info.ino||named.uid!==process.getuid()||named.mode&0o077||realpathSync(file)!==expected)throw Error();};
-  verify();const bytes=readFileSync(fd);verify();directories();if(bytes.length>max)throw Error();return JSON.parse(bytes.toString('utf8'));
+  directories();fd=openSync(file,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
+  const verify=()=>{const info=fstatSync(fd,{bigint:true}),named=lstatSync(file,{bigint:true});if(!info.isFile()||info.size>BigInt(max)||info.uid!==BigInt(process.getuid())||info.mode&0o077n||!named.isFile()||named.isSymbolicLink()||named.dev!==info.dev||named.ino!==info.ino||named.uid!==BigInt(process.getuid())||named.mode&0o077n||realpathSync(file)!==expected)throw Error();return info;};
+  const before=verify(),bytes=Buffer.alloc(Number(before.size)+1);let length=0;
+  // At most the admitted size plus one sentinel byte, even if the fd grows.
+  while(length<bytes.length){const count=readSync(fd,bytes,length,bytes.length-length,length);if(!count)break;length+=count;}
+  const after=verify();directories();
+  if(length>max||BigInt(length)!==before.size||['dev','ino','mode','uid','gid','nlink','size','mtimeNs','ctimeNs'].some(key=>before[key]!==after[key]))throw Error();
+  return JSON.parse(bytes.subarray(0,length).toString('utf8'));
  }catch(error){if(error.code==='ENOENT'&&fd===undefined)return null;throw Error('Unsafe or invalid private settings or credential file');}
  finally{if(fd!==undefined)closeSync(fd);}
 }

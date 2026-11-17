@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,readFile,rm,cp,mkdir} from 'node:fs/promises';
+import {mkdtemp,readFile,rm,cp,mkdir,writeFile,lstat,symlink,chmod} from 'node:fs/promises';
+import {spawnSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 import os from 'node:os';
 import {locations,privateDirectories,saveJson,hash,withLock} from '../src/beta/files.mjs';
@@ -146,4 +148,36 @@ test('migration keeps the maintenance exclusion and startup lease intact',async 
  await withLock(paths,async()=>{await assert.rejects(settings.applySettingsMigration(paths,preview,{lifecycle}),/maintenance command/i);});await unchanged(paths,before);
  const c=new Coordinator({root:paths.state});try{const lease=c.acquireWorker('fixture-startup');await assert.rejects(settings.applySettingsMigration(paths,preview,{lifecycle}),/lease|startup|coordinator/i);assert.deepEqual(c.store.get('lease','coordinator'),lease);c.releaseWorker('fixture-startup');}finally{c.close();}
  await unchanged(paths,before);assert.equal(await settings.applySettingsMigration(paths,preview,{lifecycle}),true);
+});
+
+// The parent watchdog remains effective even when a production sync open blocks
+// its child event loop. No process ever opens these FIFOs for writing.
+for(const api of ['readiness','apply','resume'])for(const name of api==='readiness'?['migration-intent.json','migration-legacy.json','migration-receipt.json']:['migration-legacy.json','migration-receipt.json'])test(`${api} rejects writerless private FIFO at ${name} without hanging`,async t=>{
+ const paths=await fixture(t);
+ if(api!=='apply')await assert.rejects(settings.applySettingsMigration(paths,await settings.previewSettingsMigration(paths),{lifecycle,afterStep:async at=>{if(at==='complete')throw Error('fixture interruption');}}),/fixture interruption/);
+ const before=await snapshot(paths),target=path.join(paths.configDir,name);await rm(target,{force:true});
+ const made=spawnSync('/usr/bin/mkfifo',['-m','600',target],{encoding:'utf8',timeout:2000});assert.equal(made.status,0,made.stderr);
+ const initial=await lstat(target),child=spawnSync(process.execPath,[fileURLToPath(new URL('./fixtures/mosaic-migration-conflicts/read-record.mjs',import.meta.url)),paths.home,api],{encoding:'utf8',timeout:2000,killSignal:'SIGKILL',maxBuffer:8192,env:{PATH:'/usr/bin:/bin',HOME:paths.home}});
+ let reaped=false;try{process.kill(child.pid,0);}catch(error){if(error.code==='ESRCH')reaped=true;else throw error;}
+ const after=await lstat(target),record={api,name,pid:child.pid,status:child.status,signal:child.signal,watchdogError:child.error?.code??null,reaped,stdout:child.stdout,stderr:child.stderr,fifoBefore:{type:initial.isFIFO()?'FIFO':'other',mode:initial.mode&0o777,uid:initial.uid,dev:initial.dev,ino:initial.ino},fifoAfter:{type:after.isFIFO()?'FIFO':'other',dev:after.dev,ino:after.ino}};
+ await saveJson(path.join(paths.home,'fifo-child-evidence.json'),record);
+ await rm(target,{force:true});if(before[name]!==null)await writeFile(target,before[name],{mode:0o600});
+ assert.ok(initial.isFIFO()&&(initial.mode&0o777)===0o600&&initial.uid===process.getuid());assert.ok(reaped,'owned child must be killed/reaped or exit normally');
+ assert.match(child.stdout,new RegExp('entered:'+api));assert.equal(child.error?.code,undefined,'production migration reader hung until the finite watchdog killed its owned child');
+ assert.equal(child.status,0,child.stderr);const outcome=JSON.parse(child.stdout.trim().split('\n').at(-1));assert.equal(outcome.rejected,true);assert.match(outcome.message,/unsafe|invalid/i);
+ if(api==='readiness')assert.equal(outcome.descriptorsAfter,outcome.descriptorsBefore,'rejected descriptor must close');
+ assert.ok(after.isFIFO()&&after.dev===initial.dev&&after.ino===initial.ino,'rejection must preserve the FIFO identity');await unchanged(paths,before);
+});
+
+for(const name of ['migration-intent.json','migration-legacy.json','migration-receipt.json'])for(const kind of ['directory','symlink','oversize','malformed','public-mode','exact-cap'])test(`readiness ${kind==='exact-cap'?'accepts':'rejects'} ${kind} at ${name}`,async t=>{
+ const paths=await fixture(t);await assert.rejects(settings.applySettingsMigration(paths,await settings.previewSettingsMigration(paths),{lifecycle,afterStep:async at=>{if(at==='complete')throw Error('fixture interruption');}}),/fixture interruption/);
+ const target=path.join(paths.configDir,name),original=await readFile(target);
+ if(kind==='directory'){await rm(target);await mkdir(target,{mode:0o700});}
+ if(kind==='symlink'){const backing=path.join(paths.home,'owned-record.json');await writeFile(backing,original,{mode:0o600});await rm(target);await symlink(backing,target);}
+ if(kind==='oversize'||kind==='exact-cap')await writeFile(target,Buffer.concat([original,Buffer.alloc(131072-original.length+(kind==='oversize'?1:0),0x20)]));
+ if(kind==='malformed')await writeFile(target,'{broken-json');
+ if(kind==='public-mode')await chmod(target,0o644);
+ const info=await lstat(target);await saveJson(path.join(paths.home,'record-type-evidence.json'),{kind,name,size:info.size,mode:info.mode&0o777,uid:info.uid,regular:info.isFile(),directory:info.isDirectory(),symlink:info.isSymbolicLink()});
+ if(kind==='exact-cap')assert.equal(await settings.assertMigrationStartupReady(paths,await settings.readSettings(paths)),true);
+ else await assert.rejects(settings.assertMigrationStartupReady(paths,await settings.readSettings(paths)),/unsafe|invalid/i);
 });

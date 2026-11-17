@@ -33,3 +33,11 @@ These guards detect observed record changes across migration boundaries. They do
 not make several files one filesystem transaction or establish protection against
 every hostile same-user write between a check and an atomic file operation. Fixture
 lifecycle evidence does not establish actual host, service or provider readiness.
+
+Migration records use nonblocking, no-follow descriptor admission and accept only
+owned private regular files. Each synchronous read allocates at most the admitted
+size plus one sentinel byte, bounded by 128 KiB plus one byte, and reads only that
+buffer. Observed growth, truncation or identity/metadata changes cause rejection.
+The descriptor closes on success or failure. Writerless FIFO cases run in owned
+children with a finite external watchdog, so a regression cannot stall the test
+runner; regular-file limits and unsafe type/permission cases remain covered.
