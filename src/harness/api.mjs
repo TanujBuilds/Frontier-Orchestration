@@ -1,11 +1,11 @@
 import http from 'node:http';
+import {readRequestBody as body} from './http-body.mjs';
 import {createHash,randomBytes,timingSafeEqual} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import {OBSERVER_TOOLS} from './observer.mjs';
 const secret=()=>randomBytes(32).toString('hex');
 const equal=(a,b)=>timingSafeEqual(createHash('sha256').update(String(a)).digest(),createHash('sha256').update(String(b)).digest());
 const problem=(status,message)=>Object.assign(Error(message),{status});
-async function body(request,max=1048576){let size=0,raw='',oversized=false;for await(const chunk of request){size+=chunk.length;if(size>max)oversized=true;else raw+=chunk;}if(oversized)throw problem(413,'Request body exceeds limit');return raw;}
 
 export async function startApi({dispatcher,token,viewerToken, trustedOrigins=[],port=0,host='127.0.0.1',headless=false}={}){
  if(host!=='127.0.0.1'||typeof token!=='string'||token.length<32)throw Error('Authenticated loopback configuration required');

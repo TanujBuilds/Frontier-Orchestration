@@ -225,14 +225,14 @@ async function inspectCheckout(project) {
   const head = async () => (await git(['rev-parse', '--verify', 'HEAD^{commit}'])).trim();
   let baseCommit;
   try { baseCommit = await head(); }
-  catch { return failure('missing_commit', 'The selected checkout needs a resolvable committed HEAD.'); }
+  catch { return failure('missing_commit', 'The selected checkout has no resolvable committed HEAD. Review and save the intended work through your chosen commit workflow, or select a clean checkout with a committed HEAD, then prepare again.'); }
   if (!sha.test(baseCommit)) return failure('unsupported_commit', 'The selected checkout must use 40-character commit IDs.');
   if (project.baseCommit !== undefined && project.baseCommit !== baseCommit) {
-    return failure('base_mismatch', 'The supplied base must match the selected checkout HEAD.', 'project.baseCommit');
+    return failure('base_mismatch', 'The supplied base does not match the selected checkout HEAD. Review the current committed base and prepare again with that exact HEAD (or omit baseCommit); any new draft requires its own approval.', 'project.baseCommit');
   }
 
   try {
-    const dirty = () => failure('dirty_repository', 'The selected checkout must be clean, including staged and untracked changes.');
+    const dirty = () => failure('dirty_repository', 'The selected checkout has staged, unstaged or untracked changes. Review and save the intended changes through your chosen workflow, or select a clean committed checkout, then prepare again.');
     const filter = () => failure('unsupported_git_filter', 'Choose a checkout without configured Git clean or process filters or tracked paths using filter attributes.');
     // The worktree probe ignores submodules to avoid entering other checkouts.
     // Compare the cached index separately so this cannot hide staged gitlinks.
