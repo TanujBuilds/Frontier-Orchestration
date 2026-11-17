@@ -19,7 +19,7 @@ export async function endpoint(t,id){
   if(state.postStatus!==200)return res.writeHead(state.postStatus).end('fixture rejection');
   const input=JSON.parse(body.messages.at(-1).content);
   const content=input.goal?JSON.stringify(state.plan??{tasks:[{key:'answer',kind:'consult',objective:'Explain',acceptance:['Answer']}]}):state.reply??'answer-'+id;
-  res.end(JSON.stringify({model:'reported-'+id,choices:[{message:{content},finish_reason:'stop'}],usage:{total_tokens:5}}));
+  res.end(JSON.stringify({model:'reported-'+id,choices:[{message:{role:'assistant',content},finish_reason:'stop'}],usage:{total_tokens:5}}));
  });
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
  t.after(async()=>{state.hold?.resolve();state.holdPost?.resolve();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));});
