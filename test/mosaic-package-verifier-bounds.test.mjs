@@ -140,3 +140,13 @@ test('oversized declared dependency metadata rejects before unrelated payload I/
  const {root}=await fixture(t),files=[{path:'missing',bytes:0,sha256:sha('')},{path:'runtime/package-lock.json',bytes:dependencyLimit+1,sha256:sha('')}];
  await save(root,files,{dependenciesInstalled:true});await assert.rejects(verifyPackage(root),/metadata.*limit/i);
 });
+test('malformed JSON diagnostics omit manifest and dependency contents',async t=>{
+ const {root}=await fixture(t);await writeFile(path.join(root,'package-manifest.json'),'SECRET_MANIFEST_CONTENT');
+ await assert.rejects(verifyPackage(root),error=>error instanceof SyntaxError&&!/SECRET/.test(error.message)&&error.cause===undefined);
+ const lock='runtime/package-lock.json',sdk='runtime/node_modules/@modelcontextprotocol/sdk/package.json';
+ for(const malformed of [lock,sdk]){
+  const items=[[lock,JSON.stringify({packages:{'node_modules/@modelcontextprotocol/sdk':{version:'1.32.2'}}})],[sdk,JSON.stringify({version:'1.32.2'})]].map(([name,body])=>[name,name===malformed?'SECRET_DEPENDENCY_CONTENT':body]);
+  const specimen=await fixture(t,items);await save(specimen.root,specimen.files,{dependenciesInstalled:true});
+  await assert.rejects(verifyPackage(specimen.root),error=>error instanceof SyntaxError&&!/SECRET/.test(error.message)&&error.cause===undefined);
+ }
+});

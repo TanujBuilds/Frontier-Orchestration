@@ -67,6 +67,9 @@ export async function packageHarness({sourceRoot,destination,dependencies=false,
 // docs/PACKAGE_VERIFICATION_LIMITS.md. These are byte/work ceilings, not options.
 const verificationLimits={manifest:8*1024**2,dependency:2*1024**2,files:32768,directories:32768,pathBytes:4096,depth:64,fileBytes:2*1024**3,totalBytes:8*1024**3,chunk:65536};
 const dependencyPaths=['runtime/package-lock.json','runtime/node_modules/@modelcontextprotocol/sdk/package.json'];
+function parseVerificationJson(bytes,label){
+ try{return JSON.parse(bytes.toString('utf8'));}catch{throw new SyntaxError('Invalid package '+label+' JSON');}
+}
 const sameVerificationEntry=(a,b)=>['dev','ino','mode','size','mtimeNs','ctimeNs','nlink'].every(key=>a[key]===b[key]);
 async function verificationDirectory(target){
  const info=await lstat(target,{bigint:true});
@@ -106,7 +109,7 @@ async function readVerificationFile(target,{expected,metadataLimit,label},buffer
 export async function verifyPackage(destination){
  destination=path.resolve(destination);
  const rootInfo=await verificationDirectory(destination),buffer=Buffer.alloc(verificationLimits.chunk);
- const manifest=JSON.parse((await readVerificationFile(path.join(destination,'package-manifest.json'),{metadataLimit:verificationLimits.manifest,label:'package manifest'},buffer)).toString('utf8'));
+ const manifest=parseVerificationJson(await readVerificationFile(path.join(destination,'package-manifest.json'),{metadataLimit:verificationLimits.manifest,label:'package manifest'},buffer),'manifest');
  if(!manifest||manifest.schema!==1||!Array.isArray(manifest.files)||!manifest.files.length||typeof manifest.dependenciesInstalled!=='boolean')throw Error('Invalid package manifest');
  if(manifest.files.length>verificationLimits.files)throw Error('Package inventory entry limit exceeded');
  const seen=new Set(),directories=new Set(['']);let total=0;
@@ -154,7 +157,7 @@ export async function verifyPackage(destination){
  if(!sameVerificationEntry(rootInfo,await verificationDirectory(destination)))throw Error('Package root changed during verification');
  if(manifest.dependenciesInstalled){
   if(dependencyPaths.some(file=>!dependencyMetadata.has(file))){const error=Error('ENOENT: Missing inventoried runtime dependency metadata');error.code='ENOENT';throw error;}
-  const [lock,sdk]=dependencyPaths.map(file=>JSON.parse(dependencyMetadata.get(file).toString('utf8')));
+  const [lock,sdk]=dependencyPaths.map(file=>parseVerificationJson(dependencyMetadata.get(file),'dependency metadata '+file));
   if(sdk.version!==lock.packages['node_modules/@modelcontextprotocol/sdk'].version)throw Error('Pinned runtime dependency mismatch');
  }
  return true;
