@@ -50,7 +50,8 @@ function observationFor(availability,profile,profileHash){
  if(matching.length!==1)return null;
  const row=matching[0];
  if(row.revision!==profile.revision||row.profileHash!==profileHash||
-    !['available','busy','offline','unknown'].includes(row.status)||
+    !['available','busy','offline','unknown','eligible'].includes(row.status)||
+    row.status==='eligible'&&profile.capabilities.modelDiscovery!=='manual'||
     typeof row.observedAt!=='string'||row.observedAt.length>40||
     !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(row.observedAt)||
     !Number.isFinite(Date.parse(row.observedAt))||
@@ -122,10 +123,10 @@ export function selectRoute({task,goal,availability}={}){
  const observation=observationFor(availability,profile,binding.profileHash);
  if(!observation||observation.status==='unknown')return result('waiting','availability_unknown',
   'No usable availability observation proves the chosen provider available.',binding);
- if(observation.status!=='available')return result('waiting','provider_'+observation.status,
+ if(!['available','eligible'].includes(observation.status))return result('waiting','provider_'+observation.status,
   'The chosen provider was '+observation.status+' at '+observation.observedAt+' ('+observation.provenance+'); wait without fallback.',binding);
  if(!Number.isSafeInteger(remaining)||remaining<0)return result('waiting','budget_unknown',
   'The remaining original model-call budget is unknown.',binding);
  return result('selected','selected_by_'+selectedBy,
-  'Eligible under the supplied availability observation at '+observation.observedAt+' ('+observation.provenance+').',binding);
+  (observation.status==='eligible'?'Eligible under the configured manual-model eligibility check at ':'Eligible under the supplied availability observation at ')+observation.observedAt+' ('+observation.provenance+').',binding);
 }

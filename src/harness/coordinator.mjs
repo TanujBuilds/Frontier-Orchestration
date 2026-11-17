@@ -22,6 +22,7 @@ import {assertRoutingApproval,assertRoutePin,isRoutedTask,routeDecision,recordRo
 
 import {capacitySnapshot,canClaim,configureServiceCapacity,assertCapacityConfiguration,assertInferenceCapacity,capacityWaitHeld} from './scheduling/capacity.mjs';
 import {orderedCandidates} from './scheduling/scheduler.mjs';
+import {reconnectRetryAt} from '../adapters/retry-after.mjs';
 
 const TERMINAL=new Set(['accepted','failed','partial','cancelled']);
 const SLOT=new Set(['running','uncertain','taking_over']);
@@ -474,7 +475,7 @@ export class Coordinator {
   if(row.status!=='reserved')throw Error('Request is no longer reserved');
   data.result=result;data.savedAt=this.now();this.store.db.prepare('UPDATE requests SET status=?,data=? WHERE id=?').run('completed',JSON.stringify(data),id);this.emit('request.saved',t.goalId,t.id,{id});return result;
  });}
- failModelRequest(id,owner,{reason,outcome,reconnect}){return this.store.tx(()=>{
+ failModelRequest(id,owner,{reason,outcome,reconnect,retryHint}){return this.store.tx(()=>{
   const {row,data,t}=this.ownedRequest(id,owner),g=this.store.get('goal',t.goalId),at=this.now();
   if(row.kind!=='model'||row.status!=='reserved')throw Error('Model request is no longer reserved');
   this.store.db.prepare('UPDATE requests SET status=?,data=? WHERE id=?').run('failed',JSON.stringify({...data,error:reason,requestOutcome:outcome}),id);
@@ -492,25 +493,30 @@ export class Coordinator {
   if(reconnect&&isOvernightV2(g.manifest)&&t.spec.kind==='coding'&&t.checkpoint.phase==='model'){
    t.providerReconnectStartedAt??=at;
    const until=Math.min(t.deadline,g.deadline,t.providerReconnectStartedAt+g.manifest.overnightPolicy.reconnectMs);
-   t.providerWait={startedAt:t.providerReconnectStartedAt,until,retryAt:Math.min(until,at+RECONNECT_DELAY_MS),requestId:id};
+   t.providerWait={startedAt:t.providerReconnectStartedAt,until,retryAt:reconnectRetryAt(at,until,retryHint),requestId:id};
    t.checkpoint={...t.checkpoint,exchange:t.checkpoint.exchange+1};
    t.reason='Known provider unavailability; original request remains spent';
    t.firstBlocker??={reason:t.reason,at};
    if(controlled)return this.settleTask(t,controlled,controlled==='partial'?'Original deadline reached; saved evidence retained':t.reason,controlled==='partial'?'task.expired':'task.'+controlled,{requestId:id});
    if(at>=until)return this.settleTask(t,'blocked','Original provider reconnect window exhausted','task.blocked',{requestId:id});
+   if(t.providerWait.retryAt>=until)return this.settleTask(t,'blocked','No eligible provider retry remains in original reconnect window','task.blocked',{requestId:id});
    t.status='suspended';t.owner=null;this.store.put('task',t);
    this.emit('task.provider_wait',t.goalId,t.id,{until,requestId:id});return this.getTask(t.id);
   }
   return this.settleTask(t,controlled??'blocked',controlled==='partial'?'Original deadline reached; saved evidence retained':reason,controlled==='partial'?'task.expired':undefined,{requestId:id});
  });}
- finishProviderProbe(taskId,owner,available){return this.store.tx(()=>{
+ finishProviderProbe(taskId,owner,available,{retryHint}={}){return this.store.tx(()=>{
   const t=this.owned(taskId,owner),g=this.store.get('goal',t.goalId),wait=t.providerWait,at=this.now();
   if(t.status!=='running'||!wait)throw Error('Worker provider probe ownership conflict');
   const controlled=controlledStatus(t,g,at),data={requestId:wait.requestId??null};
   if(controlled)return this.settleTask(t,controlled,controlled==='partial'?'Original deadline reached; saved evidence retained':t.reason,controlled==='partial'?'task.expired':'task.'+controlled,data);
   if(at>=wait.until)return this.settleTask(t,'blocked','Original provider reconnect window exhausted','task.blocked',data);
   if(available)wait.readyOwner=owner;
-  else{delete wait.readyOwner;wait.retryAt=Math.min(wait.until,at+RECONNECT_DELAY_MS);t.status='suspended';t.owner=null;}
+  else{
+   delete wait.readyOwner;wait.retryAt=reconnectRetryAt(at,wait.until,retryHint);
+   if(wait.retryAt>=wait.until)return this.settleTask(t,'blocked','No eligible provider retry remains in original reconnect window','task.blocked',data);
+   t.status='suspended';t.owner=null;
+  }
   this.store.put('task',t);return this.getTask(t.id);
  });}
  failTaskStep(taskId,owner,reason){return this.store.tx(()=>{

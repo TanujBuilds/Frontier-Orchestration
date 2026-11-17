@@ -1,5 +1,6 @@
 import http from 'node:http';
 import https from 'node:https';
+import { providedRetryHint, responseRetryHint } from './retry-after.mjs';
 
 function endpoint(baseUrl, openAICompatible) {
   const message = openAICompatible
@@ -31,6 +32,8 @@ function requestError(message,url,status,metadata={}){
   if(diagnosticCategories.has(metadata.category))error.diagnosticCategory=metadata.category;
   if(providerErrorCodes.has(metadata.providerErrorCode))error.providerErrorCode=metadata.providerErrorCode;
   if(['unknown','not_dispatched'].includes(metadata.outcome))error.requestOutcome=metadata.outcome;
+  const retryHint=providedRetryHint(metadata);
+  if(retryHint)error.retryHint=retryHint;
   return error;
 }
 
@@ -127,9 +130,10 @@ function requestWithoutHeaderDeadline(url, options, signal) {
       observedStatus=response.statusCode;
       response.on('error', rejectResponse);
       if (response.statusCode < 200 || response.statusCode >= 300) {
+        const retryHint=responseRetryHint(response);
         observedErrorResponse=()=>response.destroy();
         response.removeListener('error',rejectResponse);
-        readProviderErrorCode(response,signal).then(providerErrorCode=>resolve({ok:false,status:response.statusCode,providerErrorCode}));
+        readProviderErrorCode(response,signal).then(providerErrorCode=>resolve({ok:false,status:response.statusCode,providerErrorCode,retryHint}));
         return;
       }
       const chunks = [];
@@ -227,8 +231,9 @@ export class DeepSeekHttpAdapter {
       throw requestError(`${this.label} connection failed: ${detail}`,url,status,{category:connectionCategory(error),outcome});
     }
     if (!response.ok) {
+      const retryHint=providedRetryHint(response)??responseRetryHint(response);
       const providerErrorCode=await fetchReportedCode(response,combined);
-      throw requestError(`${this.label} ${this.redact(url.pathname)} returned HTTP ${response.status}`,url,response.status,{providerErrorCode});
+      throw requestError(`${this.label} ${this.redact(url.pathname)} returned HTTP ${response.status}`,url,response.status,{providerErrorCode,retryHint});
     }
     try {
       return await response.json();

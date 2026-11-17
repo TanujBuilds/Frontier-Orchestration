@@ -2,6 +2,7 @@ import http from 'node:http';
 import https from 'node:https';
 import { StringDecoder } from 'node:string_decoder';
 import { validModelId, connectionCategory, readProviderErrorCode } from '../adapters/deepseek-http.mjs';
+import { responseRetryHint } from '../adapters/retry-after.mjs';
 
 // SSE framing repeats metadata per delta; bound the wire separately from model output.
 const MAX_WIRE=8*1024*1024,MAX_RESPONSE=512*1024,MAX_CAPTURE=128*1024;
@@ -50,6 +51,8 @@ export function streamCompletion(url,body,{signal,timeoutMs,onContent,model,auth
    if(response.statusCode<200||response.statusCode>=300){
     pendingHttpResponse=response;
     const error=failure(`${label} stream returned HTTP ${response.statusCode}`,response.statusCode>=500?'unknown':'not_dispatched',response.statusCode);
+    const retryHint=responseRetryHint(response);
+    if(retryHint)error.retryHint=retryHint;
     readProviderErrorCode(response,combined).then(providerErrorCode=>{
      if(providerErrorCode)error.providerErrorCode=providerErrorCode;
      fail(error);
