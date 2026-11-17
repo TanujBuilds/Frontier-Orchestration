@@ -82,6 +82,7 @@ test('portable requests drain before a newly queued legacy turn and portable par
 
 test('legacy arrival during portable readiness cannot claim alongside an API review',{timeout:15000},async t=>{
  const a=await endpoint(t,'a'),b=await endpoint(t,'b'),pa={...profile('a',a.baseUrl),roles:['worker','reviewer']},pb=profile('b',b.baseUrl),{credentialRef,...reviewer}=pa;
+ pb.capabilities={...pb.capabilities,modelDiscovery:'advertised'};
  const f=await portableFixture(t,[pa,pb],{reviewPolicy:{version:1,source:'api',reviewer,fallback:'wait'}});f.c.store.waitForChange=async()=>{};
  const candidate=f.submit('candidate','worker-a');await advance(f.worker,()=>f.c.getTask(candidate.id).status==='awaiting_review');
  a.state.reply=JSON.stringify({decision:'accept',feedback:'Fixture exact candidate',findings:[]});a.state.holdPost=Promise.withResolvers();b.state.hold=Promise.withResolvers();
