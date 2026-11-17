@@ -23,6 +23,7 @@ mosaic on                Allow dispatch with the same approved configuration
 mosaic rollback VERSION  Switch to a compatible retained version
 mosaic recover           Resume an interrupted installation
 mosaic status --once     Print saved status and recent handoffs once
+mosaic support-bundle --home ABS [--output ABS]  Preview or save redacted diagnostics
 mosaic --source core     Watch the existing frontier-harness installation
 mosaic --source beta     Watch only the separate beta installation
 mosaic host-preview --host ID  Preview a manual host registration; writes nothing
@@ -36,6 +37,12 @@ export async function main(args=process.argv.slice(2)){
  let home;
  if(args[0]==='--home'){args.shift();home=args.shift();if(!home)throw Error('Provide an absolute fixture home');}
  if(args.includes('--help')||args[0]==='help'){process.stdout.write(help);return;}
+ if(args[0]==='support-bundle'){
+  args.shift();
+  if(home!==undefined)args.unshift('--home',home);
+  process.exitCode=await (await import('./support-bundle.mjs')).runSupportBundle(args);
+  return;
+ }
  let source='auto';
  const sourceIndex=args.indexOf('--source');
  if(sourceIndex!==-1){

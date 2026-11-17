@@ -8,6 +8,12 @@ Use Node 24.22.x from the source checkout:
 node scripts/support/mosaic-support-bundle.mjs --home /absolute/home
 ```
 
+The installed product exposes the same preview and explicit-home requirement:
+
+```sh
+mosaic support-bundle --home /absolute/home
+```
+
 To save the same preview locally, first prepare an existing directory you own with mode `0700`, then choose a new filename:
 
 ```sh
@@ -17,7 +23,7 @@ node scripts/support/mosaic-support-bundle.mjs --home /absolute/home --output /a
 
 The command writes the exact sanitized JSON and newline to stdout **before** creating the file. Stdout and file bytes match. It publishes a new `0600` regular file atomically using an exclusive hard link from a private temporary file. Existing files, directories, and symlinks are preserved; no destination is overwritten. Output directories must already exist, be owned by the current user, have no group/other permissions, and have no symlink ancestors. Temporary files are removed on ordinary success or failure. An interrupted process may leave a private temporary file for inspection.
 
-Paths must be absolute and normalized, without control characters. Home and output ancestor symlinks are rejected; use the canonical path on systems with aliases such as `/tmp`. No default home search, core-coordinator discovery, output-directory creation, upload, or installation is performed. The regular product CLI registration is separate from this standalone source entry.
+Paths must be absolute and normalized, without control characters. Home and output ancestor symlinks are rejected; use the canonical path on systems with aliases such as `/tmp`. No default home search, core-coordinator discovery, output-directory creation, upload, or installation is performed. The product command also accepts `--output ABS` and the existing leading `mosaic --home ABS support-bundle` form.
 
 Exit status is `0` for a usable preview or completed write, including an offline report; `2` for invalid arguments or a refused write; and `1` for an unexpected collection/format/output failure. Invalid arguments produce only `USAGE: --home ABS [--output ABS]`. Write errors produce `OUTPUT_EXISTS` or `OUTPUT_UNSAFE` after the preview. Other failures produce `SUPPORT_BUNDLE_FAILED`. Errors never repeat input arguments, server messages, or exception text.
 

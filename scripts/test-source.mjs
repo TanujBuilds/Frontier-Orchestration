@@ -12,7 +12,7 @@ function group(reason, names) {
   for (const name of names) separate.set(`test/${name}.test.mjs`, reason);
 }
 group('Darwin PTY or filesystem flags; mixed source and macOS checks', [
-  'beta-install', 'beta-observer', 'beta-setup'
+  'beta-install', 'beta-observer', 'beta-setup', 'mosaic-m019-terminal-width'
 ]);
 group('Darwin arm64 downloader with system shell/Perl archive fixtures', ['download-bootstrap']);
 group('Builds standalone runtime snapshots and needs exact-lock offline package inputs', [
