@@ -127,7 +127,8 @@ export async function claimAvailable(worker){
   if(worker.shutdown?.signal.aborted)return {waiting:true,reasonCode:'service_stopping'};
   if((c.workerLease?.generation??null)!==snapshot.lease)return null;
   if(!same(c,snapshot))continue;
-  const observation={providerId:route.binding.providerId,revision:route.binding.revision,profileHash:route.binding.profileHash,status:available?'available':'offline',observedAt:new Date(c.now()).toISOString(),provenance:'bounded selected-provider availability probe'};
+  const manual=profile.capabilities.modelDiscovery==='manual';
+  const observation={providerId:route.binding.providerId,revision:route.binding.revision,profileHash:route.binding.profileHash,status:available?(manual?'eligible':'available'):'offline',observedAt:new Date(c.now()).toISOString(),provenance:manual?'configured manual-model retry eligibility; no network, discovery or health probe':'bounded selected-provider availability probe'};
   const next=c.claimNext(worker.owner,{...snapshot,observation});if(next)return next;
   waited=true;if(!parallel)return {waiting:true};
  }

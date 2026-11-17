@@ -1,6 +1,7 @@
 import { DeepSeekHttpAdapter, validModelId } from '../adapters/deepseek-http.mjs';
 import { normalizeProviderCapabilities } from './provider-capabilities.mjs';
 import { streamCompletion, redactStream, validCompletionMetadata } from './stream.mjs';
+import { providedRetryHint } from '../adapters/retry-after.mjs';
 
 function failure(message, outcome, status, details = {}) {
   const error = new Error(message);
@@ -11,6 +12,8 @@ function failure(message, outcome, status, details = {}) {
   if (['model_not_found','context_length_exceeded'].includes(details.providerErrorCode)) error.providerErrorCode = details.providerErrorCode;
   if (['address','tls','connection','timeout','cancelled','protocol','model_not_advertised'].includes(details.diagnosticCategory)) error.diagnosticCategory = details.diagnosticCategory;
   if (['model_discovery','inference'].includes(details.requestOperation)) error.requestOperation = details.requestOperation;
+  const retryHint = providedRetryHint(details);
+  if (retryHint) error.retryHint = retryHint;
   return error;
 }
 
@@ -28,6 +31,11 @@ export class LocalProvider extends DeepSeekHttpAdapter {
 
   async availability(signal) {
     const configured = this.resolvedModel ?? this.model;
+    if (this.capabilities?.modelDiscovery === 'manual') {
+      if (!validModelId(this.model) || this.containsCredential(this.model)) throw failure('Invalid configured provider model identity', 'not_dispatched');
+      // Eligibility for the next authorized attempt, never a health claim.
+      return true;
+    }
     const ids = await this.listModels(signal, { strict: this.capabilities?.modelDiscovery === 'advertised' });
     if (configured && !ids.includes(configured)) throw Error('Configured provider model is unavailable');
     return true;

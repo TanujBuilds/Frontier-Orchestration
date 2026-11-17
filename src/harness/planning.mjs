@@ -18,6 +18,7 @@ function validatePlan(raw,g,registry){
 }
 import {LocalProvider} from './provider.mjs';
 import {isRegistryClient} from './providers/registry.mjs';
+import {providedRetryHint,reconnectRetryAt,terminalProviderFailure} from '../adapters/retry-after.mjs';
 
 export class Planner {
  constructor(worker){this.worker=worker;this.c=worker.c;this.inflight=new Map();}
@@ -80,12 +81,12 @@ export class Planner {
   if(isOvernightV2(g.manifest)&&pending?.providerWait){
    const wait=pending.providerWait;
    if(c.now()<wait.retryAt&&c.now()<Math.min(wait.until,g.deadline))return {waiting:true};
-   let available=false;
+   let available=false,probeError;
    if(c.now()<Math.min(wait.until,g.deadline)){
     try{const {goal,current}=this.fence(g,pending,lease);this.verifyBinding(goal,current);}
     catch(error){return this.fail(pending,error.message,false,{block:true,g,lease});}
     try{available=await this.worker.getProvider(pending.providerBinding??{planning:true}).availability(AbortSignal.any([AbortSignal.timeout(Math.max(1,Math.min(10000,wait.until-c.now()))),...(this.worker.shutdown?[this.worker.shutdown.signal]:[])]))===true;}
-    catch{/* Readiness failure cannot authorize a new request. */}
+    catch(error){probeError=error;/* Readiness failure cannot authorize a new request. */}
    }
    const ready=c.store.tx(()=>{
     const {goal,current}=this.fence(g,pending,lease),at=c.now();
@@ -96,8 +97,12 @@ export class Planner {
      current.status='blocked';current.reason='Original planner reconnect window exhausted';current.owner=null;
      c.store.put('planning',current);c.emit('planning.blocked',g.id,null,{reason:current.reason});return false;
     }
+    if(terminalProviderFailure(probeError))return this.fail(pending,probeError.message,false,{block:true,g,lease});
     if(available){current.reconnectUntil=wait.until;delete current.providerWait;}
-    else current.providerWait.retryAt=Math.min(wait.until,at+15000);
+    else{
+     current.providerWait.retryAt=reconnectRetryAt(at,wait.until,providedRetryHint(probeError));
+     if(current.providerWait.retryAt>=wait.until)return this.fail(pending,'No eligible planner retry remains in original reconnect window',false,{block:true,g,lease});
+    }
     c.store.put('planning',current);return available;
    });
    if(!ready)return {waiting:true};
@@ -202,12 +207,13 @@ export class Planner {
       current.status='queued';current.reason='Planning dispatch held while the goal is '+goal.status;current.owner=null;
      }else if(request.reconnectUntil!==undefined&&at>=request.reconnectUntil){
       current.status='blocked';current.reason='Original planner reconnect window exhausted';current.owner=null;
-     }else if(isOvernightV2(g.manifest)&&invoked&&!dispatchPrevented&&
+     }else if(isOvernightV2(g.manifest)&&invoked&&!dispatchPrevented&&!terminalProviderFailure(error)&&
       (error.httpStatus===undefined||[429,502,503,504].includes(error.httpStatus)||(beforeBuiltInDispatch&&error.httpStatus===408))){
       current.reconnectStartedAt??=at;
       const until=Math.min(goal.deadline,current.reconnectStartedAt+goal.manifest.overnightPolicy.reconnectMs);
-      current.providerWait={until,retryAt:Math.min(until,at+15000)};
+      current.providerWait={until,retryAt:reconnectRetryAt(at,until,providedRetryHint(error))};
       current.status=current.attempt>=3?'blocked':'queued';current.reason='Known planner provider unavailable; reserved request stays spent';current.owner=null;
+      if(current.providerWait.retryAt>=until){current.status='blocked';current.reason=at>=until?'Original planner reconnect window exhausted':'No eligible planner retry remains in original reconnect window';}
      }else return this.fail(p,error.message,false,{block:true,g,lease});
      c.store.put('planning',current);
      c.emit(current.providerWait?'planning.provider_wait':'planning.'+current.status,g.id,null,{reason:current.reason,requestId:id});

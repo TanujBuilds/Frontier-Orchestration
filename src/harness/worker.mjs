@@ -11,6 +11,7 @@ import { Planner } from './planning.mjs';
 import {OvernightLifecycle} from './overnight-lifecycle.mjs';
 import { LegacyReview } from './legacy-review.mjs';
 import {isRegistryClient} from './providers/registry.mjs';
+import {providedRetryHint,terminalProviderFailure} from '../adapters/retry-after.mjs';
 
 export class Worker {
  constructor({c,coordinator=c,provider,reviewer,checksFactory,owner=randomUUID(),config={},adapters={}}){
@@ -131,9 +132,9 @@ export class Worker {
    const transientStatus=httpStatus===undefined||[429,502,503,504].includes(httpStatus)||(beforeBuiltInDispatch&&httpStatus===408);
    // Provider transport sanitizes thrown errors; retain our own guard's
    // classification locally instead of relying on custom fields surviving it.
-   const reconnect=invoked&&certified&&!pinnedMismatch&&!dispatchFailure?.bindingChanged&&
+   const reconnect=invoked&&certified&&!terminalProviderFailure(error)&&!pinnedMismatch&&!dispatchFailure?.bindingChanged&&
     (dispatchFailure?.dispatchStopped?reservation.reconnectUntil!==undefined:transientStatus);
-   this.c.failModelRequest(reservation.id,owner,{reason,outcome,reconnect});
+   this.c.failModelRequest(reservation.id,owner,{reason,outcome,reconnect,retryHint:providedRetryHint(error)});
    this.activity(task,'model.request.failed',{requestId:reservation.id,outcome});
    throw error;
   }
@@ -229,16 +230,17 @@ export class Worker {
     return this.c.completeTask(task.id,result,this.owner,{reviewRequired:true});
    }
    if(task.providerWait&&task.providerWait.readyOwner!==this.owner){
-    let available=false;
+    let available=false,probeError;
     try{
      const provider=this.getProvider(task);
      const remaining=Math.min(10000,task.providerWait.until-this.c.now());
      if(remaining>0&&typeof provider.availability==='function'){
       available=await provider.availability(AbortSignal.timeout(remaining))===true;
      }
-    }catch{/* A failed availability probe cannot authorize a new reservation. */}
+    }catch(error){probeError=error;/* A failed availability probe cannot authorize a new reservation. */}
     this.c.verifyWorkerBinding(this.c.store.get('goal',task.goalId),this.c.getTask(task.id));
-    task=this.c.finishProviderProbe(task.id,this.owner,available);
+    if(terminalProviderFailure(probeError))return this.c.failTaskStep(task.id,this.owner,String(probeError.message).slice(0,500));
+    task=this.c.finishProviderProbe(task.id,this.owner,available,{retryHint:providedRetryHint(probeError)});
     if(task.status!=='running')return task;
     const resourceHold=holdPinnedResource(this,task);if(resourceHold)return resourceHold;
    }
