@@ -36,7 +36,12 @@ export class Store {
    if(value?.then)throw Error('Async work cannot run inside state transaction');
    this.db.exec('COMMIT');
   }catch(error){
-   this.db.exec('ROLLBACK');
+   try{this.db.exec('ROLLBACK');}catch(rollbackError){
+    // SQLite may already have rolled back. Keep cleanup diagnostics secondary,
+    // including when the original thrown value is frozen or is not an object.
+    try{this.lastRollbackError=rollbackError;}catch{}
+    try{Object.defineProperty(error,'rollbackError',{value:rollbackError,configurable:true});}catch{}
+   }
    throw error;
   }finally{this.depth--;}
   for(const wake of this.commitListeners)wake();
