@@ -4,6 +4,10 @@ This file tracks source checkpoints. Local archive version labels are not publis
 
 ## Unreleased
 
+- Add safe worker reconfiguration, saved-key identity guards and truthful setup/doctor readiness with explicit next actions. Actual host and model qualification remains separate.
+- Add contributor setup, explicit portable and required Darwin test profiles, and pinned read-only source CI. Correct malformed reviewer and startup-timing fixtures without relaxing production checks.
+- Record dependency/native notices and unresolved provenance questions. New notice integration into built archives remains follow-up distribution work.
+- Add an explicit version/URL/trusted-digest archive downloader prototype and bounded read-only candidate/evidence verification. No qualified public binary or publisher authentication is declared.
 - Reorient the README, architecture and project guidance around the current coding workflow while preserving the original fake/text demo and legacy overnight roles.
 - Add lightweight bug, feature and pull-request templates with bounded, redacted evidence expectations.
 - Record the unresolved private security-reporting channel instead of advertising an unconfigured route.

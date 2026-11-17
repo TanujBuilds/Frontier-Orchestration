@@ -40,7 +40,7 @@ node src/beta/cli.mjs --help
 node src/harness/cli.mjs --help
 ```
 
-The core requires Node 24 or newer even though the older root package metadata still declares a lower engine floor. A source checkout is not a personal installation. Running setup, registering an MCP bridge or starting a real task needs its own private configuration and explicit scope. Do not use an unrestricted `npm test` as a quick smoke: the repository also contains native, browser and installed-package gates requiring prepared inputs.
+The supported development line is `>=24.22.0 <25`, with **24.22.0** pinned in source CI. After exact-lock dependency preparation, `npm test` runs the explicitly selected portable source profile; `npm run test:source -- --list` shows its entries and separate qualification gates. See [development setup](docs/DEVELOPMENT.md) and [test selection](docs/TESTING.md) for the full required Darwin profile. A source checkout is not a personal installation. Running setup, registering an MCP bridge or starting a real task needs its own private configuration and explicit scope.
 
 ## Which entry point is which?
 
@@ -51,7 +51,7 @@ The core requires Node 24 or newer even though the older root package metadata s
 | [Opt-in coding core](docs/MOSAIC_CODING_CORE.md) | Four modes, versioned goals/tasks, native candidates, routing, recovery and observer | The `frontier-harness` bridge and installed core have their own state and lifecycle. Research remains parked. |
 | [Portable beta](docs/TERMINAL_BETA.md) | `mosaic` setup, diagnostics, terminal observer and separate `mosaic-beta` bridge | Local Darwin arm64 package candidate, not a published release. It does not migrate core goals or approvals. |
 
-For package development, read [installation and recovery](docs/PORTABLE_BETA_INSTALL.md), [native check artifact requirements](docs/NATIVE_CHECK_ARTIFACT.md), and [release evidence](docs/PORTABLE_BETA_RELEASE.md). These are local candidate instructions, with dated historical examples. No archive URL, Homebrew tap, signing identity or authenticated public installer is supplied here.
+For package development, read [installation and recovery](docs/PORTABLE_BETA_INSTALL.md), [native check artifact requirements](docs/NATIVE_CHECK_ARTIFACT.md), and [release evidence](docs/PORTABLE_BETA_RELEASE.md). The [archive download prototype](distribution/README.md) requires an explicit URL and independently trusted digest. The [read-only candidate verifier](docs/PORTABLE_RELEASE_EVIDENCE.md) checks supplied bytes and bindings; it cannot authenticate a publisher or establish live readiness. These are local candidate instructions, with dated historical examples. No archive URL, Homebrew tap, signing identity or authenticated public installer is supplied here.
 
 ## What is established?
 
@@ -69,6 +69,6 @@ The coordinator owns exact approvals, plan versions, paths, checks, budgets and 
 
 ## Explore and contribute
 
-Read the [architecture and code map](docs/ARCHITECTURE.md), [current product context](docs/PRODUCT_CONTEXT.md), and [milestone history](docs/MVP.md). For a bug, provide the commit/package version, platform, expected and actual behavior, and a small redacted reproduction through [GitHub issues](https://github.com/TanujBuilds/Mosaic/issues). Pull requests should identify scope and exact checks, and distinguish fixtures from real host/model evidence. Security reporting has an unresolved private-channel gap; read [SECURITY.md](SECURITY.md) before sharing vulnerability details.
+Start with [contributing](CONTRIBUTING.md), [development setup](docs/DEVELOPMENT.md), and [test selection](docs/TESTING.md). Read the [architecture and code map](docs/ARCHITECTURE.md), [current product context](docs/PRODUCT_CONTEXT.md), and [milestone history](docs/MVP.md). Dependency and native attribution records are in [third-party notices](THIRD_PARTY_NOTICES.md) and [distribution provenance](docs/DISTRIBUTION_PROVENANCE.md); unresolved distribution questions remain explicit. For a bug, provide the commit/package version, platform, expected and actual behavior, and a small redacted reproduction through [GitHub issues](https://github.com/TanujBuilds/Mosaic/issues). Pull requests should identify scope and exact checks, and distinguish fixtures from real host/model evidence. Security reporting has an unresolved private-channel gap; read [SECURITY.md](SECURITY.md) before sharing vulnerability details.
 
 Mosaic is licensed under [MIT](LICENSE). Internal `frontier-*` package and protocol names are retained for compatibility.

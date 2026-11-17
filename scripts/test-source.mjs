@@ -14,6 +14,7 @@ function group(reason, names) {
 group('Darwin PTY or filesystem flags; mixed source and macOS checks', [
   'beta-install', 'beta-observer', 'beta-setup'
 ]);
+group('Darwin arm64 downloader with system shell/Perl archive fixtures', ['download-bootstrap']);
 group('Builds standalone runtime snapshots and needs exact-lock offline package inputs', [
   'harness-package', 'harness-research-review-package', 'harness-targeted-repair-package'
 ]);

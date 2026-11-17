@@ -50,7 +50,7 @@ test('Git replacement trees cannot substitute source bytes behind exact commit/t
 test('canonical inventory cannot use one path as both regular file and parent directory',async t=>{
  const f=await setup(t),b=Buffer.from('file and parent collision');for(const p of ['runtime/collision','runtime/collision/child.txt']){f.payload.set(p,b);f.manifest.files.push({path:p,sha256:sha(b),bytes:b.length,mode:'100644'});}f.manifest.files.sort((a,b)=>a.path<b.path?-1:1);f.manifest.contentHash=digest(f.manifest.files);await f.saveArchive();await reject(f,'archive_path_collision');
 });
-test('standard macOS aliases address the same private output directory',async t=>{
- const f=await setup(t);if(process.platform==='darwin'){const alias=p=>p.replace(/^\/private\/(var|tmp)(?=\/)/,'/$1');assert.notEqual(alias(f.reportDir),f.reportDir);f.opts.reportDir=alias(f.reportDir);f.opts.output=alias(f.output);}const r=run(f);assert.equal(r.status,0,r.stderr);assert.equal(JSON.parse(await readFile(f.output)).integrity.status,'verified');
+test('private output directory accepts canonical paths and macOS aliases when available',async t=>{
+ const f=await setup(t);if(process.platform==='darwin'){const alias=p=>p.replace(/^\/private\/(var|tmp)(?=\/)/,'/$1');assert.notEqual(alias(f.reportDir),f.reportDir);f.opts.reportDir=alias(f.reportDir);f.opts.output=alias(f.output);}else t.diagnostic('Canonical-path assertions only; macOS alias assertions are not exercised on this platform.');const r=run(f);assert.equal(r.status,0,r.stderr);assert.equal(JSON.parse(await readFile(f.output)).integrity.status,'verified');
 });
 test('output filenames with control characters fail before creating a report',async t=>{const f=await setup(t);f.opts.output=path.join(f.reportDir,'private\nname.json');const r=run(f);assert.equal(r.status,2,r.stderr);await assert.rejects(readFile(f.opts.output),{code:'ENOENT'});});
