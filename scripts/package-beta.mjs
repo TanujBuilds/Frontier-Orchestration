@@ -19,6 +19,14 @@ const nodeBinaryHash='b468fb9c67427c9d3aec07ee1105e63020923a631a9a2a00beb71a7ba3
 const nodeLicenseHash='5888dbb9a1d2b18f2c3e6c5f6af1b39de658372b402a0577b002777f14c62ace';
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 
+// Fixed, factual source assets. Inventory construction below hashes every copy.
+export async function copyRequiredAssets(sourceRoot,runtime){
+ for(const [source,target] of [['src/project/check-backends/native-supervisor.c','src/project/check-backends/native-supervisor.c'],['test/fixtures/mosaic-pb15-v2-composition/fork-only.patch','provenance/fork-only.patch'],['scripts/build-native-check-artifact.mjs','provenance/build-native-check-artifact.mjs'],['docs/NATIVE_CHECK_ARTIFACT.md','docs/NATIVE_CHECK_ARTIFACT.md'],['docs/HOST_COMPATIBILITY.md','docs/HOST_COMPATIBILITY.md'],['docs/TERMINAL_BETA.md','docs/TERMINAL_BETA.md'],['docs/PORTABLE_BETA_INSTALL.md','docs/PORTABLE_BETA_INSTALL.md'],['docs/PORTABLE_BETA_RELEASE.md','docs/PORTABLE_BETA_RELEASE.md'],['scripts/lib/beta-candidate.schema.json','provenance/beta-candidate.schema.json'],['THIRD_PARTY_NOTICES.md','THIRD_PARTY_NOTICES.md'],['docs/DISTRIBUTION_PROVENANCE.md','docs/DISTRIBUTION_PROVENANCE.md']]){
+  const sourceInfo=await lstat(path.join(sourceRoot,source));if(!sourceInfo.isFile()||sourceInfo.isSymbolicLink())throw Error('Required package source is not a regular file: '+source);
+  const destination=path.join(runtime,target);await mkdir(path.dirname(destination),{recursive:true});await copyFile(path.join(sourceRoot,source),destination);await chmod(destination,0o644);
+ }
+}
+
 function options(args){
  const opts={};
  while(args.length){
@@ -95,10 +103,7 @@ async function build(opts){
    await mkdir(path.dirname(target),{recursive:true});await copyFile(path.join(repo,relative),target);await chmod(target,0o644);
   }
   const runtime=path.join(payload,'runtime');
-  for(const [source,target] of [['src/project/check-backends/native-supervisor.c','src/project/check-backends/native-supervisor.c'],['test/fixtures/mosaic-pb15-v2-composition/fork-only.patch','provenance/fork-only.patch'],['scripts/build-native-check-artifact.mjs','provenance/build-native-check-artifact.mjs'],['docs/NATIVE_CHECK_ARTIFACT.md','docs/NATIVE_CHECK_ARTIFACT.md'],['docs/HOST_COMPATIBILITY.md','docs/HOST_COMPATIBILITY.md'],['docs/TERMINAL_BETA.md','docs/TERMINAL_BETA.md'],['docs/PORTABLE_BETA_INSTALL.md','docs/PORTABLE_BETA_INSTALL.md'],['docs/PORTABLE_BETA_RELEASE.md','docs/PORTABLE_BETA_RELEASE.md'],['scripts/lib/beta-candidate.schema.json','provenance/beta-candidate.schema.json']]){
-   const sourceInfo=await lstat(path.join(repo,source));if(!sourceInfo.isFile()||sourceInfo.isSymbolicLink())throw Error('Required package source is not a regular file: '+source);
-   const destination=path.join(runtime,target);await mkdir(path.dirname(destination),{recursive:true});await copyFile(path.join(repo,source),destination);await chmod(destination,0o644);
-  }
+  await copyRequiredAssets(repo,runtime);
   let nativeProof=null;
   if(opts['check-artifact']){
    const artifact=path.resolve(opts['check-artifact']);if(!opts.fixture)assertPortableArtifactPrivacy(await readFile(path.join(artifact,'node')));nativeProof=await probeCheckArtifact(artifact);
@@ -135,5 +140,7 @@ async function build(opts){
  }finally{await rm(staging,{recursive:true,force:true});}
 }
 
-if(process.argv.includes('--help'))console.log('node scripts/package-beta.mjs --version VERSION --output DIR [--node NODE --node-license LICENSE] [--check-artifact DIR] [--verification-ref REPO_RELATIVE_PATH] [--offline] [--fixture]');
-else build(options(process.argv.slice(2))).catch(error=>{console.error(error.message);process.exitCode=1;});
+if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
+ if(process.argv.includes('--help'))console.log('node scripts/package-beta.mjs --version VERSION --output DIR [--node NODE --node-license LICENSE] [--check-artifact DIR] [--verification-ref REPO_RELATIVE_PATH] [--offline] [--fixture]');
+ else build(options(process.argv.slice(2))).catch(error=>{console.error(error.message);process.exitCode=1;});
+}
