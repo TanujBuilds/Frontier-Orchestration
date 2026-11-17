@@ -2,7 +2,7 @@
 
 Mosaic coordinates bounded coding work between your coding app and an existing model API. You describe the outcome, review the scope, checks and limits, and keep one record of the plan, implementation, review and corrections.
 
-**Experimental MIT source preview — November 16, 2026.** The source is public at [TanujBuilds/Mosaic](https://github.com/TanujBuilds/Mosaic). There is no published, qualified binary download or one-command installer. Local package verification does not establish a clean-Mac installation, compatibility with your app account, or model quality.
+**Experimental MIT source preview — November 17, 2026.** The source is public at [TanujBuilds/Mosaic](https://github.com/TanujBuilds/Mosaic). There is no published, qualified binary download or one-command installer. Local package verification does not establish a clean-Mac installation, compatibility with your app account, or model quality. The [six-stage roadmap](docs/ROADMAP.md) separates accepted local evidence from the remaining launch gates.
 
 ## The coding workflow
 
@@ -55,7 +55,11 @@ For package development, read [installation and recovery](docs/PORTABLE_BETA_INS
 
 ## What is established?
 
-The [November 16 source checkpoint summary](CHANGELOG.md) records accepted source, owned fixture and disposable installed-package evidence: versioned coordination, explicit routing and shared capacity, review/recovery, setup diagnostics and guided multiple-worker configuration. Local archives `0.1.0-beta.184` and `.185` were verified against that checkpoint; those version labels are **not public releases**. This documentation update does not rerun the full package qualification.
+The [November 17 accepted checkpoint](CHANGELOG.md#source-checkpoint--november-17-2026), source `ddd922cd141bcc1a58f26969f4cc23847f6c955c`, adds bounded redacted support export, finite private-file reads, exact reviewed candidate staging with notice inclusion, bounded package verification and scoped terminal-width/owned-PTY qualification. Acceptance covers source, owned native/browser fixtures and disposable installed-package composition. Local archives `0.1.0-beta.188` and `.189` were verified, including wrapper install, installed support export, update and installed support export again.
+
+The [November 16 checkpoint](CHANGELOG.md#source-checkpoint--november-16-2026) and its local `0.1.0-beta.184`/`.185` archives remain historical evidence at their original revision. All four labels identify **local artifacts, not public releases**. This documentation update reports accepted runs; it does not rerun the full suite or package qualification.
+
+Read the contracts for [redacted support bundles](docs/SUPPORT_BUNDLE.md), [reviewed candidate staging](docs/REVIEWED_CANDIDATE_STAGING.md), [package verification limits](docs/PACKAGE_VERIFICATION_LIMITS.md) and [terminal qualification](docs/TERMINAL_QUALIFICATION.md). Notice inclusion preserves the dated audit and its unresolved legal/provenance questions; it does not establish distribution clearance or publisher authenticity.
 
 Selecting an app, listing models, or passing a small inference probe does not establish an actual host connection, coding quality or usable context capacity. Actual host discovery/calls (M003), useful ordinary owner projects (M079), three independently addressable qualified workers (M063), clean-Mac use and authenticated distribution remain separate gates. M063 remains unproven. The protected native network/Postgres proof (M001) remains blocked: the accepted boundary denies TCP/Unix access and the required Postgres demonstration is absent.
 
@@ -69,6 +73,6 @@ The coordinator owns exact approvals, plan versions, paths, checks, budgets and 
 
 ## Explore and contribute
 
-Start with [contributing](CONTRIBUTING.md), [development setup](docs/DEVELOPMENT.md), and [test selection](docs/TESTING.md). Read the [architecture and code map](docs/ARCHITECTURE.md), [current product context](docs/PRODUCT_CONTEXT.md), and [milestone history](docs/MVP.md). Dependency and native attribution records are in [third-party notices](THIRD_PARTY_NOTICES.md) and [distribution provenance](docs/DISTRIBUTION_PROVENANCE.md); unresolved distribution questions remain explicit. For a bug, provide the commit/package version, platform, expected and actual behavior, and a small redacted reproduction through [GitHub issues](https://github.com/TanujBuilds/Mosaic/issues). Pull requests should identify scope and exact checks, and distinguish fixtures from real host/model evidence. Security reporting has an unresolved private-channel gap; read [SECURITY.md](SECURITY.md) before sharing vulnerability details.
+Start with [contributing](CONTRIBUTING.md), [development setup](docs/DEVELOPMENT.md), and [test selection](docs/TESTING.md). Read the [architecture and code map](docs/ARCHITECTURE.md), [current product context](docs/PRODUCT_CONTEXT.md), [six-stage roadmap](docs/ROADMAP.md), and [milestone history](docs/MVP.md). Dependency and native attribution records are in [third-party notices](THIRD_PARTY_NOTICES.md) and [distribution provenance](docs/DISTRIBUTION_PROVENANCE.md); unresolved distribution questions remain explicit. For a bug, provide the commit/package version, platform, expected and actual behavior, and a small redacted reproduction through [GitHub issues](https://github.com/TanujBuilds/Mosaic/issues). Pull requests should identify scope and exact checks, and distinguish fixtures from real host/model evidence. Security reporting has an unresolved private-channel gap; read [SECURITY.md](SECURITY.md) before sharing vulnerability details.
 
 Mosaic is licensed under [MIT](LICENSE). Internal `frontier-*` package and protocol names are retained for compatibility.

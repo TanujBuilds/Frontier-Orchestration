@@ -4,13 +4,34 @@ This file tracks source checkpoints. Local archive version labels are not publis
 
 ## Unreleased
 
+- Add the public [six-stage roadmap](docs/ROADMAP.md) and refresh checkpoint orientation. This documentation candidate runs static prose/link checks only; it declares no new implementation qualification or release.
+
+## Source checkpoint — November 17, 2026
+
+Commit [`ddd922cd141bcc1a58f26969f4cc23847f6c955c`](https://github.com/TanujBuilds/Mosaic/commit/ddd922cd141bcc1a58f26969f4cc23847f6c955c), tree `922ed8752b9b6cccd5553b3fe672b6f7deefb115`. Accepted on November 17 for source, owned native/browser fixtures and disposable installed-package composition; the public source checkpoint was verified on GitHub. The November 16 tag and archive record below retain their original identities.
+
+Changes since that historical checkpoint include:
+
 - Add safe worker reconfiguration, saved-key identity guards and truthful setup/doctor readiness with explicit next actions. Actual host and model qualification remains separate.
 - Add contributor setup, explicit portable and required Darwin test profiles, and pinned read-only source CI. Correct malformed reviewer and startup-timing fixtures without relaxing production checks.
-- Record dependency/native notices and unresolved provenance questions. New notice integration into built archives remains follow-up distribution work.
+- Record dependency/native notices and unresolved provenance questions. The newer staged archives include the unchanged third-party notices and distribution-provenance documents, including the additional fdlibm/Sun/V8 notice texts. This corrects notice inclusion for these newer archives; it does not retrofit beta184/185 or resolve the remaining applicability/legal findings.
 - Add an explicit version/URL/trusted-digest archive downloader prototype and bounded read-only candidate/evidence verification. No qualified public binary or publisher authentication is declared.
 - Reorient the README, architecture and project guidance around the current coding workflow while preserving the original fake/text demo and legacy overnight roles.
 - Add lightweight bug, feature and pull-request templates with bounded, redacted evidence expectations.
 - Record the unresolved private security-reporting channel instead of advertising an unconfigured route.
+- Add [bounded redacted support export](docs/SUPPORT_BUNDLE.md), with an explicit home, preview by default and an optional new private output file. The installed CLI uses the same contract; no provider call, service startup or upload is performed by collection.
+- Bound beta private JSON reads and reject unsafe file types, oversized inputs and observed replacements before accepting metadata. This is finite read protection, not a hostile-writer filesystem sandbox or full storage-failure qualification.
+- Add [exact reviewed candidate staging](docs/REVIEWED_CANDIDATE_STAGING.md), composing the existing builder, verifier and notice inventory with retained ownership and unchanged external gates.
+- Bound [package verification](docs/PACKAGE_VERIFICATION_LIMITS.md) by bytes, files, directories and path depth, using descriptor-based reads and incremental payload hashing. Integrity checking does not authenticate the publisher.
+- Correct terminal display-cell wrapping and padding, with [runtime-specific measurement and owned-PTY checks](docs/TERMINAL_QUALIFICATION.md). This does not certify every Unicode sequence, terminal or platform.
+
+### Dated local verification summary
+
+The accepted required Mac run passed **2,433/2,433 tests across 163 entry files**, with zero failures, cancellations, skips or TODOs. The separate Ubuntu portable source CI passed **2,034/2,034 tests across 126 entries**, also with zero failures, cancellations, skips or TODOs. These are accepted results at the named source revision, not full-suite reruns by this documentation change or a percentage of product completion.
+
+Real local staging produced `0.1.0-beta.188` and `0.1.0-beta.189`; each archive's 3,803 payload entries, including 129 runtime source modules, passed byte/mode and source/runtime/input binding checks. A finite owned loopback transfer exercised the existing wrapper: disposable install of `.188`, installed support export, update to `.189` in the same disposable home, then installed support export again. The owned processes were verified quiescent. Subsequent strict integrity sidecars and independent evidence review passed; original build-time gates were preserved.
+
+These are **local archives and disposable installed fixtures, not public releases**. No actual host/account or live-model owner run, three independently qualified endpoints, clean-Mac journey, signing/notarization or authenticated distribution was established. M001 remains blocked by protected TCP/Unix denial and missing Postgres proof. The [roadmap](docs/ROADMAP.md) retains the separate evidence and approval prerequisites. No package/build/full-suite qualification was rerun for this prose.
 
 ## Source checkpoint — November 16, 2026
 
