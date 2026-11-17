@@ -70,21 +70,50 @@ export function actorRows(state){
  return rows;
 }
 
+// A scoped display-cell model qualified against Node 24.22 Console.table padding.
+// Emoji sequences retain grapheme boundaries but count their constituent cells;
+// this deliberately does not promise the width used by every terminal emulator.
+const graphemes=new Intl.Segmenter(undefined,{granularity:'grapheme'});
+function cells(value){
+ let width=0;
+ for(const char of clean(value).normalize('NFC')){
+  const code=char.codePointAt(0);
+  if(/[\p{Nonspacing_Mark}\p{Enclosing_Mark}\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/u.test(char)||code>=0x1160&&code<=0x11ff)continue;
+  const wide=code>=0x1100&&code<=0x115f||code===0x2329||code===0x232a||
+   code>=0x2e80&&code<=0xa4cf&&code!==0x303f||code>=0xac00&&code<=0xd7a3||
+   code>=0xf900&&code<=0xfaff||code>=0xfe10&&code<=0xfe19||code>=0xfe30&&code<=0xfe6f||
+   code>=0xff01&&code<=0xff60||code>=0xffe0&&code<=0xffe6||
+   code>=0x1b000&&code<=0x1b2ff||code>=0x1f200&&code<=0x1f251||
+   code>=0x20000&&code<=0x3fffd;
+  width+=wide||/\p{Emoji_Presentation}/u.test(char)?2:1;
+ }
+ return width;
+}
 function lines(value,width){
- const chars=[...clean(value)],result=[];
+ const result=[];
  let line='',columns=0;
- for(const char of chars){
-  const cell=/[\p{Script=Han}\p{Script=Hangul}\p{Script=Hiragana}\p{Script=Katakana}\p{Extended_Pictographic}]/u.test(char)?2:1;
+ for(const {segment} of graphemes.segment(clean(value))){
+  // An indivisible cluster may exceed even the entire available column.
+  const char=cells(segment)>width?'�':segment,cell=cells(char);
   if(columns+cell>width&&line){
-   const space=line.lastIndexOf(' ');
-   if(space>0&&space>line.length/2){result.push(line.slice(0,space));line=line.slice(space+1);columns=[...line].reduce((n,x)=>n+(/[　-￿]/u.test(x)?2:1),0);}
-   else{result.push(line);line='';columns=0;}
+   let space=-1;
+   for(const part of graphemes.segment(line))if(part.segment===' ')space=part.index;
+   if(space>0&&cells(line.slice(0,space))>columns/2){
+    result.push(line.slice(0,space));line=line.slice(space+1);columns=cells(line);
+   }else{result.push(line);line='';columns=0;}
+   if(columns+cell>width){result.push(line);line='';columns=0;}
   }
   line+=char;columns+=cell;
  }
  if(line||!result.length)result.push(line);
  return result;
 }
+function clip(value,size){
+ if(size<1)return '';
+ const wrapped=lines(value,size);
+ return wrapped.length>1?(size===1?'':lines(value,size-1)[0].trimEnd())+'…':wrapped[0];
+}
+const pad=(value,size)=>{const text=clip(value,size);return text+' '.repeat(Math.max(0,size-cells(text)));};
 const accent=value=>'\x1b[36m'+value+'\x1b[0m';
 const statusColor=(value,state)=>`\x1b[${['blocked','failed'].includes(state)?31:['running','active','accepted','codex_active','completed'].includes(state)?32:33}m${value}\x1b[0m`;
 
@@ -139,9 +168,7 @@ function polishedMain(state,goal,{width,height,color,selected,offset}){
  const paint=(value,codes)=>color?`\x1b[${codes}m${value}\x1b[0m`:value;
  const quiet=value=>paint(value,'2'),bold=value=>paint(value,'1');
  const tone=(value,state)=>color?statusColor(value,state):value;
- const clip=(value,size)=>{const wrapped=lines(value,size);return wrapped.length>1?lines(value,size-1)[0].trimEnd()+'…':wrapped[0];};
- const cellCount=value=>[...clean(value)].reduce((n,c)=>n+(/[\p{Script=Han}\p{Script=Hangul}\p{Script=Hiragana}\p{Script=Katakana}\p{Extended_Pictographic}]/u.test(c)?2:1),0);
- const section=(title,aside='')=>bold(title)+quiet(' '+ '─'.repeat(Math.max(1,space-cellCount(title)-cellCount(aside)-2))+(aside?' '+aside:''));
+ const section=(title,aside='')=>bold(title)+quiet(' '+ '─'.repeat(Math.max(1,space-cells(title)-cells(aside)-2))+(aside?' '+aside:''));
  const out=[paint('▦','36')+' '+bold('Mosaic Beta')];
  if(state.snapshot?.sourceLabel)out.push(quiet(clip('Watching '+state.snapshot.sourceLabel,space)));
  if(state.snapshot?.sourceHint)out.push(quiet(clip(state.snapshot.sourceHint,space)));
@@ -156,13 +183,15 @@ function polishedMain(state,goal,{width,height,color,selected,offset}){
   const title=lines(goal.objective,space);
   out.push(...title.slice(0,2).map((line,i)=>bold(i===1&&title.length>2?clip(line+' …',space):line)));
   const modes={collaborative:'Collaborative',codex_only:'Codex only',deepseek_only:'API worker only',overnight_review:'Overnight review'};
-  out.push(tone('['+status(goal.status)+']',goal.status)+'  '+quiet(modes[goal.mode]??clean(goal.mode)));
+  const badge='['+status(goal.status)+']',mode=modes[goal.mode]??clean(goal.mode);
+  if(cells(badge)+2+cells(mode)<=space)out.push(tone(badge,goal.status)+'  '+quiet(mode));
+  else out.push(...lines(badge,space).map(line=>tone(line,goal.status)),...lines(mode,space).map(quiet));
   out.push(quiet(clip('Goal '+goal.id,space)),'');
   const rows=actorRows(state),index=Math.max(0,Math.min(selected,rows.length-1));
   out.push(section('Agents',rows.length?`${index+1}/${rows.length}`:''));
   const blocks=rows.map((row,i)=>{
    const actor=clip(row.actor,Math.max(16,space-40)),left=(i===index?'› ':'  ')+actor+'  '+row.role;
-   const badge='['+row.status+']',gap=space-cellCount(left)-cellCount(badge);
+   const badge='['+row.status+']',gap=space-cells(left)-cells(badge);
    const identity=(i===index?paint('› ','36'):'  ')+bold(actor)+'  '+quiet(row.role);
    const head=gap>=2?[identity+' '.repeat(gap)+tone(badge,row.state)]:[identity,...lines(badge,space-2).map(line=>'  '+tone(line,row.state))];
    const assignment=lines(row.assignment,space-2);
@@ -183,10 +212,10 @@ function polishedMain(state,goal,{width,height,color,selected,offset}){
   const end=Math.max(0,state.events.length-offset),room=Math.max(0,height-out.length-3),feed=[];
   for(let i=end-1;i>=0;i--){
    const event=state.events[i],stamp=clock(event.at),provenance=clean(event.provenance??'coordinator');
-   const prefix=stamp+'  '+provenance.padEnd(11)+'  ',text=lines(eventText(event),Math.max(8,space-cellCount(prefix)));
-   const block=text.slice(0,2).map((line,n)=>(n?' '.repeat(cellCount(prefix)):quiet(prefix))+(n===1&&text.length>2?clip(line+' …',space-cellCount(prefix)):line));
+   const prefix=stamp+'  '+pad(provenance,11)+'  ',text=lines(eventText(event),Math.max(8,space-cells(prefix)));
+   const block=text.slice(0,2).map((line,n)=>(n?' '.repeat(cells(prefix)):quiet(prefix))+(n===1&&text.length>2?clip(line+' …',space-cells(prefix)):line));
    if(feed.length+block.length>room){
-    if(!feed.length&&room)feed.push(quiet(prefix)+clip(eventText(event),Math.max(8,space-cellCount(prefix))));
+    if(!feed.length&&room)feed.push(quiet(prefix)+clip(eventText(event),Math.max(8,space-cells(prefix))));
     break;
    }
    feed.unshift(...block);
@@ -203,9 +232,6 @@ function polishedPicker(state,{width,height,color,picker}){
  const roomy=width>=55&&height>=24,margin=roomy?'  ':'',space=roomy?Math.min(104,width-4):width;
  const paint=(value,codes)=>color?`\x1b[${codes}m${value}\x1b[0m`:value;
  const quiet=value=>paint(value,'2'),bold=value=>paint(value,'1');
- const clip=(value,size)=>{const wrapped=lines(value,size);return wrapped.length>1?lines(value,size-1)[0].trimEnd()+'…':wrapped[0];};
- const cells=value=>[...clean(value)].reduce((n,c)=>n+(/[\p{Script=Han}\p{Script=Hangul}\p{Script=Hiragana}\p{Script=Katakana}\p{Extended_Pictographic}]/u.test(c)?2:1),0);
- const pad=(value,size)=>{const text=clip(value,size);return text+' '.repeat(Math.max(0,size-cells(text)));};
  const goals=state.snapshot?.goals??[],index=Math.max(0,Math.min(picker,goals.length-1)),goal=goals[index];
  const count=goals.length?`${index+1}/${goals.length}`:'0/0';
  const out=[bold(clip(roomy?'▦ Mosaic Beta':'Mosaic Beta',space))];
@@ -230,7 +256,7 @@ function polishedPicker(state,{width,height,color,picker}){
  for(const [i,g] of goals.slice(start,start+capacity).entries()){
   const chosen=i+start===index,marker=chosen?'› ':'  ',title=clip(g.objective,roomy?titleWidth:space-2);
   const identity=chosen?paint(marker+pad(title,roomy?titleWidth:space-2),'1;36'):marker+pad(title,roomy?titleWidth:space-2);
-  out.push(roomy?identity+'  '+(color?statusColor(pad(status(g.status),10),g.status):pad(status(g.status),10))+'  '+quiet(clean(g.id).slice(0,8)):identity);
+  out.push(roomy?identity+'  '+(color?statusColor(pad(status(g.status),10),g.status):pad(status(g.status),10))+'  '+quiet(clip(g.id,8)):identity);
  }
  if(!goals.length)out.push(quiet(clip('No saved goals yet.',space)));
  out.push(...preview);
