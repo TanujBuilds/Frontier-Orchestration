@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "mosaic-portable-evidence-v1",
+  "title": "Mosaic portable candidate evidence sidecar",
+  "description": "Sanitized offline integrity findings; never release authority or external qualification.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "kind", "readOnly", "releaseAuthority", "readiness", "candidate", "integrity", "suppliedEvidence", "externalGates", "limitations"],
+  "properties": {
+    "schema": {"type": "integer", "const": 1},
+    "kind": {"type": "string", "const": "mosaic-portable-evidence"},
+    "readOnly": {"type": "boolean", "const": true},
+    "releaseAuthority": {"type": "boolean", "const": false},
+    "readiness": {"type": "string", "const": "pending-external-qualification"},
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "sha256", "version", "platform", "fixture", "source", "archive", "inventory", "originalUnpassedGates"],
+      "properties": {
+        "file": {"type": "string", "const": "candidate.json"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "version": {"type": "string", "minLength": 5, "maxLength": 64, "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-beta\\.[0-9]+)?$"},
+        "platform": {"type": "string", "const": "darwin-arm64"},
+        "fixture": {"type": "boolean"},
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["commit", "tree", "clean"],
+          "properties": {
+            "commit": {"$ref": "#/$defs/gitObjectId"},
+            "tree": {"$ref": "#/$defs/gitObjectId"},
+            "clean": {"type": "boolean", "const": true}
+          }
+        },
+        "archive": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["file", "sha256", "bytes"],
+          "properties": {
+            "file": {"type": "string", "minLength": 37, "maxLength": 96, "pattern": "^mosaic-beta-[0-9]+\\.[0-9]+\\.[0-9]+(?:-beta\\.[0-9]+)?-darwin-arm64\\.tar\\.gz$"},
+            "sha256": {"$ref": "#/$defs/sha256"},
+            "bytes": {"type": "integer", "minimum": 1, "maximum": 134217728}
+          }
+        },
+        "inventory": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["file", "sha256", "contentHash", "files", "runtimeSourceFiles"],
+          "properties": {
+            "file": {"type": "string", "const": "payload/package-manifest.json"},
+            "sha256": {"$ref": "#/$defs/sha256"},
+            "contentHash": {"$ref": "#/$defs/sha256"},
+            "files": {"type": "integer", "minimum": 1, "maximum": 10000},
+            "runtimeSourceFiles": {"type": "integer", "minimum": 1, "maximum": 10000}
+          }
+        },
+        "originalUnpassedGates": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 10,
+          "uniqueItems": true,
+          "items": {"type": "string", "enum": ["final-source-suite", "independent-review", "clean-machine", "real-host-accounts", "live-providers", "other-platforms", "signing-notarization", "authenticated-download", "public-source-license-audit", "publication"]}
+        }
+      }
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "archive", "source", "evidence", "authenticity"],
+      "properties": {
+        "status": {"type": "string", "const": "verified"},
+        "archive": {"type": "string", "const": "digest-and-canonical-inventory"},
+        "source": {"type": "string", "const": "exact-clean-checkout-and-runtime-bytes"},
+        "evidence": {"type": "string", "const": "supplied-record-digests"},
+        "authenticity": {"type": "string", "const": "not-established"}
+      }
+    },
+    "suppliedEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["indexSha256", "authority", "records", "localAcceptance", "publication"],
+      "properties": {
+        "indexSha256": {"$ref": "#/$defs/sha256"},
+        "authority": {"type": "string", "const": "not-established"},
+        "records": {"type": "array", "minItems": 0, "maxItems": 64, "items": {"$ref": "#/$defs/suppliedRecord"}},
+        "localAcceptance": {"type": "string", "enum": ["supplied-unverified", "not-supplied"]},
+        "publication": {"type": "string", "enum": ["supplied-dated-record-only", "not-supplied"]}
+      }
+    },
+    "externalGates": {
+      "type": "array",
+      "minItems": 10,
+      "maxItems": 10,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/externalGate"}
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "uniqueItems": true,
+      "items": {"type": "string", "enum": ["hashes-do-not-prove-execution-or-reviewer-trust", "fixture-evidence-does-not-establish-live-readiness", "no-build-test-provider-or-installation-executed", "native-preflight-is-an-immutable-builder-claim", "source-availability-does-not-qualify-downloads"]}
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[a-f0-9]{64}$"},
+    "gitObjectId": {"type": "string", "minLength": 40, "maxLength": 40, "pattern": "^[a-f0-9]{40}$"},
+    "suppliedRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "sha256", "bytes", "role", "scope", "interpretation"],
+      "properties": {
+        "file": {"type": "string", "minLength": 10, "maxLength": 10, "pattern": "^record-(?:00[1-9]|0[1-5][0-9]|06[0-4])$"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "bytes": {"type": "integer", "minimum": 0, "maximum": 8388608},
+        "role": {"type": "string", "enum": ["acceptance", "test-command", "test-result", "test-log", "review", "publication"]},
+        "scope": {"type": "string", "enum": ["source-fixture", "installed-fixture", "live-claim", "unknown"]},
+        "interpretation": {"type": "string", "enum": ["unverified-claim", "supplied-only"]}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"scope": {"const": "live-claim"}}, "required": ["scope"]},
+          "then": {"properties": {"interpretation": {"const": "unverified-claim"}}},
+          "else": {"properties": {"interpretation": {"const": "supplied-only"}}}
+        }
+      ]
+    },
+    "externalGate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gate", "status", "reason"],
+      "properties": {
+        "gate": {"type": "string", "enum": ["actual-host-discovery", "real-owner-project-quality", "live-model-quality", "three-independent-workers", "native-network-and-postgres", "clean-mac", "other-platforms", "signing-notarization", "authenticated-public-download", "final-beta-acceptance"]},
+        "status": {"type": "string", "const": "pending"},
+        "reason": {"type": "string", "const": "separate-qualified-evidence-required"}
+      }
+    }
+  }
+}
