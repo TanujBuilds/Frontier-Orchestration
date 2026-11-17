@@ -232,7 +232,7 @@ for (const failure of ['auth', 'truncated', 'gateway-timeout']) test(`bound ${fa
   assert.equal(request.providerBinding.providerId, 'worker-a'); assert.equal(a.posts().length, 1); assert.equal(b.calls.length, 0); assertPrivate(f.c);
 });
 
-for (const manualMissing of [false, true]) test(`reconnect probes stay on the task binding${manualMissing ? ' and manual endpoints without models remain waiting' : ''}`, async t => {
+for (const manualMissing of [false, true]) test(`reconnect probes stay on the task binding${manualMissing ? ' and manual endpoints without models retry without discovery' : ''}`, async t => {
   const a = await endpoint(t, 'a'), b = await endpoint(t, 'b', {status: 429, manualMissing});
   const f = await fixture(t, [profile('a', a.baseUrl), profile('b', b.baseUrl, {capabilities: {workerProtocol: 'mosaic-structured-v1', transports: ['json'], modelDiscovery: manualMissing ? 'manual' : 'advertised', taskKinds: ['coding', 'consult']}})]);
   const {goal, task} = await f.prepare({mode: 'overnight_review', defaultWorkerId: 'worker-b', plannerWorkerId: 'worker-a'});
@@ -240,14 +240,32 @@ for (const manualMissing of [false, true]) test(`reconnect probes stay on the ta
   f.c.boundary(task.id, {phase: 'model', attempt: 1, exchange: 0, executionBase: goal.manifest.project.baseCommit}, owner);
   const worker = new Worker({c: f.c, config, owner, adapters: {coding: {step: (current, token) => worker.model(current, token, `code-1-${current.checkpoint.exchange}`, [{role: 'user', content: '{}'}])}}});
   await worker.tick(); const waited = f.c.getTask(task.id); assert.equal(waited.status, 'suspended');
+  const original = f.c.store.request(task.id, 'code-1-0');
+  assert.equal(waited.spent.model, 1); assert.equal(original.id, waited.providerWait.requestId);
+  assert.equal(original.status, 'failed'); assert.equal(original.requestOutcome, 'not_dispatched');
   b.state.status = 200; f.setNow(waited.providerWait.retryAt); await worker.tick();
-  assert.equal(a.calls.length, 0); assert.ok(b.gets().length >= 1);
-  assert.equal(b.posts().length, manualMissing ? 1 : 2);
-  const current = f.c.getTask(task.id); assert.equal(current.spent.model, manualMissing ? 1 : 2);
+  assert.equal(a.calls.length, 0); if (manualMissing) assert.equal(b.gets().length, 0); else assert.ok(b.gets().length >= 1);
+  assert.equal(b.posts().length, 2);
+  const current = f.c.getTask(task.id); assert.equal(current.spent.model, 2);
   assert.equal(current.providerBinding.providerId, 'worker-b');
+  assert.deepEqual(current.providerBinding, waited.providerBinding); assert.equal(current.providerModel, waited.providerModel);
+  assert.equal(current.deadline, waited.deadline); assert.equal(f.c.getGoal(goal.id).deadline, goal.deadline);
+  assert.equal(current.attempts, 1); assert.equal(current.status, 'running'); assert.equal(current.providerWait, undefined);
+  assert.equal(current.providerReconnectStartedAt, waited.providerWait.startedAt);
+  const retried = f.c.store.request(task.id, 'code-1-1');
+  assert.equal(retried.status, 'completed'); assert.notEqual(retried.id, original.id);
+  assert.deepEqual(retried.providerBinding, original.providerBinding); assert.equal(retried.result.requestedModel, 'alias-b');
+  assert.equal(retried.reconnectUntil, waited.providerWait.until); assert.deepEqual(f.c.store.request(task.id, 'code-1-0'), original);
   if (manualMissing) {
-    assert.equal(current.status, 'suspended'); assert.equal(current.providerWait.until, waited.providerWait.until);
-    f.setNow(waited.providerWait.until); await worker.tick(); assert.equal(f.c.getTask(task.id).status, 'blocked'); assert.equal(b.posts().length, 1);
+    for (const at of [waited.providerWait.until, waited.deadline]) {
+      f.setNow(at); await worker.tick(); const after = f.c.getTask(task.id);
+      assert.equal(after.status, at === waited.deadline ? 'partial' : 'running');
+      assert.equal(b.gets().length, 0); assert.equal(b.posts().length, 2); assert.equal(a.calls.length, 0); assert.equal(after.spent.model, 2);
+      assert.deepEqual(after.providerBinding, waited.providerBinding); assert.equal(after.providerModel, waited.providerModel);
+      assert.equal(after.deadline, waited.deadline); assert.equal(f.c.getGoal(goal.id).deadline, goal.deadline);
+      assert.deepEqual(f.c.store.request(task.id, 'code-1-0'), original); assert.deepEqual(f.c.store.request(task.id, 'code-1-1'), retried);
+      assert.equal(f.c.store.db.prepare('SELECT COUNT(*) AS n FROM requests WHERE task_id=?').get(task.id).n, 2);
+    }
   }
 });
 
@@ -274,8 +292,11 @@ test('legacy reconnect retains its original wait when provider construction cann
   f.c.boundary(task.id, {phase: 'model', attempt: 1, exchange: 0, executionBase: goal.manifest.project.baseCommit}, owner);
   const worker = new Worker({c: f.c, owner, config, provider: {complete: async () => {throw Object.assign(Error('Fixture unavailable'), {requestOutcome: 'not_dispatched'});}}, adapters: {coding: {step: (current, token) => worker.model(current, token, `code-1-${current.checkpoint.exchange}`, [])}}});
   await worker.tick(); const waited = f.c.getTask(task.id); assert.equal(waited.status, 'suspended');
+  const original = f.c.store.request(task.id, 'code-1-0');
   worker.provider = null; f.setNow(waited.providerWait.retryAt); await worker.tick();
-  const saved = f.c.getTask(task.id); assert.equal(saved.status, 'suspended'); assert.equal(saved.providerWait.until, waited.providerWait.until);
+  const saved = f.c.getTask(task.id); assert.equal(saved.status, 'blocked'); assert.equal(saved.providerWait.until, waited.providerWait.until);
+  assert.match(saved.reason, /No eligible provider retry remains in original reconnect window/);
+  assert.deepEqual(f.c.store.request(task.id, 'code-1-0'), original);
   assert.equal(saved.spent.model, 1); assert.equal(a.calls.length, 0);
 });
 

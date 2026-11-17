@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {endpoint,profile,fixture,advance,evidence} from './fixtures/mosaic-pb14/runtime.mjs';
 import {capacitySnapshot} from '../src/harness/scheduling/capacity.mjs';
 
+const advertisedProfile=(id,baseUrl)=>{const p=profile(id,baseUrl);return {...p,capabilities:{...p.capabilities,modelDiscovery:'advertised'}};};
+
 async function waitFor(promise){let timer;try{return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Barrier not reached')),5000);})]);}finally{clearTimeout(timer);}}
 
 test('bounded supervisor enters two independent loopback requests before releasing either response',{timeout:12000},async t=>{
@@ -29,7 +31,7 @@ test('shared group limit one holds second task without spending while independen
 
 test('offline selected worker does not starve a later independent selected worker',{timeout:12000},async t=>{
  const a=await endpoint(t,'a'),b=await endpoint(t,'b');a.state.online=false;
- const f=await fixture(t,[profile('a',a.baseUrl),profile('b',b.baseUrl)]),ta=f.submit('offline','worker-a'),tb=f.submit('online','worker-b');
+ const f=await fixture(t,[advertisedProfile('a',a.baseUrl),profile('b',b.baseUrl)]),ta=f.submit('offline','worker-a'),tb=f.submit('online','worker-b');
  await advance(f.worker,()=>f.c.getTask(tb.id).status==='awaiting_review');
  assert.equal(a.posts().length,0);assert.equal(b.posts().length,1);assert.equal(f.c.getTask(ta.id).spent.model,0);assert.equal(f.c.getTask(ta.id).routingWait.decision.reasonCode,'provider_offline');
 });
@@ -123,7 +125,7 @@ test('an uncertain opted-in planner does not starve another approved planner gro
 });
 
 test('one bounded readiness probe covers queued aliases and yields before probing the next service',{timeout:10000},async t=>{
- const a=await endpoint(t,'a'),b=await endpoint(t,'b');a.state.online=false;const f=await fixture(t,[profile('a',a.baseUrl),profile('b',b.baseUrl)]);
+ const a=await endpoint(t,'a'),b=await endpoint(t,'b');a.state.online=false;const f=await fixture(t,[advertisedProfile('a',a.baseUrl),profile('b',b.baseUrl)]);
  for(let n=0;n<6;n++)f.submit('offline-'+n,'worker-a');const healthy=f.submit('healthy','worker-b');
  await f.worker.tick();assert.equal(a.gets().length,1);assert.equal(b.gets().length,0);assert.equal(f.worker.nextIdleCheck(f.c.now())<=f.c.now()+250,true);
  await advance(f.worker,()=>f.c.getTask(healthy.id).status==='awaiting_review');assert.equal(a.gets().length,1);assert.equal(b.posts().length,1);
