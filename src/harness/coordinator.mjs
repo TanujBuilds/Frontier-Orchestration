@@ -305,6 +305,37 @@ export class Coordinator {
   }
   return g;
  });}
+ goalSummaries(){
+  const limit=50,maxBytes=65536;
+  const total=Number(this.store.db.prepare("SELECT COUNT(*) AS n FROM records WHERE kind='goal'").get().n);
+  // Project only saved goal scalars. JSON fragments retain escaped Unicode,
+  // including lone surrogates, without hydrating manifests or child records.
+  const rows=this.store.db.prepare(`SELECT
+   data -> '$.id' AS id, data -> '$.status' AS status,
+   data -> '$.hash' AS hash, data -> '$.version' AS version,
+   data -> '$.manifest.objective' AS objective,
+   data -> '$.manifest.mode.id' AS modeId, data -> '$.manifest.mode.version' AS modeVersion,
+   data -> '$.activatedAt' AS activatedAt, data -> '$.deadline' AS deadline
+   FROM records INDEXED BY records_kind WHERE kind='goal' ORDER BY rowid DESC LIMIT ?`).all(limit);
+  const result={goals:[],total,limit,truncated:total>0};
+  for(const row of rows){
+   const saved=Object.fromEntries(Object.entries(row).map(([key,value])=>[key,JSON.parse(value??'null')]));
+   let objective='',bytes=2;
+   for(const point of saved.objective){
+    const size=Buffer.byteLength(JSON.stringify(point))-2;
+    if(bytes+size>256)break;
+    objective+=point;bytes+=size;
+   }
+   const summary={id:saved.id,status:saved.status,hash:saved.hash,version:saved.version,
+    objective,objectiveTruncated:objective!==saved.objective,
+    mode:{id:saved.modeId,version:saved.modeVersion},activatedAt:saved.activatedAt,deadline:saved.deadline};
+   result.goals.push(summary);result.truncated=result.goals.length<total;
+   // Include envelope metadata and actual JSON escaping in the hard byte cap.
+   // Keep stable IDs/hashes exact; an oversized row ends this latest-row prefix.
+   if(Buffer.byteLength(JSON.stringify(result))>maxBytes){result.goals.pop();break;}
+  }
+  result.truncated=result.goals.length<total;return result;
+ }
  getGoal(id){const g=this.store.get('goal',id),planning=this.store.maybe('planning',id);return {...g,...(isOvernightV2(g.manifest)?{overnightRun:this.store.maybe('overnight_run',id)??null}:{}),planning:planning?{...planning,spent:this.store.spent(id).model??0}:null,tasks:this.store.all('task').filter(t=>t.goalId===id).map(t=>this.getTask(t.id)),reviewerRuns:this.store.all('reviewer').filter(r=>r.goalId===id)};}
  getTask(id){const t=this.store.get('task',id),local=this.store.spent(id),spent={model:0,search:0,download:0,codexReview:0,...(this.store.get('goal',t.goalId).manifest.reviewPolicy?.source==='api'||local.apiReview?{apiReview:0}:{})};for(const k of Object.keys(spent))spent[k]=Math.max(local[k]??0,t.remoteSpent?.[k]??0);return {...t,spent};}
  snapshot(){return {goals:this.store.all('goal').map(g=>this.getGoal(g.id)),notifications:this.notifications(),events:this.store.events(Math.max(0,Number(this.store.db.prepare('SELECT COALESCE(MAX(seq),0) AS n FROM events').get().n)-1000),1000),operations:this.store.all('operation').slice(-30).map(({result,...r})=>r),registry:this.registry.snapshot()};}

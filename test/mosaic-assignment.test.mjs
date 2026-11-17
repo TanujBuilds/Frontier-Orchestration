@@ -38,7 +38,7 @@ test('assignment_prepare returns grouped prerequisites over authenticated CLI tr
 });
 
 async function assertNoExecution(service, expectedGoalIds = []) {
-  const snapshot = await service.call('goal_get');
+  const snapshot = await service.call('goal_get', { view: 'snapshot' });
   assert.deepEqual(snapshot.goals.map(goal => goal.id), expectedGoalIds);
   for (const goal of snapshot.goals) {
     assert.equal(goal.status, 'draft');
@@ -435,7 +435,7 @@ test('a fresh assignment key cannot return a revised active goal as prepared', a
   const fresh = await service.request('assignment_prepare', { ...input, idempotencyKey: 'fresh-assignment' });
   assert.equal(fresh.status, 400, JSON.stringify(fresh.body));
   assert.match(fresh.body.error, /submission|draft|revision/i);
-  const snapshot = await service.call('goal_get');
+  const snapshot = await service.call('goal_get', { view: 'snapshot' });
   assert.deepEqual(snapshot.goals.map(goal => ({ id: goal.id, hash: goal.hash })), [{ id: prepared.goalId, hash: revised.hash }]);
   assert.deepEqual(snapshot.events.filter(event => event.type === 'goal.prepared').map(event => event.goal_id), [prepared.goalId]);
   assert.deepEqual(snapshot.goals[0].tasks, []);

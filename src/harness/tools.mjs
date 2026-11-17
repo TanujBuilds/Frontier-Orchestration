@@ -60,7 +60,10 @@ export class Dispatcher {
   if(!config.beta)add('legacy_assignment_prepare','Explicit compatibility intake for a historical nonportable workflow.',{manifest:assignmentManifestSchema},[],true,(i,k)=>prepareAssignment(c,i.manifest,k,{legacy:true}));
   add('overnight_preflight','Verify the exact approved infrastructure checks in the actual scoped sandbox before activation.',{goalId:str,hash:str},['goalId','hash'],true,(i,k)=>this.launch('overnight_preflight',i,k,()=>new OvernightPreflight({c,checksFactory:worker.checksFactory,config:worker.config}).run(i,k)));
   add('goal_activate','Approve the exact prepared hash and activate within its limits.',{goalId:str,hash:str},['goalId','hash'],true,async(i,k)=>{await c.preflightExecution(i,{config,checksFactory:worker.checksFactory});return c.activateGoal(i,k);});
-  add('goal_get','Inspect one goal or all goal summaries.',{goalId:str},[],false,i=>i.goalId?c.getGoal(i.goalId):c.snapshot());
+  add('goal_get','List the latest up to50 bounded goal summaries with total/truncated; goalId inspects one exact goal; explicit view:snapshot returns the legacy full operator snapshot.',{goalId:str,view:{...str,enum:['snapshot']}},[],false,i=>{
+   if(i.goalId!==undefined&&i.view!==undefined)throw Error('Cannot combine goalId and view selectors');
+   return i.goalId!==undefined?c.getGoal(i.goalId):i.view==='snapshot'?c.snapshot():c.goalSummaries();
+  });
   add('goal_revision_prepare','Prepare a changed goal version without resetting spending.',{goalId:str,expectedHash:str,manifest:goalSchema},['goalId','expectedHash','manifest'],true,(i,k)=>this.goals.prepareRevision(i,k));
   add('goal_revision_activate','Activate the exact changed version after quiescence.',{revisionId:str,hash:str},['revisionId','hash'],true,async(i,k)=>{const revision=c.store.get('goal_revision',i.revisionId);await c.preflightExecution({goalId:revision.goalId,hash:i.hash},{config,checksFactory:worker.checksFactory});return this.goals.activateRevision(i,k);});
   add('goal_finalize','Finalize accepted work, or explicitly partial stopped work, with a hashed receipt.',{goalId:str,summary:str,partial:bool},['goalId','summary'],true,(i,k)=>this.goals.finalize(i,k));

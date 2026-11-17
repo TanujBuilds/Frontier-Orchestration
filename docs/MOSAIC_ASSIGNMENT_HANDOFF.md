@@ -112,3 +112,36 @@ The [test](../test/mosaic-assignment.test.mjs) uses an authenticated loopback co
 - Augani illustrates compact worker briefs and questions tied to durable job IDs. Mosaic adapts the interaction through its own mode, approval and acceptance controls. [Orchestration skill](https://github.com/Augani/agent-orchestrator/blob/8d9b897c49500e8e1b54ec8028352544db95618d/plugins/agent-orchestrator/skills/orchestrate-cli-agents/SKILL.md)
 
 The facade and skill were written against Mosaic's own contracts. The upstream sources supplied interaction ideas.
+
+## Goal inspection views
+
+Progress checks using `goal_get({})` return `{goals,total,limit:50,truncated}`.
+The list contains the latest saved goal records in insertion order (SQLite
+`rowid` descending), rather than last-activity order. Each summary includes
+`id`, `status`, approval `hash` and `version`, an `objective` prefix with
+`objectiveTruncated`, `mode:{id,version}`, `activatedAt` and `deadline`. Missing
+optional saved metadata is `null`.
+
+The compact serialized JSON result is at most 65,536 UTF-8 bytes, including
+metadata and escaping. Each objective prefix occupies at most 256 bytes as a
+JSON string, including quotes. `total` counts all saved goals; `truncated` is
+true whenever fewer goals are returned, including when the byte cap requires
+omitting whole rows. IDs and hashes remain exact. The summary path reads goal
+scalars and a count without expanding task results or global history.
+
+`goal_get({goalId:"EXACT_SAVED_GOAL_ID"})` retains full, exact single-goal
+inspection, including manifest, tasks, reviewers and spent counters.
+`goal_get({view:"snapshot"})` retains the legacy full operator snapshot,
+including goals, notifications, events, operations and registry. Both explicit
+views are intentionally outside the summary byte cap. The legacy operator
+console explicitly selects the snapshot so its full-history behavior is
+preserved. Other callers relying on the previous global default must opt in.
+A `goalId` cannot be combined with `view`; unknown or malformed views fail.
+All views remain read-only under the existing operator authorization rules.
+
+Core CLI `status --root STATE_DIR` now prints the bounded summary result. For
+legacy full inspection use `call --root STATE_DIR --tool goal_get --input-json
+'{"view":"snapshot"}'` (as one command). The cap applies to compact result JSON,
+including MCP text content, rather than pretty-printed CLI output or the outer
+MCP protocol envelope. This source contract change makes no installation,
+upgrade or release claim.

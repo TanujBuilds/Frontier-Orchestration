@@ -56,7 +56,7 @@ async function setup(t, { host = 'codex', reviewer = profile() } = {}) {
   const repo = await repository({ root, env });
   const before = await repositoryBytes(repo.root);
   verify = async () => {
-    const snapshot = await call('goal_get');
+    const snapshot = await call('goal_get', { view: 'snapshot' });
     for (const goal of snapshot.goals) {
       assert.equal(goal.status, 'draft');
       assert.equal(goal.activatedAt, null);
