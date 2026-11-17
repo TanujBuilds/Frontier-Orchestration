@@ -17,7 +17,7 @@ The common path uses a coding app, one already-running worker API and the local 
 
 | Workflow | Implementation and review boundary |
 | --- | --- |
-| Collaborative | Native Codex and API workers may implement in separately owned candidates; active main Codex reviews and integrates. |
+| Collaborative | Native Codex and API workers may implement in separately owned candidates. Main Codex normally reviews and integrates; an explicitly approved API review policy can supply review, with integration separately guarded. |
 | DeepSeek-only | API-worker planning and implementation; protected checks govern acceptance. No Codex implementation, review or fallback. |
 | Codex-only | Native Codex implementation with no DeepSeek calls. |
 | Overnight review | API-worker implementation with bounded review after passing checks. The preserved legacy workflow has the stricter review-only frontier roles below. |
@@ -30,7 +30,7 @@ The original JSONL fake coordinator and text terminal handoff remain available. 
 
 The November 16 M027 acceptance covers source, owned fixtures and disposable installed-package proof. Listing models and fixed-message inference tests establish limited connectivity evidence, not coding quality, context capacity or an actual app connection. Actual host discovery/calls (M003), useful ordinary owner projects (M079), three real independently addressable workers (M063), clean-Mac use and distribution authenticity remain separate requirements. A first owner task alone does not close M079. M001 remains blocked by the native TCP/Unix boundary and absent Postgres proof. Public source availability does not waive these gates.
 
-Host review is pulled by an active conversation. A disconnected app retains a durable wait; no automatic chat wakeup or silent API fallback is promised. Automatic overnight review depends on the selected reviewer and its availability. Research remains parked in this coding-core scope; historical research packets grant no new authority.
+Host review is pulled by an active conversation. A disconnected app retains a durable wait; no automatic chat wakeup or silent API fallback is promised. Explicit API review can run automatically in collaborative or overnight mode under its approved policy and limits. Legacy detached overnight review has its own configured reviewer. Research remains parked in this coding-core scope; historical research packets grant no new authority.
 
 ## Development, privacy and release boundaries
 

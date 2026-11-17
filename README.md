@@ -59,7 +59,7 @@ The [November 16 source checkpoint summary](CHANGELOG.md) records accepted sourc
 
 Selecting an app, listing models, or passing a small inference probe does not establish an actual host connection, coding quality or usable context capacity. Actual host discovery/calls (M003), useful ordinary owner projects (M079), three independently addressable qualified workers (M063), clean-Mac use and authenticated distribution remain separate gates. M063 remains unproven. The protected native network/Postgres proof (M001) remains blocked: the accepted boundary denies TCP/Unix access and the required Postgres demonstration is absent.
 
-Review through an app is pull-based. An inactive or disconnected app leaves a durable review wait; Mosaic does not promise to wake its chat or silently switch to an API reviewer. Background review depends on the explicitly selected overnight configuration and an available reviewer.
+Review through an app is pull-based. An inactive or disconnected app leaves a durable review wait; Mosaic does not promise to wake its chat or silently switch to an API reviewer. Explicit API review can run automatically in collaborative or overnight mode when the approved policy permits it and the reviewer is available. Legacy detached overnight review has its own configured reviewer.
 
 ## Context and authority
 
