@@ -27,6 +27,8 @@ node --test --test-concurrency=1 test/test-source-runner.test.mjs
 
 A filtered run is partial evidence, even if it exits successfully. The required Darwin profile prohibits filtering. Unknown profiles/options and missing pattern values fail before execution. Do not use bare `node --test`: recursive discovery can execute fixture drivers as independent tests.
 
+The test child receives fallback Git author and committer metadata (`Mosaic source fixtures <fixture@example.invalid>`) for disposable fixture commits. Explicit `GIT_AUTHOR_*` and `GIT_COMMITTER_*` values are preserved. The runner leaves Git configuration files unchanged, so tests can run without a personal Git identity.
+
 ## What GitHub CI proves
 
 [The source workflow](../.github/workflows/source-checks.yml) runs on Ubuntu 24.04 with Node 24.22.0, exact-lock `npm ci --ignore-scripts`, an inventory report and `npm run test:source`. Actions are pinned to full immutable upstream commit SHAs. The workflow has read-only repository permissions, no retained Git credentials, a finite timeout and no publishing steps.

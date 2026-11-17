@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp, mkdir, writeFile, readFile, rm, symlink} from 'node:fs/promises';
-import {spawn} from 'node:child_process';
+import {spawn, spawnSync} from 'node:child_process';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -32,6 +32,27 @@ function start(cwd, args = [], env = cleanEnv()) {
 }
 const run = (cwd, args = [], env) => start(cwd, args, env).done;
 const passing = "import test from 'node:test'; test('two words',()=>{});\n";
+
+test('temporary Git commits work without personal identity and preserve explicit caller identity', {timeout: 15000}, async t => {
+  for (const explicit of [false, true]) {
+    const root = await fixture(t, {
+      'gitconfig': '[user]\nuseConfigOnly = true\n',
+      'test/commit.test.mjs': `import test from 'node:test';import assert from 'node:assert/strict';import {spawnSync} from 'node:child_process';import {writeFileSync} from 'node:fs';
+test('fixture commit',()=>{writeFileSync('value.txt','fixture');for(const args of [['init','-q'],['add','value.txt'],['-c','core.hooksPath=/dev/null','-c','commit.gpgsign=false','commit','-qm','fixture']]){const r=spawnSync('git',args,{encoding:'utf8'});assert.equal(r.status,0,r.stderr);}});`
+    });
+    const env = {...cleanEnv(), GIT_CONFIG_GLOBAL: path.join(root, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1'};
+    for (const key of ['GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL']) delete env[key];
+    if (explicit) Object.assign(env, {GIT_AUTHOR_NAME:'Contributor Author',GIT_AUTHOR_EMAIL:'author@example.invalid',GIT_COMMITTER_NAME:'Contributor Committer',GIT_COMMITTER_EMAIL:'committer@example.invalid'});
+    const result = await run(root, ['portable'], env);
+    assert.equal(result.code, 0, result.stdout + result.stderr);
+    const metadata = spawnSync('git', ['log','-1','--format=%an|%ae|%cn|%ce'], {cwd:root, env, encoding:'utf8'});
+    assert.equal(metadata.status, 0, metadata.stderr);
+    assert.equal(metadata.stdout.trim(), explicit
+      ? 'Contributor Author|author@example.invalid|Contributor Committer|committer@example.invalid'
+      : 'Mosaic source fixtures|fixture@example.invalid|Mosaic source fixtures|fixture@example.invalid');
+    assert.equal(await readFile(path.join(root, 'gitconfig'), 'utf8'), '[user]\nuseConfigOnly = true\n');
+  }
+});
 
 test('listing includes both intended roots and new spaced entries, excluding nested fixtures and helpers', {timeout: 15000}, async t => {
   const root = await fixture(t, {

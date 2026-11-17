@@ -115,6 +115,12 @@ export async function main(args = process.argv.slice(2)) {
   // A CLI invoked by node:test must start a fresh runner, not inherit its
   // private child context (which silently suppresses nested test execution).
   delete env.NODE_TEST_CONTEXT;
+  // Temporary fixture repositories must not depend on personal Git config.
+  // Keep caller-supplied identities authoritative, and scope defaults to child.
+  env.GIT_AUTHOR_NAME ??= 'Mosaic source fixtures';
+  env.GIT_AUTHOR_EMAIL ??= 'fixture@example.invalid';
+  env.GIT_COMMITTER_NAME ??= 'Mosaic source fixtures';
+  env.GIT_COMMITTER_EMAIL ??= 'fixture@example.invalid';
   if (profile === 'portable') {
     const inherited = Object.keys(env).filter(key => capabilityKey.test(key) && env[key]);
     if (inherited.length) throw Error(`portable requires a source-only environment; unset: ${inherited.join(', ')}`);
