@@ -4,7 +4,29 @@ This file tracks source checkpoints. Local archive version labels are not publis
 
 ## Unreleased
 
-- Add the public [six-stage roadmap](docs/ROADMAP.md) and refresh checkpoint orientation. This documentation candidate runs static prose/link checks only; it declares no new implementation qualification or release.
+- Checkpoint documentation follows verified acceptance; later source changes require their own qualification.
+
+## Source checkpoint — November 17, 2026: owner workflow foundation
+
+Commit [`202338e0a143fef4150d1cca3ccdb49661778890`](https://github.com/TanujBuilds/Mosaic/commit/202338e0a143fef4150d1cca3ccdb49661778890), tree `017013b441fe62ed2e2744d2050731069ac74964`. Accepted on November 17 for source, owned native/browser fixtures and disposable installed-package composition, with the source checkpoint verified on GitHub. This is the latest checkpoint documented here. The earlier November 17 and November 16 records below preserve their original revisions and scope.
+
+Changes since `ddd922c` include:
+
+- Add [bounded provider recovery](docs/PROVIDER_RECOVERY.md): validated retry hints respect the original reconnect cutoff, spending and uncertain outcomes. An explicitly manual model permits an authorized attempt without discovery GETs and without claiming provider health; advertised membership checks remain.
+- Add [strict UTF-8 request intake and checkout guidance](docs/OWNER_INTAKE.md), preserving valid fragmented text, existing byte limits, authentication, exact preparation and replay contracts.
+- Qualify [current-state SQLite backups](docs/CURRENT_BACKUP_QUALIFICATION.md) against a real Coordinator/Store and committed WAL. External artifact references are preserved; artifact bytes and restoration remain separate.
+- Preserve the primary `Store.tx` failure when rollback cleanup also fails. [Bounded storage-fault fixtures](docs/STORAGE_FAULT_QUALIFICATION.md) retain the original negative measurement, accounting and unknown ownership; SQLite page exhaustion does not establish physical disk-full or ACL qualification.
+- Add the public [six-stage roadmap](docs/ROADMAP.md), keeping source/fixture progress separate from actual owner use and launch evidence.
+
+### Dated local verification summary
+
+The required Mac run passed **2,555/2,555 tests across 167 entry files**, with zero failures, cancellations, skips or TODOs and unchanged frozen source/browser inputs. Separate [Ubuntu portable source CI](https://github.com/TanujBuilds/Mosaic/actions/runs/44088034305) passed **2,156/2,156 tests across 130 entries**, with the same zero counts; 37 entries require separate qualification. These results belong to the named source revision and are not a product-completion percentage.
+
+Real local staging produced `0.1.0-beta.192` and `0.1.0-beta.193`. Each archive's 3,805 payload entries, including 131 runtime source modules, passed byte/mode, source/runtime/input and installer-checksum checks. The required Mac suite used this fresh pair for owned native/browser/installed fixtures. Seven-record strict integrity sidecars and independent actual-evidence review passed, with original build-time and external gates preserved. The separate beta188/189 wrapper/support composition belongs only to the earlier checkpoint below.
+
+Qualification-wrapper outer groups were observed absent. Intentional uncertain-owner negative fixtures retained their roots, SQLite state, approvals and unresolved ownership.
+
+These are **local archives and disposable installed fixtures, not public releases**. M001 remains blocked by protected TCP/Unix denial and missing Postgres proof. The three-worker proof is scripted fixture evidence, not M063. Actual host discovery/calls (M003), useful ordinary owner projects (M079), clean-Mac use and authenticated public distribution remain separate. Publisher authenticity is not established. This prose reports accepted evidence without rerunning qualification or granting new execution or publication authority.
 
 ## Source checkpoint — November 17, 2026
 
