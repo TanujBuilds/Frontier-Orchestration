@@ -51,7 +51,7 @@ export async function main(args=process.argv.slice(2)){
  }
  if(command==='setup'||!command&&sourceIndex===-1){
   let explicitCodex,settings;
-  if(args.length===2&&args[0]==='--config'){args.shift();const file=args.shift();if(!path.isAbsolute(file))throw Error('Setup config must be an absolute private JSON path');settings=normalizeSettings(await jsonFile(file,{privateFile:true}));if(settings.schema!==2)throw Error('Use migrate for schema1 settings');}
+  if(args.length===2&&args[0]==='--config'){args.shift();const file=args.shift();if(!path.isAbsolute(file))throw Error('Setup config must be an absolute private JSON path');settings=await jsonFile(file,{privateFile:true});if(normalizeSettings(settings).schema!==2)throw Error('Use migrate for schema1 settings');}
   if(args.length===2&&args[0]==='--codex'){args.shift();explicitCodex=args.shift();}
   if(args.length)throw Error('Use mosaic setup [--codex /absolute/path/to/codex]');
   if(command==='setup'||!await readSettings(paths)||!await setupComplete(paths)){

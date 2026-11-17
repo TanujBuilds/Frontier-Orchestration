@@ -131,6 +131,69 @@ Authentication, transport and protocol failures fail that diagnostic; unsupporte
 listing for a manually configured model is reported without claiming a coding
 failure. Legacy schema-1 doctor retains its existing discovery behavior.
 
+## Revisit configuration safely
+
+Run `mosaic setup` again to review an explicit advanced replacement of existing
+schema-2 profiles, models, review, routing and limits. Re-enter every profile you
+intend to keep; this flow replaces the catalog after confirmation. It retains the
+exact existing execution backend, native artifact path/fingerprint and configured
+Codex executable by default. Use a separately reviewed private
+`mosaic setup --config /absolute/path/to/settings.json` for a full explicit
+schema-2 replacement, including any deliberate execution change. Keep keys in
+the private credential store, never in that settings file.
+
+For each advanced profile, enter the same identifier and API base URL to keep
+its identity. At the bearer-key question, `k` explicitly keeps its saved key for
+that same profile, canonical URL and API protocol. Choose `y` to enter a new
+hidden key; an empty replacement is rejected. This rotates that profile's
+existing credential reference when it has one, including an explicitly changed
+endpoint. A reference shared by
+several profiles changes for all its users. Choose `n` to make the new profile
+keyless; unused private keys are retained. New advanced profiles receive an unused
+credential reference so they cannot replace another saved key. Changing the endpoint requires a new
+key or an explicit keyless choice. Inspect the exact replacement before saving;
+model discovery and inference remain separate default-no choices.
+
+Declining the final confirmation, EOF or Ctrl-C before approval preserves the
+last saved settings, credentials and host entries. The CLI returns a nonzero
+status for cancellation/interruption. If an approved change was interrupted,
+run `mosaic setup` to resume its exact intent without recollecting profiles or
+repeating provider checks. A concurrent settings/key change or a customized
+managed fixture binding is preserved and reported as a conflict; inspect the
+retained setup rather than deleting its intent or credentials. Resolve prepared,
+active or retained owners in their host before conflicting maintenance. For a
+stopped approval, resume and finish it or finalize it as partial first. Keep the
+exact runtime directories and literal check paths referenced by saved work.
+
+## Verify the selected coding app connection
+
+Setup and doctor distinguish configuration selected/saved, registration
+instructions generated/saved, registration saved, tools discovered and a
+successful tool call. Real portable setup records manual instructions and does
+not inspect or change the real host registration. A disposable fixture can
+verify its own saved entry; that says nothing about an actual app. `UNVERIFIED`
+host discovery/call rows are neutral information: doctor retains its local
+check/boolean and CLI exit behavior. Follow its single `Next action` after
+resolving any reported local issue. Doctor cannot certify host events it has
+not observed or import a successful app call as durable proof.
+
+1. Run `mosaic host-preview --host codex` (or `claude-code`, `cursor`,
+   `antigravity`). Review the exact launcher/argv or snippet, preserve unrelated
+   entries and any existing core Mosaic registration, then apply it manually
+   using the selected app's supported configuration mechanism.
+2. Load or refresh that MCP connection in the actual coding app. Inspect that
+   app's discovered **mosaic-beta** tools. A terminal viewer's `tools_list`, a
+   fixture adapter or a successful worker probe does not establish this step.
+3. In that same app/profile, call **registry_list** with `{}` through
+   **mosaic-beta**. Confirm the bounded registry response before preparing any
+   goal. This connection-only call performs no model inference or task dispatch.
+
+If registration, discovery or the call fails, retain its error and fix that step
+before preparing work. A selected host, saved snippet or successful registry
+call does not establish sign-in, coding quality, model capacity, live provider
+qualification or clean-Mac readiness. Closed or inactive hosts still wait
+durably for pull-based review; there is no automatic wakeup or fallback.
+
 ## Update, rollback and interrupted maintenance
 
 Run a newer verified archive's installer with the same home to update. The

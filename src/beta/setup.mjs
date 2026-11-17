@@ -19,7 +19,7 @@ import {assertMaintenanceIdle,assertSettingsMaintenanceAllowed,assertBetaStartup
 import {canonical,digest} from '../harness/contracts.mjs';
 import {ProviderRegistry} from '../harness/providers/registry.mjs';
 import {discoverProvider,formatProviderDiagnostic} from './provider-diagnostics.mjs';
-import {getHost,normalizeHostSettings} from './hosts/index.mjs';
+import {getHost,normalizeHostSettings,formatHostReadiness} from './hosts/index.mjs';
 
 const exec=promisify(execFile);
 const mcpName='mosaic-beta';
@@ -290,7 +290,7 @@ export async function setup(paths,options={}){
  const runtimeRoot=fileURLToPath(new URL('../../',import.meta.url)),manifest=await jsonFile(path.join(path.dirname(runtimeRoot),'package-manifest.json'));
  const pending=await jsonFile(paths.setupIntent,{privateFile:true});
  if(options.portable||options.settings||old?.schema===2||pending?.schema===2||manifest?.layout==='terminal-beta-v2'){
-  let execution=options.execution,nativeCheckRuntime=options.nativeCheckRuntime;
+  let execution=options.execution??(old?.schema===2?old.execution:undefined),nativeCheckRuntime=options.nativeCheckRuntime??(old?.schema===2?old.nativeCheckRuntime:undefined);
   if(!execution&&!options.settings&&!pending){nativeCheckRuntime=await (await import('./package-contract.mjs')).readBundledNativeCheckRuntime(runtimeRoot);execution={backend:'darwin-seatbelt',backendRevision:2,runtimeFingerprint:nativeCheckRuntime.artifactManifestSha256};}
   return askSession(input,output,(ask,signal)=>setupPortable(paths,{...options,ask,output,execution,nativeCheckRuntime,codexRegistrations:registrations,signal:options.signal?AbortSignal.any([options.signal,signal]):signal}));
  }
@@ -355,10 +355,10 @@ export async function setup(paths,options={}){
 export async function doctor(paths,output=process.stdout,options={}){
  const checks=[];
  const check=(name,ok,detail)=>checks.push({name,ok,detail});
- let settings,credentials;
+ let settings,credentials,setupReady=false,registrationSaved=false;
  try{settings=await readSettings(paths);if(settings?.schema===2){credentials=await readCredentials(paths);await validateSettingsCredentials(paths,settings,credentials);}}catch{settings=undefined;check('Settings',false,'Invalid private config or credentials. Run mosaic setup.');}
  try{
-  if(settings&&!await setupComplete(paths))check('Setup',false,'Setup needs attention. Run mosaic setup to restore or resume its bindings.');
+  if(settings&&!(setupReady=await setupComplete(paths)))check('Setup',false,'Setup needs attention. Run mosaic setup to restore or resume its bindings.');
  }catch{check('Setup',false,'Cannot read the private beta binding receipt. Inspect the beta settings directory.');}
  check('Installation',!!await entry(paths.launcher),'Expected launcher '+paths.launcher);
  if(!checks.some(item=>item.name==='Settings'))check('Settings',!!settings,settings?'Private setup saved.':'Run mosaic setup.');
@@ -374,11 +374,11 @@ export async function doctor(paths,output=process.stdout,options={}){
   const checkName=paths.isolated?'Isolated MCP fixture':'Codex MCP';
   try{
    const server=await codexRegistrations(paths).get(codex),ownership=await bindingReceipt(paths);
-   const own=expectedRegistration(server,paths)&&ownership?.mcpHash===fingerprint(server);
+   const own=expectedRegistration(server,paths)&&ownership?.mcpHash===fingerprint(server);registrationSaved=own;
    check(checkName,own,own?(paths.isolated?'Fixture registration points to this launcher; host registration and sign-in are outside this check.':'mosaic-beta points to this launcher.'):'Run mosaic setup or inspect a conflicting mosaic-beta entry.');
   }catch{check(checkName,false,paths.isolated?'Cannot read fixture registration. Run mosaic setup.':'Cannot read registration. Check codex mcp list.');}
  }
- }else check('Host',true,getHost(selectedHost).displayName+' selected; inspect its Mosaic MCP connection in the host.');
+ }
  if(settings&&(settings.schema===2||selectedHost!=='codex'||settings.executionPolicy)){
   try{assertExecutionAvailable({...settings,executionPolicy:settings.schema===2?{version:1,...settings.execution}:settings.executionPolicy??{version:1,backend:'codex-sandbox',backendRevision:1}},{codexPath:settings.codexPath,nativeCheckRuntime:settings.nativeCheckRuntime});check('Protected checks',true,'Configured backend prerequisites found; actual enforcement probe is required before work.');}
   catch(error){check('Protected checks',false,error.message);}
@@ -402,7 +402,6 @@ export async function doctor(paths,output=process.stdout,options={}){
     }
    });
   }else for(const profile of settings.providers)check('Provider '+profile.id,true,profile.displayName+' configured; connectivity/inference untested. No fallback.');
-  check('Host capability',true,getHost(selectedHost).displayName+' documented and fixture-tested; actual host version unprobed.');
  }
  else if(settings?.worker){
   const {profile,apiKey}=settings.worker;
@@ -420,7 +419,22 @@ export async function doctor(paths,output=process.stdout,options={}){
     unsupported?'Discovery is unsupported. The model is configured manually.':'Model discovery failed. Check the endpoint and bearer key.')+untested);
   }
  }else check('API worker',true,selectedHost==='codex'?'Codex only.':'No API worker configured.');
- const publish=()=>{for(const {name,ok,detail} of checks)output.write(`${ok?'OK':'CHECK'}  ${name} · ${detail}\n`);};
+ let instructions='not recorded for this configuration',registration=registrationSaved?(paths.isolated?'fixture':'saved'):'unverified';
+ if(settings?.schema===2){
+  // A manual receipt records instructions, never actual host registration.
+  try{
+   const receipt=await jsonFile(path.join(paths.configDir,'portable-binding.json'),{privateFile:true});
+   if(receipt?.complete&&receipt.hostId===selectedHost&&receipt.settingsHash===fingerprint(settings)){
+    const own=await jsonFile(path.join(paths.configDir,`host-${selectedHost}-binding.json`),{privateFile:true});
+    if(own?.hostId===selectedHost&&own.manualHost&&own.state==='manual')instructions='saved locally for manual registration';
+    else if(paths.isolated&&setupReady&&own?.state==='complete'){instructions='generated and saved for the disposable fixture';registration='fixture';}
+   }
+  }catch{} // Existing Setup check retains any receipt failure; readiness stays unverified.
+ }
+ const failed=checks.find(item=>!item.ok);
+ const nextAction=failed?(failed.name==='Installation'?'Reinstall Mosaic Beta from a verified archive, then run mosaic doctor.':failed.name==='Setup'||failed.name==='Settings'||failed.name.startsWith('Codex')||failed.name==='Isolated MCP fixture'||failed.name==='Coordinator'?failed.detail:`Resolve the ${failed.name} issue above, then rerun mosaic doctor${options.providers===true?' --providers':''}.`):undefined;
+ const readiness=formatHostReadiness(selectedHost,{configuration:settings?'saved':'not configured',instructions,registration,nextAction});
+ const publish=()=>{for(const {name,ok,detail} of checks)output.write(`${ok?'OK':'CHECK'}  ${name} · ${detail}\n`);output.write(readiness);};
  if(settings?.schema===2)await withLock(paths,async()=>{await assertDoctorSnapshot();publish();});else publish();
  return checks.every(item=>item.ok);
 }

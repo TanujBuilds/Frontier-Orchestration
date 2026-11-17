@@ -24,7 +24,14 @@ All real hosts receive exact manual MCP registration instructions in the new por
 
 ## Run
 
-Reopen the selected host after registration. Start a chat in the intended repository and use this prompt:
+Reopen or refresh the selected host after reviewing its manual registration.
+First inspect the actual app/profile's discovered **mosaic-beta** tools and call
+**registry_list** with `{}` through that connection. This bounded connection-only
+call does not prepare a goal, dispatch work or call a model. Preserve any error
+and resolve registration, discovery or the call before continuing. The terminal
+viewer's `tools_list`, fixture registration and worker probes do not prove that
+the coding app discovered or called Mosaic. Once the connection works, start a
+chat in the intended repository and use this prompt:
 
 > Use Mosaic Beta in this repository. Inspect the mosaic-beta registry, ask me to choose a workflow if needed, then prepare an exact goal and show me its scope and limits for approval before activation.
 
@@ -45,6 +52,30 @@ mosaic uninstall
 ```
 
 Plain doctor checks saved configuration and local capabilities without contacting schema-2 workers. `doctor --providers` explicitly adds bounded GET-only model discovery, with separate endpoint/listing evidence and inference, coding and host limitations. Authentication, transport or protocol failures fail that diagnostic; unsupported listing for a manual model remains usable. Legacy schema-1 doctor preserves its existing read-only discovery. Neither doctor path sends a completion. The status command also works when redirected to a file. `off` stops new dispatch while retaining recoverable state and execution ownership; `on` resumes the service's admission policy. Uninstall removes only owned, unchanged beta bindings and retains versions, private settings and evidence. Existing core, manual or modified registrations are preserved. Resolve active or prepared beta work in its host before maintenance. If a prepared worker-bound revision blocks maintenance, stop its goal and finalize it as partial to retire the revision. Native uncertainty cannot be cleared merely by timeout, process exit or switching a version pointer. Setup can resume an approved interrupted change. Relocation or a different native artifact needs a new exact approval; saved literal check paths are never rewritten silently.
+
+To revisit setup, run `mosaic setup`. Existing schema-2 settings enter an
+explicit advanced replacement: re-enter all profiles you intend to retain and
+inspect the exact catalog, review, routes and limits before confirming. The
+existing execution backend, native artifact identity and Codex executable stay
+as configured by default. For each profile, `k` at the key question explicitly
+retains a saved key for the same identifier, canonical URL and API protocol;
+`y` requires a nonempty hidden replacement and `n` makes that profile keyless.
+Rotating a shared credential reference affects every profile using it; unused
+keys are retained. A different endpoint requires a new key or keyless choice.
+A full private `mosaic setup --config /absolute/path/to/settings.json` remains
+available for an explicit schema-2 replacement. Keys belong in the separate
+credential store. Cancellation, EOF and Ctrl-C before approval preserve saved
+bytes and return nonzero. Rerun `mosaic setup` to resume an already approved
+interrupted change. Concurrent edits and retained approval/owner conflicts stay
+preserved; follow the reported resolution instead of clearing state.
+
+Setup and doctor report saved instructions separately from actual registration,
+discovery and successful calls. `UNVERIFIED` host stages are neutral; doctor
+keeps its existing local-check exit behavior and supplies one `Next action`.
+Real portable setup cannot observe app discovery or calls, so those stages
+remain unverified in doctor even after you check them in the app. They do not
+imply a transport failure. See the [connection steps and safe reconfiguration
+instructions](PORTABLE_BETA_INSTALL.md#verify-the-selected-coding-app-connection).
 
 For isolated local verification, use `./install --home /absolute/disposable/directory --no-path`, run the installed `mosaic setup`, then start the isolated coordinator with `mosaic serve`. Select a non-Codex host to exercise the native check path with Codex absent. This mode uses a private fixture registration and dummy loopback credentials. It does not certify an actual host app, account, login startup or clean-machine installation.
 
