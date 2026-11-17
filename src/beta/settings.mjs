@@ -61,50 +61,94 @@ export function readCredentialsSync(paths){return normalizeCredentials(privateJs
 export async function readCredentials(paths){return readCredentialsSync(paths);}
 export function validateSettingsCredentialsSync(paths,settings,proposedCredentials){const credentials=proposedCredentials===undefined?readCredentialsSync(paths):normalizeCredentials(proposedCredentials);const identity=settings.schema===1&&settings.worker?{...settings,worker:{profile:settings.worker.profile}}:settings;rejectSecretIdentity(identity,credentials);for(const p of settings.providers??[])if(p.credentialRef!==null&&!Object.hasOwn(credentials.entries,p.credentialRef))throw Error('Configured provider credential is unavailable');return credentials;}
 export async function validateSettingsCredentials(paths,settings,proposedCredentials){return validateSettingsCredentialsSync(paths,settings,proposedCredentials);}
-export async function previewSettingsMigration(paths){
- const previous=await readSettings(paths);if(!previous||previous.schema!==1)throw Error('Migration requires readable legacy schema1 settings');const credentials=await readCredentials(paths),providers=[];const nextCredentials=structuredClone(credentials);
+function settingsMigrationPreview(previous,credentials){
+ if(!previous||previous.schema!==1)throw Error('Migration requires readable legacy schema1 settings');const providers=[],nextCredentials=structuredClone(credentials);
  if(previous.worker){const ref=previous.worker.apiKey?'legacy-worker-key':null;if(ref&&Object.hasOwn(credentials.entries,ref)&&credentials.entries[ref]!==previous.worker.apiKey)throw Error('Legacy credential reference is already owned by another value');providers.push(normalizeLegacyWorkerProfile(previous,{id:'legacy-worker',capacityGroup:'legacy-service',credentialRef:ref}));if(ref)nextCredentials.entries[ref]=previous.worker.apiKey;}
  const host=previous.host??{id:'codex',options:{}};const settings=normalizeSettings({schema:2,host,providers,defaults:{workerId:providers[0]?.id??null,plannerWorkerId:providers[0]?.id??null,review:{source:'host',hostId:host.id}},execution:(({version,...value})=>value)(previous.executionPolicy??{version:1,backend:'codex-sandbox',backendRevision:1}),...(previous.codexPath?{codexPath:previous.codexPath}:{}),...(previous.nativeCheckRuntime?{nativeCheckRuntime:previous.nativeCheckRuntime}:{}),serviceMaxConcurrentTasks:1,capacityGroups:providers.length?[{id:'legacy-service',limit:1}]:[]});rejectSecretIdentity(settings,nextCredentials);
  const value={schema:1,kind:'settings-migration',settings,previousConfigHash:fingerprint(previous),previousCredentialsHash:fingerprint(credentials),credentialsHash:fingerprint(nextCredentials)};return {...value,previewHash:fingerprint(value)};
 }
-async function applyMigration(paths,intent,{afterStep=async()=>{}}={}){
- const current=await readSettings(paths),credentials=await readCredentials(paths);if(![intent.previousConfigHash,fingerprint(intent.settings)].includes(fingerprint(current)))throw Error('Settings changed since migration preview; newer state is preserved');if(![intent.previousCredentialsHash,intent.credentialsHash].includes(fingerprint(credentials)))throw Error('Credentials changed since migration preview; newer credentials are preserved');
- const legacy=current.schema===1?current:await ownedJson(path.join(paths.configDir,'migration-legacy.json'));
- let next=credentials;if(fingerprint(credentials)!==intent.credentialsHash){next=structuredClone(credentials);if(legacy?.worker?.apiKey)next.entries['legacy-worker-key']=legacy.worker.apiKey;if(fingerprint(next)!==intent.credentialsHash)throw Error('Cannot recover exact approved credential migration');await saveJson(credentialsFile(paths),next);}await afterStep('credentials');
- if(current.schema!==2)await saveJson(paths.config,intent.settings);await afterStep('settings');
- await saveJson(path.join(paths.configDir,'migration-receipt.json'),{schema:1,previewHash:intent.previewHash,settingsHash:fingerprint(intent.settings),credentialsHash:intent.credentialsHash,complete:true});await afterStep('complete');
+export async function previewSettingsMigration(paths){return settingsMigrationPreview(await readSettings(paths),await readCredentials(paths));}
+const migrationFiles=paths=>({settings:paths.config,credentials:credentialsFile(paths),intent:migrationFile(paths),legacy:path.join(paths.configDir,'migration-legacy.json'),receipt:path.join(paths.configDir,'migration-receipt.json')});
+const migrationReceipt=intent=>({schema:1,previewHash:intent.previewHash,settingsHash:fingerprint(intent.settings),credentialsHash:intent.credentialsHash,complete:true});
+// Keep one baseline across awaited lifecycle calls. Only our own successful writes
+// advance it; rereading after a callback must never adopt a concurrent edit.
+function migrationSnapshot(paths){return Object.fromEntries(Object.entries(migrationFiles(paths)).map(([key,file])=>[key,privateJsonSync(paths,file)]));}
+function assertMigrationSnapshot(paths,snapshot){
+ const current=migrationSnapshot(paths);
+ for(const key of Object.keys(snapshot))if(fingerprint(current[key])!==fingerprint(snapshot[key]))throw Error('Migration '+key+' changed; newer state and recovery evidence are preserved');
+}
+function assertApprovedMigration(intent,snapshot,{create=false}={}){
+ const current=normalizeSettings(snapshot.settings),credentials=normalizeCredentials(snapshot.credentials??{schema:1,entries:{}});
+ if(!(create?[intent.previousConfigHash]:[intent.previousConfigHash,fingerprint(intent.settings)]).includes(fingerprint(current)))throw Error('Settings changed since migration preview; newer state is preserved');
+ if(!(create?[intent.previousCredentialsHash]:[intent.previousCredentialsHash,intent.credentialsHash]).includes(fingerprint(credentials)))throw Error('Credentials changed since migration preview; newer credentials are preserved');
+ if(create?snapshot.intent!==null:canonical(snapshot.intent)!==canonical(intent))throw Error('Migration intent changed; newer state is preserved');
+ const legacy=create?current:snapshot.legacy&&normalizeSettings(snapshot.legacy);
+ if(!legacy||legacy.schema!==1||fingerprint(legacy)!==intent.previousConfigHash||snapshot.legacy!==null&&fingerprint(normalizeSettings(snapshot.legacy))!==intent.previousConfigHash)throw Error('Migration legacy recovery data changed; newer state is preserved');
+ // Reconstruct only the two possible original credential stores: the key either
+ // already existed or was moved from legacy settings. This verifies the original
+ // preview without adopting a rehashed replacement intent after interruption.
+ const previousCredentials=[credentials];
+ if(legacy.worker?.apiKey&&credentials.entries['legacy-worker-key']===legacy.worker.apiKey){const withoutMovedKey=structuredClone(credentials);delete withoutMovedKey.entries['legacy-worker-key'];previousCredentials.push(withoutMovedKey);}
+ if(!previousCredentials.some(previous=>fingerprint(previous)===intent.previousCredentialsHash&&canonical(settingsMigrationPreview(legacy,previous))===canonical(intent)))throw Error('Migration intent changed from the approved legacy transition; newer state is preserved');
+ if(snapshot.receipt!==null&&canonical(snapshot.receipt)!==canonical(migrationReceipt(intent)))throw Error('Migration receipt changed; newer state and recovery evidence are preserved');
+}
+async function saveMigrationStep(paths,snapshot,key,value){
+ assertMigrationSnapshot(paths,snapshot);await saveJson(migrationFiles(paths)[key],value);
+ snapshot[key]=structuredClone(value);assertMigrationSnapshot(paths,snapshot);
+}
+async function applyMigration(paths,intent,snapshot,{afterStep=async()=>{}}={}){
+ assertMigrationSnapshot(paths,snapshot);assertApprovedMigration(intent,snapshot);
+ const current=normalizeSettings(snapshot.settings),credentials=normalizeCredentials(snapshot.credentials??{schema:1,entries:{}}),legacy=current.schema===1?current:snapshot.legacy;
+ if(fingerprint(credentials)!==intent.credentialsHash){const next=structuredClone(credentials);if(legacy?.worker?.apiKey)next.entries['legacy-worker-key']=legacy.worker.apiKey;if(fingerprint(next)!==intent.credentialsHash)throw Error('Cannot recover exact approved credential migration');await saveMigrationStep(paths,snapshot,'credentials',next);}
+ await afterStep('credentials');assertMigrationSnapshot(paths,snapshot);
+ if(current.schema!==2)await saveMigrationStep(paths,snapshot,'settings',intent.settings);
+ await afterStep('settings');assertMigrationSnapshot(paths,snapshot);
+ await saveMigrationStep(paths,snapshot,'receipt',migrationReceipt(intent));
+ await afterStep('complete');assertMigrationSnapshot(paths,snapshot);
  return true;
 }
 export async function assertMigrationStartupReady(paths,settings){
- const intent=await ownedJson(migrationFile(paths));if(!intent)return false;
+ if(!privateJsonSync(paths,migrationFile(paths)))return false;
+ const snapshot=migrationSnapshot(paths),intent=snapshot.intent;if(!intent)return false;
  const {previewHash,...value}=intent;if(fingerprint(value)!==previewHash)throw Error('Invalid pending migration intent');
- const receipt=await ownedJson(path.join(paths.configDir,'migration-receipt.json')),credentials=await readCredentials(paths);
- if(!receipt?.complete||receipt.previewHash!==previewHash||receipt.settingsHash!==fingerprint(settings)||receipt.credentialsHash!==fingerprint(credentials)||fingerprint(intent.settings)!==fingerprint(settings))throw Error('Settings migration is incomplete; resume it before coordinator startup.');
+ const receipt=snapshot.receipt,credentials=normalizeCredentials(snapshot.credentials??{schema:1,entries:{}}),current=normalizeSettings(snapshot.settings);
+ if(fingerprint(current)!==fingerprint(settings))throw Error('Settings changed during migration startup; newer state is preserved');
+ assertApprovedMigration(intent,snapshot);
+ if(!receipt?.complete||receipt.previewHash!==previewHash||receipt.settingsHash!==fingerprint(settings)||receipt.credentialsHash!==fingerprint(credentials)||receipt.credentialsHash!==intent.credentialsHash||fingerprint(intent.settings)!==fingerprint(settings))throw Error('Settings migration is incomplete; resume it before coordinator startup.');
  return true;
 }
 async function migrationPhase(paths,intent,{options={},create=false}={}){
+ const snapshot=migrationSnapshot(paths);assertApprovedMigration(intent,snapshot,{create});
  const service=await import('./service.mjs'),lifecycle={...service,...options.lifecycle};
- await service.assertSettingsMaintenanceAllowed(paths,{kind:'migration'});
- const hadAgent=await lifecycle.verifyLaunchAgent(paths);
- let ready=false;try{ready=await assertMigrationStartupReady(paths,await readSettings(paths));}catch(error){if(!/incomplete/.test(error.message))throw error;}
+ assertMigrationSnapshot(paths,snapshot);
+ await service.assertSettingsMaintenanceAllowed(paths,{kind:'migration'});assertMigrationSnapshot(paths,snapshot);
+ const hadAgent=await lifecycle.verifyLaunchAgent(paths);assertMigrationSnapshot(paths,snapshot);
+ let ready=false;try{ready=await assertMigrationStartupReady(paths,normalizeSettings(snapshot.settings));}catch(error){if(!/incomplete/.test(error.message))throw error;}
+ assertMigrationSnapshot(paths,snapshot);
  if(!ready){
-  await service.assertMaintenanceIdle(paths,{settingsMigration:true});
-  await lifecycle.stopForMaintenance(paths,{recovering:true});
-  await service.assertMaintenanceIdle(paths,{settingsMigration:true,offline:true});
-  if(create){await saveJson(path.join(paths.configDir,'migration-legacy.json'),await readSettings(paths));await saveJson(migrationFile(paths),intent);await options.afterStep?.('intent');}
-  await applyMigration(paths,intent,options);
+  await service.assertMaintenanceIdle(paths,{settingsMigration:true});assertMigrationSnapshot(paths,snapshot);
+  await lifecycle.stopForMaintenance(paths,{recovering:true});assertMigrationSnapshot(paths,snapshot);
+  await service.assertMaintenanceIdle(paths,{settingsMigration:true,offline:true});assertMigrationSnapshot(paths,snapshot);
+  if(create){await saveMigrationStep(paths,snapshot,'legacy',snapshot.settings);await saveMigrationStep(paths,snapshot,'intent',intent);await options.afterStep?.('intent');assertMigrationSnapshot(paths,snapshot);}
+  await applyMigration(paths,intent,snapshot,options);assertMigrationSnapshot(paths,snapshot);
  }
- return {intent,hadAgent};
+ return {intent,hadAgent,snapshot};
 }
 async function finishMigration(paths,plan,options){
  const service=await import('./service.mjs'),lifecycle={...service,...options.lifecycle};
- if(plan.hadAgent)await lifecycle.startLaunchAgent(paths);
- return withLock(paths,async()=>{await service.assertSettingsMaintenanceAllowed(paths,{kind:'migration'});const current=await ownedJson(migrationFile(paths));if(canonical(current)!==canonical(plan.intent))throw Error('Migration intent changed during owned restart; preserve newer state.');await assertMigrationStartupReady(paths,await readSettings(paths));await rm(migrationFile(paths),{force:true});await rm(path.join(paths.configDir,'migration-legacy.json'),{force:true});return true;});
+ assertMigrationSnapshot(paths,plan.snapshot);
+ if(plan.hadAgent){await lifecycle.startLaunchAgent(paths);assertMigrationSnapshot(paths,plan.snapshot);}
+ return withLock(paths,async()=>{
+  assertMigrationSnapshot(paths,plan.snapshot);await service.assertSettingsMaintenanceAllowed(paths,{kind:'migration'});assertMigrationSnapshot(paths,plan.snapshot);
+  await assertMigrationStartupReady(paths,normalizeSettings(plan.snapshot.settings));assertMigrationSnapshot(paths,plan.snapshot);
+  for(const key of ['intent','legacy']){assertMigrationSnapshot(paths,plan.snapshot);await rm(migrationFiles(paths)[key],{force:true});plan.snapshot[key]=null;assertMigrationSnapshot(paths,plan.snapshot);}
+  return true;
+ });
 }
 export async function applySettingsMigration(paths,preview,options={}){
  const plan=await withLock(paths,async()=>{
-  const {previewHash,...value}=preview??{};if(fingerprint(value)!==previewHash)throw Error('Migration preview changed');const actual=await previewSettingsMigration(paths);if(actual.previewHash!==previewHash)throw Error('Settings or credentials changed since migration preview');if(await entry(migrationFile(paths)))throw Error('Migration is pending; resume it before another apply');
-  return migrationPhase(paths,preview,{options,create:true});
+  const {previewHash,...value}=preview??{};if(fingerprint(value)!==previewHash)throw Error('Migration preview changed');const intent=structuredClone(preview),actual=await previewSettingsMigration(paths);if(actual.previewHash!==previewHash)throw Error('Settings or credentials changed since migration preview');if(await entry(migrationFile(paths)))throw Error('Migration is pending; resume it before another apply');
+  return migrationPhase(paths,intent,{options,create:true});
  });
  return finishMigration(paths,plan,options);
 }
