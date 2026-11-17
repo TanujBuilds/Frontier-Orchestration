@@ -15,7 +15,7 @@ import {git} from '../src/project/process.mjs';
 import {actorRows} from '../src/beta/observer.mjs';
 
 // All services, repositories and requests in this entry belong to this fixture.
-async function fixture(t,{hostId='cursor',api=false,coding=false,reviews=2}={}){
+async function fixture(t,{hostId='cursor',api=false,coding=false,reviews=2,credentialResolver=()=> 'OWNED_SECRET_CANARY'}={}){
  const root=await mkdtemp(path.join(os.tmpdir(),'observer-review-'));
  let reply={decision:'accept',feedback:'Owned fixture meets acceptance',findings:[]},release,entered;
  let posts=0,reportedModel='reported-review-model',usage={total_tokens:0},disconnect=false;
@@ -28,7 +28,7 @@ async function fixture(t,{hostId='cursor',api=false,coding=false,reviews=2}={}){
  }):null;
  if(server)await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
  const profile=api?{schema:1,id:'fixture-reviewer',revision:'r1',displayName:'Owned reviewer',transport:'openai-chat',baseUrl:`http://127.0.0.1:${server.address().port}/v1`,model:'requested-review-model',roles:['reviewer'],capabilities:{workerProtocol:null,transports:['json'],modelDiscovery:'manual',taskKinds:[]},maxContextTokens:8192,maxOutputTokens:2048,concurrency:1,capacityGroup:'owned-review',credentialRef:'fixture-only',streaming:false}:null;
- const providers=api?ProviderRegistry({profiles:[profile],credentialResolver:()=> 'OWNED_SECRET_CANARY'}):undefined;
+ const providers=api?ProviderRegistry({profiles:[profile],credentialResolver}):undefined;
  const c=new Coordinator({root:path.join(root,'state'),beta:true,selectedHost:hostId,providerRegistry:providers,...(api?{workerProfile:{displayName:'Owned worker',baseUrl:'https://owned.invalid/v1',model:'fixture',revision:'r1',streaming:false}}:{})});
  t.after(async()=>{release?.();c.releaseWorker('fixture-owner');c.close();if(server){server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}await rm(root,{recursive:true,force:true});});
  let project;
@@ -151,6 +151,27 @@ test('API invalid verdicts never become host activity or acceptance',async t=>{
  await assert.rejects(f.c.reviewService.runApi(await f.binding(),'invalid-api'));
  const row=f.snapshot().tasks[0];assert.equal(row.review.status,'blocked');assert.equal(row.review.identityProvenance,'reported');
  assert.equal(f.reviewRow().actor,'API review · fixture-reviewer');assert.equal(f.reviewRow().provenance,'captured');assert.equal(row.outcome.review,'No recorded review');
+});
+
+test('pre-POST credential failure remains coordinator evidence with unknown response metadata',async t=>{
+ let lookups=0;
+ const f=await fixture(t,{api:true,credentialResolver:()=>{lookups++;return Promise.reject(Error('Owned credential lookup failure'));}});
+ await f.candidate();
+ const binding=await f.binding();await assert.rejects(f.c.reviewService.runApi(binding,'credential-failure'),/failed.*spent/i);
+ assert.equal(lookups,1);assert.equal(f.posts(),0);
+ const request=f.c.store.db.prepare("SELECT * FROM requests WHERE kind='apiReview'").get(),data=JSON.parse(request.data),ticket=f.c.store.get('review_ticket',data.ticketId);
+ assert.equal(request.status,'failed');assert.equal(data.requestOutcome,'not_dispatched');assert.equal(Object.hasOwn(data,'result'),false);
+ assert.equal(ticket.requestId,request.id);assert.equal(ticket.status,'reserved');assert.deepEqual(ticket.binding,binding);
+ const before={revision:f.c.store.revision(),goal:f.c.getGoal(f.g.id),task:f.c.getTask(f.task.id),ticket,request};
+ const row=f.snapshot().tasks[0],reviewer=f.reviewRow();
+ t.diagnostic(JSON.stringify({posts:f.posts(),credentialLookups:lookups,requestStatus:request.status,requestOutcome:data.requestOutcome,resultPresent:Object.hasOwn(data,'result'),ticketStatus:ticket.status,review:row.review,actorRow:reviewer,spent:before.task.spent}));
+ assert.equal(row.review.status,'blocked');assert.equal(row.review.provenance,'coordinator');
+ assert.equal(row.review.reportedModel,null);assert.equal(row.review.identityProvenance,'unknown');assert.equal(row.review.usage,null);
+ assert.equal(reviewer.state,'blocked');assert.equal(reviewer.provenance,'coordinator');assert.equal(reviewer.actor,'API review · fixture-reviewer');
+ assert.equal(row.outcome.review,'No recorded review');assert.equal(before.task.spent.apiReview,1);assert.equal(before.task.reviews,1);
+ for(let i=0;i<3;i++){f.snapshot();f.rows();}
+ assert.deepEqual({revision:f.c.store.revision(),goal:f.c.getGoal(f.g.id),task:f.c.getTask(f.task.id),ticket:f.c.store.get('review_ticket',ticket.id),request:f.c.store.db.prepare('SELECT * FROM requests WHERE id=?').get(request.id)},before);
+ assert.equal(f.posts(),0);assert.equal(lookups,1);
 });
 
 test('API missing model and usage stay unknown while ambiguous requests remain spent',async t=>{

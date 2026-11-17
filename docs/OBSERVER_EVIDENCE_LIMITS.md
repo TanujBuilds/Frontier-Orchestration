@@ -30,6 +30,9 @@ captured API response. Only a fresh host reviewer report after reservation can
 describe active review. A reservation alone does not prove activity. A requested
 model is a configured identity; an API-reported model remains reported, and an
 unreported model remains unknown. Host token accounting remains unavailable.
+Captured API review requires a bound, completed request with a saved response.
+Failures before POST remain coordinator evidence, with unknown response model
+and usage; their original reservation remains spent.
 
 Provider token totals count only nonnegative safe integers. Zero is known usage;
 missing, negative, fractional, string and unsafe values are unavailable. Partial
