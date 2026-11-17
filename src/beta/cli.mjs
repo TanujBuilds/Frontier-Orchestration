@@ -39,7 +39,12 @@ export async function main(args=process.argv.slice(2)){
  if(args.includes('--help')||args[0]==='help'){process.stdout.write(help);return;}
  if(args[0]==='support-bundle'){
   args.shift();
-  if(home!==undefined)args.unshift('--home',home);
+  if(home!==undefined){
+   const index=args.indexOf('--home');
+   // An isolated managed launcher already supplies its explicit home.
+   if(index!==-1&&args[index+1]===home&&args.indexOf('--home',index+1)===-1)args.splice(index,2);
+   args.unshift('--home',home);
+  }
   process.exitCode=await (await import('./support-bundle.mjs')).runSupportBundle(args);
   return;
  }

@@ -55,3 +55,20 @@ test('explicit global home writes the preview once and preserves existing output
  });
  assert.equal(await readFile(file,'utf8'),stdout);
 });
+
+test('an isolated launcher home accepts the same explicit support home',async t=>{
+ const {home}=await fixture(t);
+ const {stdout}=await run('--home',home,'support-bundle','--home',home);
+ const bundle=JSON.parse(stdout);
+ assert.equal(bundle.kind,'mosaic-redacted-support');
+ assert.equal(bundle.local.settings.host,'codex');
+ assert.equal(bundle.collection.viewerCalls,0);
+});
+
+test('a support home conflicting with the launcher home is rejected before collection',async t=>{
+ const {home}=await fixture(t),other=await fixture(t);
+ await assert.rejects(run('--home',home,'support-bundle','--home',other.home),error=>{
+  assert.equal(error.code,2);assert.equal(error.stdout,'');
+  assert.match(error.stderr,/USAGE: --home ABS/);return true;
+ });
+});
