@@ -1,7 +1,9 @@
 import {createHash} from 'node:crypto';
-import {keys,identifier,integer} from './contracts.mjs';
+import {keys,identifier,integer,digest} from './contracts.mjs';
 import {normalizeObserverQuery,normalizeActivityEvent,OBSERVER_LIMITS} from './collaboration-contracts.mjs';
 import {storedWorkerAttribution} from './outcomes/attribution.mjs';
+import {normalizeReviewPolicy,assertReviewMode,reviewerIdentity} from './review/contracts.mjs';
+import {savedCandidateIdentity,reviewRubric} from './review/evidence.mjs';
 
 export const OBSERVER_TOOLS=new Set(['tools_list','observer_snapshot','observer_timeline','observer_evidence','observer_artifacts']);
 const terminal=new Set(['accepted','failed','partial','cancelled']);
@@ -21,6 +23,84 @@ const label=type=>({
  })[type]??type.replaceAll('.',' ');
 const trim=value=>String(value).slice(0,2000);
 const snapshotCacheLimit=8;
+const hostNames={codex:'Codex','claude-code':'Claude Code',cursor:'Cursor',antigravity:'Antigravity'};
+// Project only approved identities, never provider endpoints, credentials or
+// candidate source. The legacy reviewPolicy string remains a separate field.
+function reviewSelection(goal){
+ if(!goal.manifest.reviewPolicy)return null;
+ try{
+  const policy=normalizeReviewPolicy(goal.manifest.reviewPolicy);assertReviewMode(goal.manifest.mode,policy);
+  if(goal.hash!==digest(goal.manifest)||goal.manifest.reviewPolicyHash!==digest(policy))throw Error('Changed approval');
+  return policy.source==='host'?{source:'host',hostId:policy.hostId}:{source:'api',providerId:policy.reviewer.id,revision:policy.reviewer.revision,requestedModel:trim(policy.reviewer.model)};
+ }catch{return {source:'unknown'};}
+}
+function tokenTotal(values){
+ let sum=0,known=0,overflow=false;
+ for(const value of values)if(Number.isSafeInteger(value)&&value>=0){known++;if(value>Number.MAX_SAFE_INTEGER-sum)overflow=true;else sum+=value;}
+ return {reportedTokens:known&&!overflow?sum:null,completedModelRequests:values.length,usageUnavailable:values.length-known,...(overflow?{aggregateOverflow:true}:{})};
+}
+function commonReview(store,task,goal,selection){
+ const base={...selection,status:'waiting',ticketId:null,at:null,expiresAt:null,provenance:'coordinator',identityProvenance:'unknown',reportedModel:null,usage:null};
+ if(selection.source==='unknown')return {...base,status:'unavailable'};
+ const tickets=store.db.prepare("SELECT data FROM records WHERE kind='review_ticket' AND json_extract(data,'$.taskId')=? ORDER BY rowid DESC").all(task.id).map(row=>JSON.parse(row.data));
+ const identity=savedCandidateIdentity(task),checks=task.spec.kind==='coding'?task.result?.checks??[]:[];
+ const expectedReviewer=reviewerIdentity(goal.manifest.reviewPolicy);
+ const current=tickets.find(ticket=>{
+  const b=ticket.binding;
+  return ticket.goalId===goal.id&&b?.goalId===goal.id&&b.taskId===task.id&&b.goalHash===goal.hash&&b.goalVersion===goal.version&&task.goalVersion===goal.version&&
+   task.hash===digest(task.spec)&&b.reviewPolicyHash===goal.manifest.reviewPolicyHash&&b.generation===(task.native?.generation??task.checkpoint?.attempt??1)&&
+   b.expiresAt===Math.min(goal.deadline,task.deadline??goal.deadline)&&b.rubricHash===digest(reviewRubric(goal,task))&&b.checksHash===digest(checks)&&
+   digest(ticket.savedCandidateIdentity)===digest(identity)&&
+   b.candidateHash===digest(task.spec.kind==='coding'?{...identity,snapshotHash:ticket.snapshotHash,executableModesHash:ticket.executableModesHash}:identity)&&
+   (selection.source==='host'?ticket.reviewer?.source==='host'&&ticket.reviewer.hostId===selection.hostId:ticket.reviewer?.source==='api'&&ticket.reviewer.providerId===selection.providerId&&ticket.reviewer.revision===selection.revision&&ticket.reviewer.profileHash===expectedReviewer.profileHash);
+ });
+ if(!current)return {...base,status:tickets.length?'stale':task.status==='blocked'?'blocked':task.status==='running'&&task.checkpoint?.phase==='checks'?'checks':task.status==='awaiting_review'?'waiting':'inactive'};
+ const view={...base,ticketId:current.id,at:current.completedAt??current.createdAt,expiresAt:current.expiresAt};
+ if(!['reserved','completed'].includes(current.status))return {...view,status:'stale'};
+ if(selection.source==='api'){
+  const row=store.db.prepare("SELECT status,data FROM requests WHERE id=? AND task_id=? AND kind='apiReview'").get(current.requestId,task.id),request=row?JSON.parse(row.data):null;
+  const bound=request?.ticketId===current.id&&request.inputHash===digest(current.binding)&&request.reviewerBinding?.providerId===selection.providerId&&request.reviewerBinding?.revision===selection.revision&&request.reviewerBinding?.profileHash===expectedReviewer.profileHash&&request.reviewerBinding?.policyHash===goal.manifest.reviewPolicyHash;
+  if(bound){
+   view.provenance=row.status==='completed'||row.status==='failed'?'captured':'coordinator';
+   view.reportedModel=typeof request.result?.reportedModel==='string'?trim(request.result.reportedModel):null;
+   view.identityProvenance=view.reportedModel?'reported':'unknown';
+   view.usage=tokenTotal(row.status==='completed'?[request.result?.usage?.totalTokens]:[]);
+  }
+  if(current.status==='completed'&&(!bound||row.status!=='completed'||request.requestOutcome!=='completed'))return {...view,status:'unavailable'};
+  if(current.status==='reserved'&&(row?.status==='failed'||task.reviewWait))return {...view,status:'blocked'};
+ }
+ if(current.status==='reserved')return {...view,status:'reserved'};
+ if(current.verdictHash!==digest(current.verdict))return {...view,status:'unavailable'};
+ if(current.verdict?.decision==='revise')return {...view,status:task.status==='blocked'?'blocked':'revision',decision:'revise'};
+ const accept=task.reviewAcceptance;
+ const accepted=current.verdict?.decision==='accept'&&task.reviewed===true&&accept?.ticketId===current.id&&accept.verdictHash===current.verdictHash&&digest(accept.binding)===digest(current.binding)&&['ready_to_integrate','accepted'].includes(task.status);
+ if(!accepted)return {...view,status:'stale'};
+ const integrated=task.status==='accepted'&&/^[a-f0-9]{40}$/.test(task.integration?.commit??'')&&task.integration?.review===(selection.source==='host'?'host_review':'api_review')&&digest(task.integration?.reviewAcceptance??null)===digest(accept);
+ return {...view,status:integrated?'integrated':'accepted',decision:'accept'};
+}
+function reviewLabel(review){
+ const name=review.source==='host'?hostNames[review.hostId]:'API';
+ return review.decision==='accept'?name+' review accepted':review.decision==='revise'?name+' requested changes':'No recorded review';
+}
+function eventReviewer(store,event){
+ if(['agent.registered','agent.reported'].includes(event.type)){
+  const agent=event.data?.agentId?store.maybe('agent',event.data.agentId):null;
+  if(agent?.role==='reviewer'&&agent.taskId===event.task_id&&agent.goalId===event.goal_id&&hostNames[agent.hostId])return {source:'host',hostId:agent.hostId,name:hostNames[agent.hostId]+' reviewer',kind:'agent'};
+ }
+ if(event.type.startsWith('model.request.')&&event.data?.kind==='apiReview'){
+  const row=store.db.prepare("SELECT task_id,status,data FROM requests WHERE id=? AND kind='apiReview'").get(event.data.requestId??'');
+  const request=row?JSON.parse(row.data):null,ticket=request?.ticketId?store.maybe('review_ticket',request.ticketId):null;
+  const bound=row?.task_id===event.task_id&&ticket?.taskId===event.task_id&&ticket.goalId===event.goal_id&&ticket.requestId===event.data.requestId&&ticket.reviewer?.source==='api'&&request.inputHash===digest(ticket.binding)&&
+   request.reviewerBinding?.providerId===ticket.reviewer.providerId&&request.reviewerBinding?.revision===ticket.reviewer.revision&&request.reviewerBinding?.profileHash===ticket.reviewer.profileHash&&digest(event.data.providerBinding??null)===digest(request.reviewerBinding);
+  return {source:'api',name:'API review · '+(bound?trim(ticket.reviewer.providerId):'identity unknown'),kind:'request',captured:bound&&event.type==='model.request.completed'&&row.status==='completed'&&request.requestOutcome==='completed'};
+ }
+ if(!['review.reserved','review.stale','task.reviewed','task.integrated'].includes(event.type))return null;
+ const id=event.data?.ticketId??event.data?.reviewAcceptance?.ticketId;
+ const ticket=id?store.maybe('review_ticket',id):null;
+ if(ticket?.taskId!==event.task_id||ticket.goalId!==event.goal_id)return null;
+ const reviewer=ticket.reviewer;
+ return reviewer?.source==='api'?{source:'api',name:'API review'}:reviewer?.source==='host'&&hostNames[reviewer.hostId]?{source:'host',hostId:reviewer.hostId,name:hostNames[reviewer.hostId]+' review'}:null;
+}
 function taskProfile(store,task) {
  if(task.providerBinding){
   const worker=storedWorkerAttribution(store,task);
@@ -30,14 +110,14 @@ function taskProfile(store,task) {
  const goal=store.get('goal',task.goalId);
  return (task.goalVersion===goal.version?goal:store.maybe('goal_history',`${goal.id}-${task.goalVersion}`))?.manifest.workerProfile;
 }
-function outcome(t){
+function outcome(t,common){
  const result=t.result??{},integration=t.integration,checks=integration?.checks??result.checks;
  const files=[...new Set([...(Array.isArray(result.changes)?result.changes:[]),...(Array.isArray(result.newFiles)?result.newFiles:[])].map(x=>x?.path).filter(x=>typeof x==='string'))].slice(0,50).map(x=>x.slice(0,200));
  const integrated=t.status==='accepted'&&/^[a-f0-9]{40}$/.test(integration?.commit??'');
  const currentReview=result&&t.result&&['ready_to_integrate','accepted','blocked'].includes(t.status);
  const feedback=currentReview&&t.reviewed===true?t.feedback?.findLast(x=>['accept','revise'].includes(x.decision)):null;
  const legacy=currentReview?t.legacyDecision:null;
- const review=(integrated?({none:'Checks only; no Codex review',codex_operator:'Codex review accepted',codex_legacy:'Codex automatic review accepted',codex_native:'Native completion; no separate review recorded'})[integration.review]:null)??(legacy?legacy.decision==='accept'?'Codex automatic review accepted':'Codex requested changes':feedback?feedback.decision==='accept'?'Codex review accepted':'Codex requested changes':'No recorded review');
+ const review=common?reviewLabel(common):(integrated?({none:'Checks only; no Codex review',codex_operator:'Codex review accepted',codex_legacy:'Codex automatic review accepted',codex_native:'Native completion; no separate review recorded'})[integration.review]:null)??(legacy?legacy.decision==='accept'?'Codex automatic review accepted':'Codex requested changes':feedback?feedback.decision==='accept'?'Codex review accepted':'Codex requested changes':'No recorded review');
  const summary=result.summary??result.workerSummary;
  return {summary:typeof summary==='string'?trim(summary):null,files,checks:Array.isArray(checks)&&checks.length&&checks.every(x=>typeof x?.passed==='boolean')?{passed:checks.filter(x=>x.passed).length,total:checks.length}:null,review,integrated,commit:/^[a-f0-9]{40}$/.test(integration?.commit??'')?integration.commit:null};
 }
@@ -51,6 +131,8 @@ export class Observer {
  constructor({c,artifacts}){this.c=c;this.artifacts=artifacts;this.snapshots=new Map();}
  actor(event){
   const d=event.data??{},t=event.task_id?this.c.store.maybe('task',event.task_id):null;
+  const reviewer=eventReviewer(this.c.store,event);
+  if(reviewer)return reviewer.source==='host'&&reviewer.hostId==='codex'?'codex':null;
   if(['codex','deepseek'].includes(d.actor))return d.actor;
   if(d.agentId){const agent=this.c.store.maybe('agent',d.agentId);if(agent)return agent.actor;}
   if(event.type==='agent.reported')return 'codex';
@@ -63,11 +145,13 @@ export class Observer {
  normalized(event){
   const d=event.data??{},actor=this.actor(event),requestId=d.requestId??(event.type.startsWith('request.')?d.id:null)??null;
   let summary=typeof d.summary==='string'?d.summary:label(event.type);
+  const reviewer=eventReviewer(this.c.store,event);
+  if(reviewer)summary=reviewer.name+(reviewer.kind==='agent'?(event.type==='agent.reported'?' · '+summary:' registered'):reviewer.kind==='request'?(event.type==='model.request.started'?' request started':event.type==='model.request.completed'?' response saved':' request failed'):event.type==='task.reviewed'?(d.decision==='accept'?' accepted':' requested changes'):event.type==='review.reserved'?' reserved':event.type==='review.stale'?' became stale':': accepted changes integrated');
   if(['task.question','task.answered'].includes(event.type)&&typeof d.text==='string')summary=d.text;
   if(event.type==='coding.files.read'&&Array.isArray(d.files))summary='Read '+d.files.map(f=>f.path).filter(x=>typeof x==='string').join(', ');
   if(d.reason&&typeof d.reason==='string')summary+=': '+d.reason;
   const artifactIds=[...(event.task_id?['task-'+event.task_id]:[]),...(requestId?['request-'+requestId]:[])];
-  const normalized=normalizeActivityEvent({version:1,seq:event.seq,at:event.at,goalId:event.goal_id,taskId:event.task_id,agentId:d.agentId??null,requestId,type:event.type,actor,provenance:['captured','reported','coordinator'].includes(d.provenance)?d.provenance:event.type==='agent.reported'?'reported':'coordinator',summary:trim(summary),artifactIds});
+  const normalized=normalizeActivityEvent({version:1,seq:event.seq,at:event.at,goalId:event.goal_id,taskId:event.task_id,agentId:d.agentId??null,requestId,type:event.type,actor,provenance:reviewer?.kind==='request'?(reviewer.captured?'captured':'coordinator'):['captured','reported','coordinator'].includes(d.provenance)?d.provenance:event.type==='agent.reported'?'reported':'coordinator',summary:trim(summary),artifactIds});
   if(!this.c.beta||actor!=='deepseek')return normalized;
   const task=event.task_id?this.c.store.maybe('task',event.task_id):null,goal=event.goal_id?this.c.store.maybe('goal',event.goal_id):null;
   const row=requestId?this.c.store.db.prepare('SELECT data FROM requests WHERE id=?').get(requestId):null;
@@ -94,11 +178,7 @@ export class Observer {
   return {events,cursor,scanned,hasMore};
  }
  usage(taskId){
-  let sum=0,known=0,count=0;
-  for(const row of this.c.store.db.prepare("SELECT data FROM requests WHERE task_id=? AND kind='model' AND status='completed'").all(taskId)){
-   count++;const value=JSON.parse(row.data).result?.usage?.total_tokens;if(Number.isSafeInteger(value)&&value>=0){known++;sum+=value;}
-  }
-  return {reportedTokens:known?sum:null,completedModelRequests:count,usageUnavailable:count-known};
+  return tokenTotal(this.c.store.db.prepare("SELECT data FROM requests WHERE task_id=? AND kind='model' AND status='completed'").all(taskId).map(row=>JSON.parse(row.data).result?.usage?.total_tokens));
  }
  snapshot(raw={}){
   keys(raw,['goalId','actor'],'snapshot query');
@@ -124,6 +204,7 @@ export class Observer {
   const now=this.c.now(),result=structuredClone(snapshot);
   result.generatedAt=now;
   for(const agent of result.agents)agent.stale=!agent.lastReport||now-agent.lastReport.at>120000;
+  for(const task of result.tasks)if(task.review?.status==='reserved'&&now>=task.review.expiresAt)task.review.status='expired';
   return result;
  }
  readSnapshot(q){
@@ -133,13 +214,16 @@ export class Observer {
   // and model output can make each payload larger than SQLite's sort buffer.
   const tasks=Array.from(db.prepare("SELECT rowid FROM records WHERE kind='task' AND (? IS NULL OR json_extract(data,'$.goalId')=?) AND (? IS NULL OR COALESCE(json_extract(data,'$.executionActor'),json_extract(data,'$.spec.actor'))=?) ORDER BY json_extract(data,'$.status') NOT IN ('accepted','failed','partial','cancelled') DESC,rowid DESC LIMIT 501").iterate(q.goalId,q.goalId,q.actor,q.actor),row=>JSON.parse(readRecord.get(row.rowid).data));
   const selected=tasks.slice(0,500);
-  const agents=this.c.store.db.prepare("SELECT data FROM records WHERE kind='agent' AND (? IS NULL OR json_extract(data,'$.goalId')=?) ORDER BY rowid DESC LIMIT 500").all(q.goalId,q.goalId).map(r=>JSON.parse(r.data)).filter(a=>!q.actor||a.actor===q.actor).map(a=>({id:a.id,taskId:a.taskId,goalId:a.goalId,actor:a.actor,role:a.role,hostAgentId:a.hostAgentId??null,model:a.model??{requested:null,resolved:null},modelSource:a.modelSource??'unknown',lastReport:a.lastReport??null,provenance:'reported',accounting:{tokens:null,source:'native host accounting unavailable'}}));
+  const agents=this.c.store.db.prepare("SELECT data FROM records WHERE kind='agent' AND (? IS NULL OR json_extract(data,'$.goalId')=?) ORDER BY rowid DESC LIMIT 500").all(q.goalId,q.goalId).map(r=>JSON.parse(r.data)).filter(a=>!q.actor||a.actor===q.actor).map(a=>({id:a.id,taskId:a.taskId,goalId:a.goalId,actor:a.actor,role:a.role,...(a.hostId?{hostId:a.hostId}:{}),hostAgentId:a.hostAgentId??null,model:a.model??{requested:null,resolved:null},modelSource:a.modelSource??'unknown',lastReport:a.lastReport??null,provenance:'reported',accounting:{tokens:null,source:'native host accounting unavailable'}}));
   const rows=selected.map(t=>{
    const actor=t.executionActor??t.spec.actor,event=this.c.store.db.prepare("SELECT seq,at,type,data FROM events WHERE task_id=? AND type!='model.output' AND (?!='deepseek' OR json_extract(data,'$.provenance')='captured') ORDER BY seq DESC LIMIT 1").get(t.id,actor),last=event?{...event,data:JSON.parse(event.data)}:null,registered=agents.find(a=>a.taskId===t.id&&a.actor===actor);
    return {id:t.id,goalId:t.goalId,objective:trim(t.spec.objective),objectiveTruncated:t.spec.objective.length>2000,kind:t.spec.kind,actor,status:t.status,phase:last?.data.phase??t.checkpoint?.phase??null,priority:t.priority??t.spec.priority,provenance:actor==='codex'?'reported':'captured',lastActivityAt:actor==='codex'?registered?.lastReport?.at??null:last?.at??null,lastActivity:actor==='codex'?registered?.lastReport?.summary??null:last?label(last.type):null,model:actor==='codex'?registered?.model??{requested:null,resolved:null}:{requested:null,resolved:typeof (t.providerModel??t.result?.model)==='string'?trim(t.providerModel??t.result.model):null},spent:this.c.getTask(t.id).spent,usage:actor==='codex'?{reportedTokens:null,completedModelRequests:0,usageUnavailable:null}:this.usage(t.id),deadline:t.deadline,question:t.questions?.length?{...t.questions.at(-1),text:trim(t.questions.at(-1).text??'')}:null,candidate:t.native?{layout:t.native.layout??'legacy',writerActive:t.native.writerActive??null,baseCommit:t.native.baseCommit??null,commit:t.native.commit??null}:null,evidenceRef:'task-'+t.id};
   });
   for(let index=0;index<rows.length;index++){
-   const task=selected[index],row=rows[index];row.outcome=outcome(task);
+   const task=selected[index],row=rows[index],goal=this.c.store.get('goal',task.goalId),selection=reviewSelection(goal);
+   const review=selection?commonReview(this.c.store,task,goal,selection):null;
+   if(this.c.beta&&review)row.review=review;
+   row.outcome=outcome(task,review);
    if(this.c.beta){
     row.updatedAt=this.c.store.db.prepare('SELECT at FROM events WHERE task_id=? ORDER BY seq DESC LIMIT 1').get(task.id)?.at??null;
     if(task.spec.kind==='coding'){
@@ -164,7 +248,8 @@ export class Observer {
   }
   const goals=Array.from(db.prepare("SELECT rowid FROM records WHERE kind='goal' AND (? IS NULL OR id=?) ORDER BY json_extract(data,'$.status')='active' DESC,rowid DESC LIMIT 100").iterate(q.goalId,q.goalId),row=>{
    const g=JSON.parse(readRecord.get(row.rowid).data);
-   return {id:g.id,objective:trim(g.manifest.objective),status:g.status,mode:g.manifest.mode.id,...(this.c.selectedHost?{hostId:this.c.selectedHost}:{}),...(this.c.beta?{reviewPolicy:g.manifest.mode.review,workerProfile:g.manifest.workerProfile??null}:{}),environment:g.manifest.environment,deadline:g.deadline,maxTasks:g.manifest.limits.maxTasks,taskCount:counts.get(g.id)??0};
+   const selection=reviewSelection(g);
+   return {id:g.id,objective:trim(g.manifest.objective),status:g.status,mode:g.manifest.mode.id,...(this.c.selectedHost?{hostId:this.c.selectedHost}:{}),...(this.c.beta?{reviewPolicy:g.manifest.mode.review,...(selection?{reviewSelection:selection}:{}),workerProfile:g.manifest.workerProfile??null}:{}),environment:g.manifest.environment,deadline:g.deadline,maxTasks:g.manifest.limits.maxTasks,taskCount:counts.get(g.id)??0};
   });
   const cursor=Number(this.c.store.db.prepare('SELECT COALESCE(MAX(seq),0) AS n FROM events').get().n);
   const reviewers=this.c.beta?this.c.store.db.prepare("SELECT data FROM records WHERE kind='reviewer' AND (? IS NULL OR json_extract(data,'$.goalId')=?) ORDER BY rowid DESC LIMIT 100").all(q.goalId,q.goalId).map(r=>{const {id,taskId,goalId,status,at,finishedAt}=JSON.parse(r.data);return {id,taskId,goalId,status,at:finishedAt??at};}):undefined;
