@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "generatedAt": 1000000,
+  "goals": [{"id":"PRIVATE_ID","objective":"SENTINEL_OBJECTIVE","status":"active","mode":"codex_only","environment":"SENTINEL_SOURCE"}],
+  "tasks": [
+    {"id":"PRIVATE_TASK","objective":"SENTINEL_OBJECTIVE","status":"codex_active","actor":"codex","usage":{"reportedTokens":null,"usageUnavailable":null},"question":{"text":"SENTINEL_QUESTION"},"model":{"resolved":"SENTINEL_MODEL"},"outcome":{"summary":"SENTINEL_SUMMARY","files":["/private/SENTINEL_PATH"]}},
+    {"status":"accepted","actor":"deepseek","usage":{"reportedTokens":42,"completedModelRequests":1,"usageUnavailable":0},"worker":{"baseUrl":"http://127.0.0.1:1/SENTINEL_ENDPOINT?token=SENTINEL_TOKEN","credentials":{"apiKey":"SENTINEL_CREDENTIAL"}}}
+  ],
+  "agents": [{"actor":"codex","role":"implementer","stale":true,"lastReport":{"summary":"SENTINEL_REPORT","at":1},"accounting":{"tokens":0,"source":"SENTINEL_ACCOUNTING"}}],
+  "events": [
+    {"type":"task.native_started","summary":"SENTINEL_EVENT","data":{"nested":{"credential":"SENTINEL_NESTED"}}},
+    {"type":"SENTINEL_UNKNOWN_TYPE","summary":"ordinary harmless text also stays private"}
+  ],
+  "error":"SENTINEL_ERROR"
+}
