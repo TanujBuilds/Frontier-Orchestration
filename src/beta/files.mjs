@@ -1,6 +1,8 @@
 import {DatabaseSync} from 'node:sqlite';
 import {randomUUID,createHash} from 'node:crypto';
-import {lstat,mkdir,open,readFile,realpath,rename,rm,writeFile} from 'node:fs/promises';
+import {lstat,mkdir,open,realpath,rename,rm,writeFile} from 'node:fs/promises';
+import {constants} from 'node:fs';
+import {constants as bufferConstants} from 'node:buffer';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -27,10 +29,30 @@ export async function entry(file){
 }
 
 export async function fileBytes(file,{max=1024*1024,privateFile=false}={}){
- const info=await entry(file);
- if(!info)return null;
- if(!info.isFile()||info.size>max||privateFile&&(info.mode&0o077))throw Error('Unsafe file permissions or type at '+file);
- return readFile(file);
+ if(!Number.isSafeInteger(max)||max<0||max>=bufferConstants.MAX_LENGTH)throw RangeError('File byte limit must be a supported nonnegative finite integer');
+ const unsafe=()=>Error('Unsafe file permissions or type at '+file);
+ if(!Number.isInteger(constants.O_NOFOLLOW)||!constants.O_NOFOLLOW||!Number.isInteger(constants.O_NONBLOCK)||!constants.O_NONBLOCK)
+  throw Error('Safe file reads are unavailable on this platform');
+ let handle;
+ try{handle=await open(file,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);}
+ catch(error){if(error.code==='ENOENT')return null;if(error.code==='ELOOP')throw unsafe();throw error;}
+ try{
+  const info=await handle.stat({bigint:true});
+  if(!info.isFile()||info.size>BigInt(max)||privateFile&&(info.mode&0o077n))throw unsafe();
+  // One sentinel byte detects growth without allocating or reading past max+1.
+  const bytes=Buffer.alloc(Number(info.size)+1);let length=0;
+  while(length<bytes.length){
+   const {bytesRead}=await handle.read(bytes,length,bytes.length-length,length);
+   if(!bytesRead)break;
+   length+=bytesRead;
+  }
+  if(length>max)throw unsafe();
+  const after=await handle.stat({bigint:true});
+  // This detects observed changes, not every hostile concurrent same-UID write.
+  if(BigInt(length)!==info.size||['dev','ino','mode','uid','gid','nlink','size','mtimeNs','ctimeNs'].some(key=>info[key]!==after[key]))
+   throw Error('File changed while reading at '+file);
+  return bytes.subarray(0,length);
+ }finally{await handle.close();}
 }
 
 export async function jsonFile(file,options){
