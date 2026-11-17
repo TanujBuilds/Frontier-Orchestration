@@ -35,7 +35,7 @@ export function actorRows(state){
  const {snapshot}=state,tasks=snapshot.tasks.filter(task=>task.goalId===goal.id),rows=[];
  const agents=(snapshot.agents??[]).filter(agent=>agent.goalId===goal.id);
  const workerName=goal.workerProfile?.displayName??'API worker';
- const hostNames={'codex':'Codex','claude-code':'Claude Code',cursor:'Cursor',antigravity:'Antigravity'},hostName=hostNames[goal.reviewPolicy?.hostId??goal.hostId]??'Codex';
+ const hostNames={'codex':'Codex','claude-code':'Claude Code',cursor:'Cursor',antigravity:'Antigravity'},hostName=hostNames[goal.hostId]??'Codex';
  const reviewPolicy=goal.reviewPolicy??reviewModes[goal.mode];
  for(const task of tasks){
   const native=task.actor==='codex',reports=agents.filter(agent=>agent.taskId===task.id&&agent.actor==='codex'&&agent.role!=='reviewer');
@@ -52,6 +52,18 @@ export function actorRows(state){
  const planning=snapshot.planning?.find(p=>p.goalId===goal.id);
  if(planning&&planning.status!=='completed')rows.unshift({id:'planner',actor:workerName,role:'Planner',assignment:goal.objective,status:status(planning.status),state:planning.status,at:planning.at,provenance:'coordinator'});
  for(const task of tasks){
+  if(goal.reviewSelection){
+   const review=task.review;
+   if(!review||review.status==='inactive')continue;
+   const name=review.source==='host'?hostNames[review.hostId]??'Host · identity unknown':review.source==='api'?'API review · '+review.providerId:'Reviewer · identity unknown';
+   const report=review.source==='host'&&review.status==='reserved'?agents.filter(a=>a.taskId===task.id&&a.role==='reviewer'&&a.hostId===review.hostId&&!a.stale&&a.lastReport?.at>=review.at).sort((a,b)=>b.lastReport.at-a.lastReport.at)[0]:null;
+   const running=report?.lastReport.status==='running';
+   const state=running?'running':report?.lastReport.status==='blocked'?'blocked':review.status==='reserved'&&review.source==='host'?'waiting':review.status;
+   const text={waiting:'Waiting in '+name,reserved:'Reserved · waiting',checks:'Waiting for checks',blocked:'Review blocked',revision:'Revision requested',accepted:'Review accepted',integrated:'Integrated · review accepted',stale:'Stale review · waiting',unavailable:'Review evidence unavailable',expired:'Review reservation expired'};
+   rows.push({id:'review-'+task.id,actor:name,role:'Reviewer',assignment:task.objective,at:report?.lastReport.at??review.at??task.updatedAt,evidence:task.evidenceRef,state,
+    status:running?'Reviewing':report?.lastReport.status==='blocked'?'Reported blocked':text[review.status]??'Review state unknown',provenance:report?'reported':review.provenance});
+   continue;
+  }
   if(!['operator','legacy'].includes(reviewPolicy)||reviewComplete.has(task.status))continue;
   const awaiting=reviewPolicy==='operator'?task.status==='awaiting_review':['awaiting_legacy_review','legacy_reviewing'].includes(task.status);
   const reservation=awaiting?snapshot.reviewers?.find(r=>r.goalId===goal.id&&r.taskId===task.id&&r.status==='reserved'):null;
