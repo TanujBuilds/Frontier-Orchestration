@@ -13,13 +13,14 @@ import {archive,entries,tar,header,stem,version,expandedBomb} from './fixtures/d
 const script=fileURLToPath(new URL('../distribution/archive/install.sh',import.meta.url));
 const sha=b=>createHash('sha256').update(b).digest('hex');
 const exists=async p=>access(p).then(()=>true,()=>false);
-async function fixture(t,handler){
+async function fixture(t,handler,{canCleanup=()=>true}={}){
  const root=await mkdtemp(path.join(os.tmpdir(),'Mosaic download tests ')),home=path.join(root,"Target User's home"),tmp=path.join(root,'temporary data');
  await mkdir(home);await mkdir(tmp);await writeFile(path.join(home,'keep'),'unchanged');
  let requests=0;
  const server=createServer((req,res)=>{requests++;handler(req,res);});server.listen(0,'127.0.0.1');await once(server,'listening');
  t.after(async()=>{
   server.closeAllConnections();await new Promise(r=>server.close(r));
+  if(!canCleanup()){t.diagnostic('Preserved potentially active fixture at '+root);return;}
   for(const name of await readdir(tmp)){
    const owner=await readFile(path.join(tmp,name,'installer-owner.txt'),'utf8').catch(()=>null);
    if(owner){const group=Number(owner.match(/processGroup=(\d+)/)?.[1]);if(group){let absent=false;try{process.kill(-group,0);}catch(error){absent=error.code==='ESRCH';}assert.ok(absent,'Preserve unresolved installer fixture at '+root);}}
@@ -147,8 +148,26 @@ test('expanded gzip ceiling rejects a small compressed bomb before installer exe
  const bytes=await expandedBomb(),f=await fixture(t,(_,r)=>r.end(bytes));assert.ok(bytes.length<2*1024*1024);await rejected(f,await run(f,bytes).done,/expanded-byte limit/i);
 });
 
-test('interrupting an installer preserves its staged runtime and original owner',{timeout:10000},async t=>{
- const e=entries();e[1].body='#!/bin/sh\nprintf started > "$2/installer-started"\n/bin/sleep 2\nprintf complete > "$2/installer-complete"\n';const bytes=gzipSync(tar(e)),f=await fixture(t,(_,r)=>r.end(bytes));const {child,done}=run(f,bytes);
- for(let n=0;!(await exists(path.join(f.home,'installer-started')))&&n<100;n++)await new Promise(r=>setTimeout(r,10));
- assert.equal(await exists(path.join(f.home,'installer-started')),true);child.kill('SIGTERM');const result=await done;assert.notEqual(result.code,0);assert.match(result.stderr,/installer ownership unresolved/);assert.match(result.stderr,/Interrupted during installer/);assert.equal(await readFile(path.join(f.home,'installer-complete'),'utf8'),'complete');assert.equal((await readdir(f.tmp)).length,1);
+test('interrupting an installer preserves its staged runtime and original owner',{timeout:25000},async t=>{
+ const e=entries();e[1].body='#!/bin/sh\nprintf started > "$2/installer-started"\n/bin/sleep 2\nprintf complete > "$2/installer-complete"\n';const bytes=gzipSync(tar(e));let cleanupSafe=false;
+ // Startup includes download/hash/extraction. Deliberately exceed the old1s
+ // assumption, then interrupt only after the installer signals actual readiness.
+ const responseDelayMs=1500;
+ const f=await fixture(t,(_,r)=>{const timer=setTimeout(()=>r.end(bytes),responseDelayMs);r.once('close',()=>clearTimeout(timer));},{canCleanup:()=>cleanupSafe});
+ const began=performance.now(),startupDeadline=began+15000,{child,done}=run(f,bytes);
+ let closed=null;done.then(result=>closed=result,error=>closed={error:error.message});
+ for(;;){
+  assert.ok(!closed&&child.exitCode===null&&child.signalCode===null,'Wrapper exited before installer readiness: '+JSON.stringify(closed??{code:child.exitCode,signal:child.signalCode}));
+  assert.ok(performance.now()<startupDeadline,'Installer startup readiness deadline exceeded;preserve fixture');
+  if(await exists(path.join(f.home,'installer-started')))break;
+  await new Promise(r=>setTimeout(r,20));
+ }
+ const readyAfterMs=performance.now()-began;assert.ok(readyAfterMs>=responseDelayMs);t.diagnostic('Installer readiness observed after '+Math.round(readyAfterMs)+'ms');
+ assert.equal(child.kill('SIGTERM'),true);const result=await done;
+ assert.notEqual(result.code,0);assert.match(result.stderr,/installer ownership unresolved/);assert.match(result.stderr,/Interrupted during installer/);
+ assert.equal(await readFile(path.join(f.home,'installer-complete'),'utf8'),'complete');
+ const names=await readdir(f.tmp);assert.equal(names.length,1);
+ const owner=await readFile(path.join(f.tmp,names[0],'installer-owner.txt'),'utf8'),group=Number(owner.match(/processGroup=(\d+)/)?.[1]);assert.ok(group);
+ assert.throws(()=>process.kill(-group,0),{code:'ESRCH'},'Installer ownership must be quiescent before fixture cleanup');
+ cleanupSafe=true;
 });
