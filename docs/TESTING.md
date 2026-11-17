@@ -27,7 +27,7 @@ node --test --test-concurrency=1 test/test-source-runner.test.mjs
 
 A filtered run is partial evidence, even if it exits successfully. The required Darwin profile prohibits filtering. Unknown profiles/options and missing pattern values fail before execution. Do not use bare `node --test`: recursive discovery can execute fixture drivers as independent tests.
 
-The test child receives fallback Git author and committer metadata (`Mosaic source fixtures <fixture@example.invalid>`) for disposable fixture commits. Explicit `GIT_AUTHOR_*` and `GIT_COMMITTER_*` values are preserved. The runner leaves Git configuration files unchanged, so tests can run without a personal Git identity.
+Only the portable test child receives fallback Git author and committer metadata (`Mosaic source fixtures <fixture@example.invalid>`) for disposable fixture commits. Explicit `GIT_AUTHOR_*` and `GIT_COMMITTER_*` values are preserved. The runner leaves Git configuration files unchanged, so portable tests can run without a personal Git identity.
 
 ## What GitHub CI proves
 
@@ -45,6 +45,8 @@ npm run test:darwin
 
 This profile selects **all** current direct entries at both roots, including the portable entries. It requires Darwin arm64, fails early when the native/browser/installed inputs below are absent, and sets all three strict flags to `1`: `MOSAIC_REQUIRE_NATIVE`, `MOSAIC_REQUIRE_BROWSER`, `MOSAIC_REQUIRE_INSTALLED`. Existing test assertions still check the real bytes, runtime and policy; presence preflight is not certification. Never replace a required input with stock Node, mocked execution or a missing-prerequisite skip.
 
+The required profile adds no Git identity fallback. Required qualification includes N1's strict environment guard: every `GIT_*` variable except `GIT_PAGER` must be absent, including author/committer and Git-config overrides. Caller overrides are preserved and rejected by that guard, rather than silently removed. Required fixtures that make commits need an existing normal per-user Git identity readable by their disposable repositories; a checkout-local identity alone may not reach them. Verify `git var GIT_AUTHOR_IDENT` and `git var GIT_COMMITTER_IDENT` in a disposable repository using the qualification user's normal configuration. The runner does not configure Git. Do not satisfy this prerequisite with identity/config override environment variables.
+
 | Input | Required meaning |
 | --- | --- |
 | `MOSAIC_NATIVE_TEST_NODE` | Absolute executable path to the independently built, verified fork-only check Node |
@@ -58,7 +60,13 @@ This profile selects **all** current direct entries at both roots, including the
 | `MOSAIC_INSTALLED_DEMO_ARCHIVE` | Separately inventoried offline project/dependency archive |
 | `MOSAIC_INSTALLED_ROOT_PARENT` | Existing owned durable neutral directory outside the source checkout for extracted proofs |
 
-Install the **lockfile-pinned** Chromium separately with `npx --no-install playwright install chromium` in an environment authorized for browser downloads. The required profile resolves Playwright's executable and checks that it exists; `PLAYWRIGHT_BROWSERS_PATH` can point to a separately verified prepared browser root. Native qualification additionally needs the real Darwin sandbox tools, compiler, the configured Codex sandbox executable for legacy checks, full source Git history, and an exact-lock offline npm cache for tests that construct standalone runtimes. These are separate from portable dependency preparation; do not grant sandbox permissions or build/download runtimes merely to make source CI green.
+Prepare the **lockfile-pinned headless shell** in the repository cache, in an environment authorized for browser downloads:
+
+```sh
+PLAYWRIGHT_BROWSERS_PATH="$PWD/node_modules/.cache/ms-playwright" npx --no-install playwright install --only-shell chromium
+```
+
+For the pinned Playwright1.64.1 Darwin arm64 contract, required preflight checks `node_modules/.cache/ms-playwright/chromium_headless_shell-1248/chrome-headless-shell-mac-arm64/chrome-headless-shell`, matching N1 and the protected checks. It checks presence/readability/executability only; later qualification validates the actual bytes and policy. The full Chromium application or a user-global browser cache cannot substitute. `PLAYWRIGHT_BROWSERS_PATH` does not redirect this required repository prerequisite; protected execution also supplies the repository cache. Native qualification additionally needs the real Darwin sandbox tools, compiler, the configured Codex sandbox executable for legacy checks, full source Git history, and an exact-lock offline npm cache for tests that construct standalone runtimes. These are separate from portable dependency preparation; do not grant sandbox permissions or build/download runtimes merely to make source CI green.
 
 Set `MOSAIC_NATIVE_EVIDENCE_DIR` and `MOSAIC_INSTALLED_EVIDENCE_DIR` to owned evidence directories when collecting qualification. Preserve failed logs, exact input hashes, retained uncertain execution roots, approvals, counters and deadlines. Tests deliberately retain roots when ownership remains uncertain. Do not clear those holds or force-delete roots as cleanup.
 

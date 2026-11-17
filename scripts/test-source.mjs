@@ -82,7 +82,7 @@ export async function selectTests(root, profile) {
 }
 
 // Presence checks only. Existing required tests verify identity, policy and bytes.
-export async function requiredProblems({env, platform, arch, chromium}) {
+export async function requiredProblems({env, platform, arch, root = process.cwd()}) {
   const problems = [];
   if (platform !== 'darwin' || arch !== 'arm64') problems.push('darwin-required needs Darwin arm64');
   async function input(label, value, directory = false, executable = false) {
@@ -102,8 +102,29 @@ export async function requiredProblems({env, platform, arch, chromium}) {
     if (!/^[a-f0-9]{64}$/.test(env[key] ?? '')) problems.push(`${key} must be a lowercase SHA256`);
   }
   for (const key of ['MOSAIC_INSTALLED_ROOT_PARENT', 'MOSAIC_FEASIBILITY_TEST_PARENT', 'MOSAIC_THREE_WORKER_TEST_PARENT']) await input(key, env[key], true);
-  await input('Chromium (install the lockfile-pinned Playwright browser)', chromium, false, true);
+  // Match the pinned N1/protected-check input, not Playwright's full browser
+  // default or a user-global cache. Later qualification verifies its bytes.
+  const chromium = path.join(root, 'node_modules/.cache/ms-playwright/chromium_headless_shell-1248/chrome-headless-shell-mac-arm64/chrome-headless-shell');
+  await input('Chromium headless shell (prepare the pinned repository cache)', chromium, false, true);
   return problems;
+}
+
+export function buildChildEnvironment(profile, inherited = process.env) {
+  if (!profiles.has(profile)) throw Error(`Unknown profile: ${profile}`);
+  const env = {...inherited};
+  // A CLI invoked by node:test must start a fresh runner, not inherit its
+  // private child context (which silently suppresses nested test execution).
+  delete env.NODE_TEST_CONTEXT;
+  // Portable fixtures need no personal Git identity. Required qualification
+  // preserves the caller environment for its strict Git-override guard.
+  if (profile === 'portable') {
+    env.GIT_AUTHOR_NAME ??= 'Mosaic source fixtures';
+    env.GIT_AUTHOR_EMAIL ??= 'fixture@example.invalid';
+    env.GIT_COMMITTER_NAME ??= 'Mosaic source fixtures';
+    env.GIT_COMMITTER_EMAIL ??= 'fixture@example.invalid';
+  }
+  if (profile === 'darwin-required') env.MOSAIC_REQUIRE_NATIVE = env.MOSAIC_REQUIRE_BROWSER = env.MOSAIC_REQUIRE_INSTALLED = '1';
+  return env;
 }
 
 export async function main(args = process.argv.slice(2)) {
@@ -112,25 +133,13 @@ export async function main(args = process.argv.slice(2)) {
   if (list) {console.log(JSON.stringify(selection, null, 2)); return 0;}
   if (!selection.selected.length) throw Error('No test entries selected; refusing broad discovery');
   if (process.env.NODE_OPTIONS?.trim()) throw Error('Unset NODE_OPTIONS before running source checks; inherited flags can filter or alter the test process');
-  const env = {...process.env};
-  // A CLI invoked by node:test must start a fresh runner, not inherit its
-  // private child context (which silently suppresses nested test execution).
-  delete env.NODE_TEST_CONTEXT;
-  // Temporary fixture repositories must not depend on personal Git config.
-  // Keep caller-supplied identities authoritative, and scope defaults to child.
-  env.GIT_AUTHOR_NAME ??= 'Mosaic source fixtures';
-  env.GIT_AUTHOR_EMAIL ??= 'fixture@example.invalid';
-  env.GIT_COMMITTER_NAME ??= 'Mosaic source fixtures';
-  env.GIT_COMMITTER_EMAIL ??= 'fixture@example.invalid';
+  const env = buildChildEnvironment(profile);
   if (profile === 'portable') {
     const inherited = Object.keys(env).filter(key => capabilityKey.test(key) && env[key]);
     if (inherited.length) throw Error(`portable requires a source-only environment; unset: ${inherited.join(', ')}`);
   } else {
-    let chromium;
-    try {chromium = (await import('playwright')).chromium.executablePath();} catch {}
-    const problems = await requiredProblems({env, platform: process.platform, arch: process.arch, chromium});
+    const problems = await requiredProblems({env, platform: process.platform, arch: process.arch});
     if (problems.length) throw Error(`Required qualification prerequisites:\n- ${problems.join('\n- ')}`);
-    env.MOSAIC_REQUIRE_NATIVE = env.MOSAIC_REQUIRE_BROWSER = env.MOSAIC_REQUIRE_INSTALLED = '1';
   }
   console.error(`source-checks: ${profile}: ${selection.selected.length} entries; ${selection.excluded.length} separately qualified (inspect with --list)`);
   const argv = ['--test', '--test-concurrency=1', '--test-reporter=tap'];
