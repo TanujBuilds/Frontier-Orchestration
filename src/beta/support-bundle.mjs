@@ -221,8 +221,9 @@ async function writeBundle(file,bytes){
   const parent=await lstat(directory);
   if(parent.uid!==process.getuid()||parent.mode&0o077||await realpath(directory)!==directory)throw error('OUTPUT_UNSAFE');
   if(await stat(file))throw error('OUTPUT_EXISTS');
-  temp=path.join(directory,'.mosaic-support-'+randomUUID());
-  const handle=await open(temp,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);
+  const candidate=path.join(directory,'.mosaic-support-'+randomUUID());
+  const handle=await open(candidate,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);
+  temp=candidate; // Cleanup authority starts only after successful exclusive creation.
   try{await handle.chmod(0o600);await handle.writeFile(bytes);await handle.sync();}finally{await handle.close();}
   const current=await lstat(directory);
   if(!await directories(directory)||parent.dev!==current.dev||parent.ino!==current.ino||current.uid!==process.getuid()||current.mode&0o077)throw error('OUTPUT_UNSAFE');
@@ -239,16 +240,27 @@ function parseArgs(argv){
  }
  if(!result.home)throw error('USAGE');return result;
 }
-const print=(stream,bytes)=>new Promise((resolve,reject)=>stream.write(bytes,cause=>cause?reject(cause):resolve()));
+const print=(stream,bytes)=>new Promise((resolve,reject)=>{
+ let settled=false;
+ const failure=()=>{if(!settled){settled=true;reject(error('STREAM_FAILED'));}};
+ // Writable emits 'error' as well as invoking its callback. Retain this one-shot
+ // listener after a failed callback to consume the subsequent error event.
+ stream.once('error',failure);
+ try{stream.write(bytes,cause=>{
+  if(cause){failure();return;}
+  if(!settled){settled=true;stream.removeListener('error',failure);resolve();}
+ });}catch{failure();}
+});
+async function report(stream,code){try{await print(stream,code+'\n');}catch{/* A broken diagnostic stream must also remain contained. */}}
 export async function runSupportBundle(argv,{stdout=process.stdout,stderr=process.stderr}={}){
  let args;
- try{args=parseArgs(argv);}catch{await print(stderr,'USAGE: --home ABS [--output ABS]\n');return 2;}
+ try{args=parseArgs(argv);}catch{await report(stderr,'USAGE: --home ABS [--output ABS]');return 2;}
  try{
   const bundle=await collectSupportBundle({home:args.home}),bytes=formatSupportBundle(bundle);
   await print(stdout,bytes);
-  if(args.output){try{await writeBundle(args.output,bytes);}catch(cause){await print(stderr,cause.supportCode==='OUTPUT_EXISTS'?'OUTPUT_EXISTS\n':'OUTPUT_UNSAFE\n');return 2;}}
+  if(args.output){try{await writeBundle(args.output,bytes);}catch(cause){await report(stderr,cause.supportCode==='OUTPUT_EXISTS'?'OUTPUT_EXISTS':'OUTPUT_UNSAFE');return 2;}}
   return 0;
- }catch{await print(stderr,'SUPPORT_BUNDLE_FAILED\n');return 1;}
+ }catch{await report(stderr,'SUPPORT_BUNDLE_FAILED');return 1;}
 }
 
 if(process.argv[1]===fileURLToPath(import.meta.url)&&process.argv[2]==='--collect-worker'&&process.send){

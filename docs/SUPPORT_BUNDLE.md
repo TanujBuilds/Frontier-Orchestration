@@ -21,6 +21,8 @@ Paths must be absolute and normalized, without control characters. Home and outp
 
 Exit status is `0` for a usable preview or completed write, including an offline report; `2` for invalid arguments or a refused write; and `1` for an unexpected collection/format/output failure. Invalid arguments produce only `USAGE: --home ABS [--output ABS]`. Write errors produce `OUTPUT_EXISTS` or `OUTPUT_UNSAFE` after the preview. Other failures produce `SUPPORT_BUNDLE_FAILED`. Errors never repeat input arguments, server messages, or exception text.
 
+A broken preview pipe prevents file creation and returns `1`. If stderr is also unavailable, the numeric status is still returned without an exception stack. Cleanup removes only a temporary file successfully created by that invocation; a colliding pre-existing temporary pathname is preserved.
+
 ## Version 1 fields
 
 Every exported field is selected explicitly. Unknown enum values become `unknown`; invalid optional numbers/booleans become `null`. No arbitrary object is copied into the report.

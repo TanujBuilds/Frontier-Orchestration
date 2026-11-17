@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {mkdtemp,realpath,mkdir,writeFile,readFile,lstat,chmod,symlink,readdir,rm} from 'node:fs/promises';
-import {execFile} from 'node:child_process';
+import {execFile,spawn} from 'node:child_process';
 import {promisify} from 'node:util';
 import {createServer} from 'node:http';
 import os from 'node:os';
@@ -227,6 +227,34 @@ test('output ceiling rejects an oversized bundle and concurrent exclusive public
  assert.ok(winner&&loser);assert.equal(loser.reason.code,2);assert.match(loser.reason.stderr,/OUTPUT_EXISTS/);
  assert.equal(await readFile(file,'utf8'),winner.value.stdout);
  assert.deepEqual(await readdir(f.output),['bundle.json']);
+});
+
+test('exclusive temp creation collision preserves the file this operation did not create',async t=>{
+ const f=await fixture(t),file=path.join(f.output,'bundle.json'),unrelated=path.join(f.output,'.mosaic-support-fixture-collision');
+ await writeFile(unrelated,'SENTINEL_UNRELATED_ORIGINAL',{mode:0o600});
+ const preload=new URL('./fixtures/mosaic-m039-support-bundle/collision-preload.mjs',import.meta.url);
+ await assert.rejects(exec(process.execPath,['--import',preload.href,script.pathname,'--home',f.home,'--output',file],{timeout:3000}),e=>{
+  assert.equal(e.code,2);clean(e.stdout+e.stderr);return true;
+ });
+ assert.equal(await readFile(unrelated,'utf8'),'SENTINEL_UNRELATED_ORIGINAL');
+ assert.deepEqual(await readdir(f.output),['.mosaic-support-fixture-collision']);
+});
+
+test('broken writable streams return fixed codes without arbitrary error text or local stack paths',async t=>{
+ const f=await fixture(t),probe=new URL('./fixtures/mosaic-m039-support-bundle/failing-stream-probe.mjs',import.meta.url);
+ for(const mode of ['stdout','both']){
+  const {stdout,stderr}=await exec(process.execPath,[probe.pathname,f.home,mode],{timeout:3000});
+  assert.equal(stderr,'');const result=JSON.parse(stdout);assert.equal(result.code,1);
+  assert.equal(result.diagnostic,mode==='both'?'':'SUPPORT_BUNDLE_FAILED\n');clean(stdout);
+ }
+});
+
+test('a closed actual CLI stdout pipe exposes only a fixed failure code on stderr',async t=>{
+ const f=await fixture(t),child=spawn(process.execPath,[script.pathname,'--home',f.home],{stdio:['ignore','pipe','pipe']});
+ child.stdout.destroy();let stderr='';child.stderr.on('data',bytes=>{stderr+=bytes;});
+ const timer=setTimeout(()=>child.kill('SIGKILL'),3000);
+ const result=await new Promise((resolve,reject)=>{child.on('error',reject);child.on('close',(code,signal)=>resolve({code,signal}));}).finally(()=>clearTimeout(timer));
+ assert.deepEqual(result,{code:1,signal:null});assert.equal(stderr,'SUPPORT_BUNDLE_FAILED\n');
 });
 
 test('strict standalone arguments never echo user text or implicitly search a home',async()=>{
