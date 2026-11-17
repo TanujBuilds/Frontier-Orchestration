@@ -60,13 +60,14 @@ function commonReview(store,task,goal,selection){
  if(selection.source==='api'){
   const row=store.db.prepare("SELECT status,data FROM requests WHERE id=? AND task_id=? AND kind='apiReview'").get(current.requestId,task.id),request=row?JSON.parse(row.data):null;
   const bound=request?.ticketId===current.id&&request.inputHash===digest(current.binding)&&request.reviewerBinding?.providerId===selection.providerId&&request.reviewerBinding?.revision===selection.revision&&request.reviewerBinding?.profileHash===expectedReviewer.profileHash&&request.reviewerBinding?.policyHash===goal.manifest.reviewPolicyHash;
-  if(bound){
-   view.provenance=row.status==='completed'||row.status==='failed'?'captured':'coordinator';
+  const captured=bound&&row.status==='completed'&&request.requestOutcome==='completed'&&typeof request.result?.content==='string';
+  if(captured){
+   view.provenance='captured';
    view.reportedModel=typeof request.result?.reportedModel==='string'?trim(request.result.reportedModel):null;
    view.identityProvenance=view.reportedModel?'reported':'unknown';
-   view.usage=tokenTotal(row.status==='completed'?[request.result?.usage?.totalTokens]:[]);
+   view.usage=tokenTotal([request.result?.usage?.totalTokens]);
   }
-  if(current.status==='completed'&&(!bound||row.status!=='completed'||request.requestOutcome!=='completed'))return {...view,status:'unavailable'};
+  if(current.status==='completed'&&!captured)return {...view,status:'unavailable'};
   if(current.status==='reserved'&&(row?.status==='failed'||task.reviewWait))return {...view,status:'blocked'};
  }
  if(current.status==='reserved')return {...view,status:'reserved'};
