@@ -94,7 +94,8 @@ for(const planning of [false,true])for(const outage of ['disconnect','deadline',
     wire.ready();f.setNow(first.providerWait.retryAt);
     await tick();
     const second=planning?f.c.getGoal(f.g.id).planning:f.c.getTask(f.task.id);
-    assert.equal(second.status,planning?'queued':'suspended');
+    assert.equal(second.status,'blocked');
+    assert.match(second.reason,planning?/No eligible planner retry remains in original reconnect window/:/No eligible provider retry remains in original reconnect window/);
     assert.equal(second.providerWait.until,until);
     assert.equal(planning?second.spent:second.spent.model,2);
     assert.deepEqual(wire.calls,['GET','GET','GET']);
