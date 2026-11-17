@@ -20,6 +20,35 @@ function display(value, limit) {
 
 const list = values => values.slice(0, 8).map(value => display(value, 140));
 
+function reviewRoles({ mode, reviewPolicy }) {
+  if (!reviewPolicy || mode.review === 'checks') {
+    return {
+      reviewer: mode.review === 'checks' ? null : 'codex',
+      description: roleDescriptions[mode.id],
+    };
+  }
+  const api = reviewPolicy.source === 'api';
+  const reviewerReference = api ? {
+    id: display(reviewPolicy.reviewer.id, 120),
+    revision: display(reviewPolicy.reviewer.revision, 80),
+  } : undefined;
+  const reviewer = api ? 'api' : reviewPolicy.hostId;
+  const label = api
+    ? `API reviewer ${reviewerReference.id} (revision ${reviewerReference.revision})`
+    : `Approved host ${reviewer}`;
+  const planning = {
+    collaborative: 'Codex plans and supervises. Codex and DeepSeek may implement.',
+    codex_only: 'Codex plans and implements.',
+    overnight_review: 'DeepSeek plans and implements.',
+  };
+  return {
+    reviewer,
+    reviewSource: reviewPolicy.source,
+    ...(api ? { reviewerReference } : {}),
+    description: `${planning[mode.id]} After the protected checks pass, ${label} provides bounded independent review before integration. The approved fallback is to wait. Preparation does not verify the reviewer's model, inference or usage.`,
+  };
+}
+
 export function assignmentSummary(manifest) {
   const { mode, project, limits, overnightPolicy } = manifest;
   const overnight = isOvernightV2(manifest);
@@ -34,9 +63,8 @@ export function assignmentSummary(manifest) {
     roles: {
       planner: mode.planner,
       workers: mode.actors,
-      reviewer: mode.review === 'checks' ? null : 'codex',
       review: mode.review,
-      description: roleDescriptions[mode.id],
+      ...reviewRoles(manifest),
     },
     editablePaths: list(project.writePaths),
     editablePathCount: project.writePaths.length,
