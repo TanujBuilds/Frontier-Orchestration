@@ -1,4 +1,5 @@
-import {mkdir,readFile,writeFile,readdir,lstat} from 'node:fs/promises';
+import {mkdir,readFile,writeFile,readdir,lstat,open,opendir} from 'node:fs/promises';
+import {constants} from 'node:fs';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {isEntry} from './entry.mjs';
@@ -62,19 +63,100 @@ export async function packageHarness({sourceRoot,destination,dependencies=false,
  }
  const manifest={schema:1,layout:'shared-runtime-v1',skills:SKILLS,sourceCommit:await git(sourceRoot,'rev-parse','HEAD'),sourceDirty:!!await git(sourceRoot,'status','--porcelain'),nodeMajor:24,sdkVersion:'1.32.2',dependenciesInstalled:dependencies,files:inventory.sort((a,b)=>a.path.localeCompare(b.path))};manifest.contentHash=digest(manifest.files);await writeFile(path.join(destination,'package-manifest.json'),JSON.stringify(manifest,null,2),{mode:0o600});return manifest;
 }
+// Finite verifier bounds and measured compatibility headroom are documented in
+// docs/PACKAGE_VERIFICATION_LIMITS.md. These are byte/work ceilings, not options.
+const verificationLimits={manifest:8*1024**2,dependency:2*1024**2,files:32768,directories:32768,pathBytes:4096,depth:64,fileBytes:2*1024**3,totalBytes:8*1024**3,chunk:65536};
+const dependencyPaths=['runtime/package-lock.json','runtime/node_modules/@modelcontextprotocol/sdk/package.json'];
+const sameVerificationEntry=(a,b)=>['dev','ino','mode','size','mtimeNs','ctimeNs','nlink'].every(key=>a[key]===b[key]);
+async function verificationDirectory(target){
+ const info=await lstat(target,{bigint:true});
+ if(!info.isDirectory()||info.isSymbolicLink())throw Error('Package parent must be a regular directory, not a symlink');
+ return info;
+}
+async function verificationParents(destination,relative){
+ let target=destination;
+ for(const part of relative.split('/')){await verificationDirectory(target);target=path.join(target,part);}
+ return target;
+}
+async function readVerificationFile(target,{expected,metadataLimit,label},buffer){
+ if(!Number.isInteger(constants.O_NOFOLLOW)||!Number.isInteger(constants.O_NONBLOCK))throw Error('Package verification requires no-follow and nonblocking file opens');
+ const handle=await open(target,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
+ try{
+  const before=await handle.stat({bigint:true});
+  if(!before.isFile())throw Error('Package entries must be regular files, not symlinks or special files');
+  if(expected?.mode!==undefined&&(before.mode&0o7777n)!==BigInt(Number.parseInt(expected.mode.slice(3),8)))throw Error('Package executable mode mismatch: '+label);
+  if(metadataLimit!==undefined&&before.size>BigInt(metadataLimit))throw Error('Package metadata byte limit exceeded: '+label);
+  if(expected&&before.size!==BigInt(expected.bytes))throw Error('Package file checksum mismatch (length): '+label);
+  const limit=expected?expected.bytes:metadataLimit,parts=metadataLimit===undefined?null:[],checksum=createHash('sha256');
+  let count=0;
+  // The extra byte detects growth/overrun without consuming an unbounded tail.
+  while(true){
+   const {bytesRead}=await handle.read(buffer,0,Math.min(buffer.length,limit-count+1),count);
+   if(!bytesRead)break;
+   count+=bytesRead;
+   if(count>limit)throw Error('Package file byte limit exceeded: '+label);
+   const chunk=buffer.subarray(0,bytesRead);checksum.update(chunk);if(parts)parts.push(Buffer.from(chunk));
+  }
+  const after=await handle.stat({bigint:true}),current=await lstat(target,{bigint:true});
+  if(!sameVerificationEntry(before,after)||!sameVerificationEntry(after,current))throw Error('Package entry changed during verification: '+label);
+  if(BigInt(count)!==before.size||expected&&checksum.digest('hex')!==expected.sha256)throw Error('Package file checksum mismatch: '+label);
+  return parts?Buffer.concat(parts,count):null;
+ }finally{await handle.close();}
+}
 export async function verifyPackage(destination){
  destination=path.resolve(destination);
- const rootInfo=await lstat(destination),manifestInfo=await lstat(path.join(destination,'package-manifest.json'));if(!rootInfo.isDirectory()||rootInfo.isSymbolicLink()||!manifestInfo.isFile()||manifestInfo.isSymbolicLink())throw Error('Package and manifest must be regular entries, not symlinks');
- const manifest=JSON.parse(await readFile(path.join(destination,'package-manifest.json'),'utf8'));if(!manifest||manifest.schema!==1||!Array.isArray(manifest.files)||!manifest.files.length||typeof manifest.dependenciesInstalled!=='boolean')throw Error('Invalid package manifest');if(manifest.contentHash!==digest(manifest.files))throw Error('Package manifest checksum mismatch');
- const seen=new Set();
- for(const file of manifest.files){if(!file||typeof file.path!=='string'||path.isAbsolute(file.path)||file.path.includes('\\')||file.path.split('/').some(p=>p==='..'||p==='.'||!p)||!Number.isSafeInteger(file.bytes)||file.bytes<0||!/^[a-f0-9]{64}$/.test(file.sha256))throw Error('Invalid package path or file metadata');if(file.mode!==undefined&&!['100644','100755','100600'].includes(file.mode))throw Error('Invalid package file mode');if(seen.has(file.path))throw Error('Duplicate package path');seen.add(file.path);
-  let target=destination;for(const part of file.path.split('/')){const info=await lstat(target);if(!info.isDirectory()||info.isSymbolicLink())throw Error('Package parent must be a regular directory, not a symlink');target=path.join(target,part);}
-  const info=await lstat(target);if(file.mode!==undefined&&(info.mode&0o7777)!==Number.parseInt(file.mode.slice(3),8))throw Error('Package executable mode mismatch: '+file.path);if(!info.isFile()||info.isSymbolicLink()||info.size!==file.bytes||hash(await readFile(target))!==file.sha256)throw Error('Package file checksum mismatch: '+file.path);
+ const rootInfo=await verificationDirectory(destination),buffer=Buffer.alloc(verificationLimits.chunk);
+ const manifest=JSON.parse((await readVerificationFile(path.join(destination,'package-manifest.json'),{metadataLimit:verificationLimits.manifest,label:'package manifest'},buffer)).toString('utf8'));
+ if(!manifest||manifest.schema!==1||!Array.isArray(manifest.files)||!manifest.files.length||typeof manifest.dependenciesInstalled!=='boolean')throw Error('Invalid package manifest');
+ if(manifest.files.length>verificationLimits.files)throw Error('Package inventory entry limit exceeded');
+ const seen=new Set(),directories=new Set(['']);let total=0;
+ // Validate all metadata/work bounds before touching listed payload paths or
+ // canonicalizing the untrusted inventory for the existing digest contract.
+ for(const file of manifest.files){
+  if(!file||typeof file.path!=='string'||path.isAbsolute(file.path)||file.path.includes('\\')||file.path.includes('\0')||file.path.split('/').some(p=>p==='..'||p==='.'||!p)||!Number.isSafeInteger(file.bytes)||file.bytes<0||typeof file.sha256!=='string'||!/^[a-f0-9]{64}$/.test(file.sha256))throw Error('Invalid package path or file metadata');
+  if(file.mode!==undefined&&!['100644','100755','100600'].includes(file.mode))throw Error('Invalid package file mode');
+  if(Buffer.byteLength(file.path,'utf8')>verificationLimits.pathBytes||file.path.split('/').length>verificationLimits.depth)throw Error('Package path limit exceeded');
+  total+=file.bytes;
+  if(file.bytes>verificationLimits.fileBytes||total>verificationLimits.totalBytes)throw Error('Package payload byte limit exceeded');
+  if(manifest.dependenciesInstalled&&dependencyPaths.includes(file.path)&&file.bytes>verificationLimits.dependency)throw Error('Package metadata byte limit exceeded: '+file.path);
+  if(seen.has(file.path))throw Error('Duplicate package path');seen.add(file.path);
+  let parent=path.posix.dirname(file.path);
+  while(parent!=='.'&&!directories.has(parent)){
+   directories.add(parent);if(directories.size-1>verificationLimits.directories)throw Error('Package directory limit exceeded');parent=path.posix.dirname(parent);
+  }
  }
- const directories=new Set(['']);for(const file of seen){let parent=path.posix.dirname(file);while(parent!=='.'){directories.add(parent);parent=path.posix.dirname(parent);}}
- const inspect=async(prefix='')=>{for(const entry of await readdir(path.join(destination,prefix),{withFileTypes:true})){const relative=prefix?prefix+'/'+entry.name:entry.name;if(entry.isSymbolicLink())throw Error('Unexpected package symlink: '+relative);if(entry.isDirectory()){if(!directories.has(relative))throw Error('Unlisted package directory: '+relative);await inspect(relative);}else if(!entry.isFile()||relative!=='package-manifest.json'&&!seen.has(relative))throw Error('Unlisted or nonregular package entry: '+relative);}};
- await inspect();
- if(manifest.dependenciesInstalled){const lock=JSON.parse(await readFile(path.join(destination,'runtime/package-lock.json'),'utf8')),sdk=JSON.parse(await readFile(path.join(destination,'runtime/node_modules/@modelcontextprotocol/sdk/package.json'),'utf8'));if(sdk.version!==lock.packages['node_modules/@modelcontextprotocol/sdk'].version)throw Error('Pinned runtime dependency mismatch');}
+ if(manifest.contentHash!==digest(manifest.files))throw Error('Package manifest checksum mismatch');
+ const dependencyMetadata=new Map();
+ for(const file of manifest.files){
+  const target=await verificationParents(destination,file.path),metadataLimit=manifest.dependenciesInstalled&&dependencyPaths.includes(file.path)?verificationLimits.dependency:undefined;
+  const bytes=await readVerificationFile(target,{expected:file,metadataLimit,label:file.path},buffer);
+  if(metadataLimit!==undefined)dependencyMetadata.set(file.path,bytes);
+ }
+ // One bounded iterator is open at a time. Every accepted directory/file must
+ // come from the manifest; at most one unexpected entry is needed to reject.
+ const pending=[''];let inspected=0;
+ while(pending.length){
+  const prefix=pending.pop(),target=prefix?await verificationParents(destination,prefix):destination;
+  const before=await verificationDirectory(target),directory=await opendir(target,{bufferSize:1});
+  try{
+   let entry;
+   while((entry=await directory.read())!==null){
+    if(++inspected>seen.size+directories.size)throw Error('Package directory entry limit exceeded');
+    const relative=prefix?prefix+'/'+entry.name:entry.name;
+    if(entry.isSymbolicLink())throw Error('Unexpected package symlink: '+relative);
+    if(entry.isDirectory()){
+     if(!directories.has(relative))throw Error('Unlisted package directory: '+relative);pending.push(relative);
+    }else if(!entry.isFile()||relative!=='package-manifest.json'&&!seen.has(relative))throw Error('Unlisted or nonregular package entry: '+relative);
+   }
+  }finally{await directory.close();}
+  if(!sameVerificationEntry(before,await verificationDirectory(target)))throw Error('Package directory changed during verification');
+ }
+ if(!sameVerificationEntry(rootInfo,await verificationDirectory(destination)))throw Error('Package root changed during verification');
+ if(manifest.dependenciesInstalled){
+  if(dependencyPaths.some(file=>!dependencyMetadata.has(file))){const error=Error('ENOENT: Missing inventoried runtime dependency metadata');error.code='ENOENT';throw error;}
+  const [lock,sdk]=dependencyPaths.map(file=>JSON.parse(dependencyMetadata.get(file).toString('utf8')));
+  if(sdk.version!==lock.packages['node_modules/@modelcontextprotocol/sdk'].version)throw Error('Pinned runtime dependency mismatch');
+ }
  return true;
 }
 export function renderLaunchAgent({node,entry,root,config,port=4332,logs}){
