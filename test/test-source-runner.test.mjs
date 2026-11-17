@@ -6,6 +6,8 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {setTimeout as delay} from 'node:timers/promises';
+import * as sourceRunner from '../scripts/test-source.mjs';
+import {rejectGitOverrides} from '../scripts/native-app-feasibility/prerequisites.mjs';
 
 const runner = fileURLToPath(new URL('../scripts/test-source.mjs', import.meta.url));
 const cleanEnv = () => Object.fromEntries(Object.entries(process.env).filter(([key]) =>
@@ -32,6 +34,46 @@ function start(cwd, args = [], env = cleanEnv()) {
 }
 const run = (cwd, args = [], env) => start(cwd, args, env).done;
 const passing = "import test from 'node:test'; test('two words',()=>{});\n";
+
+test('required child environment satisfies the real qualification Git guard without removing caller overrides', () => {
+  assert.equal(typeof sourceRunner.buildChildEnvironment, 'function');
+  const parent = Object.freeze({PATH: '/usr/bin:/bin', LANG: 'C', GIT_PAGER: 'cat', NODE_TEST_CONTEXT: 'child-v8'});
+  const required = sourceRunner.buildChildEnvironment('darwin-required', parent);
+  assert.doesNotThrow(() => rejectGitOverrides(required));
+  assert.equal(required.GIT_PAGER, 'cat');
+  assert.equal(Object.hasOwn(required, 'NODE_TEST_CONTEXT'), false);
+  for (const key of ['MOSAIC_REQUIRE_NATIVE', 'MOSAIC_REQUIRE_BROWSER', 'MOSAIC_REQUIRE_INSTALLED']) assert.equal(required[key], '1');
+  for (const [key, value] of [['GIT_AUTHOR_NAME', 'Caller'], ['GIT_AUTHOR_EMAIL', 'caller@example.invalid'],
+    ['GIT_COMMITTER_NAME', 'Caller'], ['GIT_COMMITTER_EMAIL', 'caller@example.invalid'],
+    ['GIT_CONFIG_GLOBAL', '/caller/config'], ['GIT_DIR', '/caller/repository'], ['GIT_AUTHOR_NAME', '']]) {
+    const explicit = sourceRunner.buildChildEnvironment('darwin-required', {...parent, [key]: value});
+    assert.equal(explicit[key], value);
+    assert.throws(() => rejectGitOverrides(explicit), /Clear Git override environment before qualification/);
+  }
+  const portable = sourceRunner.buildChildEnvironment('portable', parent);
+  assert.throws(() => rejectGitOverrides(portable), /Clear Git override environment before qualification/);
+  assert.deepEqual(parent, {PATH: '/usr/bin:/bin', LANG: 'C', GIT_PAGER: 'cat', NODE_TEST_CONTEXT: 'child-v8'});
+});
+
+test('required browser presence uses the pinned repository headless shell, independently of the full browser', {timeout: 15000}, async t => {
+  // These executable specimens are presence inputs only; neither is launched.
+  const headless = 'node_modules/.cache/ms-playwright/chromium_headless_shell-1248/chrome-headless-shell-mac-arm64/chrome-headless-shell';
+  const full = 'node_modules/.cache/ms-playwright/chromium-1248/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing';
+  const root = await fixture(t, {[headless]: 'owned headless presence specimen'});
+  const {chmod} = await import('node:fs/promises');
+  await chmod(path.join(root, headless), 0o755);
+  await assert.rejects(readFile(path.join(root, full)), {code: 'ENOENT'});
+  const inputs = {env: {}, platform: 'darwin', arch: 'arm64', root};
+  const prepared = await sourceRunner.requiredProblems(inputs);
+  assert.deepEqual(prepared.filter(problem => problem.includes('Chromium')), []);
+  assert.ok(prepared.some(problem => problem.includes('MOSAIC_NATIVE_TEST_NODE')), 'other required inputs remain missing');
+  await rm(path.join(root, headless));
+  await mkdir(path.dirname(path.join(root, full)), {recursive: true});
+  await writeFile(path.join(root, full), 'owned full-browser presence specimen');
+  await chmod(path.join(root, full), 0o755);
+  const missing = await sourceRunner.requiredProblems(inputs);
+  assert.ok(missing.some(problem => problem.includes('Chromium')), 'a full browser cannot substitute for the headless shell');
+});
 
 test('temporary Git commits work without personal identity and preserve explicit caller identity', {timeout: 15000}, async t => {
   for (const explicit of [false, true]) {
