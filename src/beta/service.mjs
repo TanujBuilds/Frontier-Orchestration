@@ -4,7 +4,6 @@ import {normalizeExecutionPolicy,executionIdentity,assertExecutionAvailable} fro
 import {hostRegistry,normalizeHostSettings} from './hosts/index.mjs';
 import {existsSync} from 'node:fs';
 import {canonical} from '../harness/contracts.mjs';
-import {DatabaseSync} from 'node:sqlite';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {setTimeout as delay} from 'node:timers/promises';
@@ -12,7 +11,7 @@ import {mkdir,rm} from 'node:fs/promises';
 import {randomUUID} from 'node:crypto';
 import path from 'node:path';
 import {serve} from '../harness/cli.mjs';
-import {atomic,entry,fileBytes,hash,jsonFile,label,privateDirectories,withLock} from './files.mjs';
+import {atomic,entry,fileBytes,hash,jsonFile,label,privateDirectories,readMaintenanceDatabase,withLock} from './files.mjs';
 import {client} from './client.mjs';
 
 const exec=promisify(execFile);
@@ -66,8 +65,7 @@ export async function assertMaintenanceIdle(paths,options={}){
  const info=await entry(file);
  if(!info)return;
  if(!info.isFile())throw Error('Unsafe Mosaic Beta state database');
- const db=new DatabaseSync(file,{readOnly:true});
- try{assertIdle(db,options);}finally{db.close();}
+ readMaintenanceDatabase(file,db=>assertIdle(db,options));
 }
 
 async function loaded(paths){

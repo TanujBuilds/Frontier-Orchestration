@@ -234,12 +234,12 @@ durably for pull-based review; there is no automatic wakeup or fallback.
 
 ## Update, rollback and interrupted maintenance
 
-Run a newer verified archive's installer with the same home to update. The
-installer first checks maintenance guards for prepared, active, unresolved or
-owned work. It verifies incoming state compatibility against the actual private
-settings schema and SQLite `user_version`. It never replaces live state with an
-older backup. Incompatible settings/database versions or incompatible retained
-native-supervisor source block the switch with an actionable message.
+Run a newer verified archive's installer with the same home to update. Before
+switching versions, the installer checks maintenance guards for prepared, active,
+unresolved or owned work. It verifies incoming state compatibility against the
+private settings schema and SQLite `user_version`. Read-only maintenance checks
+briefly wait for a busy state database. Incompatible settings/database versions
+or incompatible retained native-supervisor source block the switch.
 
 Private configuration and saved approvals retain the exact original native
 artifact path and fingerprint. A code pointer switch does not rewrite checks,
@@ -251,9 +251,12 @@ conflicting migration. Do not delete old versions manually while approvals or
 execution owners refer to them.
 
 A private `config/install-transaction.json` records the old/new owned pointer,
-receipt and each durable phase. SIGKILL before commit recovers to the previous
-compatible pointer; after commit recovery verifies and retains the new pointer.
-The next installer invocation automatically recovers, or use `mosaic recover`.
+receipt and each durable phase. Once this transaction is saved, recovery from
+an interruption before commit restores the prior compatible pointer and
+restarts its previously registered coordinator. After commit, recovery verifies
+and retains the new pointer. If a busy state database blocks recovery, wait for
+it to become available and run `mosaic recover`. The next installer invocation
+also attempts recovery automatically.
 Only expected installer-owned bytes are restored; a user-modified pointer or
 receipt is preserved for inspection. Private state is never restored from an
 old snapshot. A compatible installed version can be selected with

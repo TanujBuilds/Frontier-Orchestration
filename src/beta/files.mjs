@@ -98,6 +98,20 @@ export async function privateDirectories(paths){
  }
 }
 
+export function readMaintenanceDatabase(file,read){
+ let db;
+ try{
+  db=new DatabaseSync(file,{readOnly:true,timeout:1000});
+  return read(db);
+ }catch(error){
+  // SQLite keeps the primary result code in the low byte of extended codes.
+  if(error?.code==='ERR_SQLITE_ERROR'&&[5,6].includes(error.errcode&0xff)){
+   throw Error('The Mosaic Beta state database is locked. Wait for the database to become available, then retry. If an installation is pending, run mosaic recover.',{cause:error});
+  }
+  throw error;
+ }finally{db?.close();}
+}
+
 export async function withLock(paths,work){
  await privateDirectories(paths);
  const file=path.join(paths.configDir,'maintenance.sqlite3');

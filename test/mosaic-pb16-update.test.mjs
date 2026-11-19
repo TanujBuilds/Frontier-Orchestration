@@ -160,6 +160,84 @@ test('precommit rollback releases maintenance mutex before restoring owned servi
  const f=await fixture(t),a=await payload(f.root,'0.1.0-beta.161'),b=await payload(f.root,'0.1.0-beta.162');await installer.install(f.paths,a,{noPath:true});const launcher=await readFile(f.paths.launcher),events=[],service=restartLifecycle(f.paths,events,'0.1.0-beta.161');t.after(()=>service.close());
  await assert.rejects(installer.install(f.paths,b,{noPath:true,lifecycle:service.lifecycle,afterStep(step){if(step==='launcher-switched')throw Error('Interrupted before receipt commit');}}),/Interrupted before receipt commit/);assert.deepEqual(events,['startup-mutex','ready']);assert.deepEqual(await readFile(f.paths.launcher),launcher);await assert.rejects(lstat(path.join(f.paths.configDir,'install-transaction.json')),{code:'ENOENT'});service.close();
 });
+
+test('a persistent database lock after owned shutdown retains a recoverable upgrade', {timeout: 12000}, async t => {
+ const {root,paths}=await fixture(t);
+ const oldVersion='0.1.0-beta.161',newVersion='0.1.0-beta.162';
+ const oldPackage=await payload(root,oldVersion),newPackage=await payload(root,newVersion);
+ await installer.install(paths,oldPackage,{noPath:true});
+ await writeFile(paths.config,JSON.stringify({schema:1,host:{id:'cursor'}}),{mode:0o600});
+ const [launcher,receipt,settings]=await Promise.all([paths.launcher,paths.installation,paths.config].map(file=>readFile(file)));
+ const original=new Coordinator({root:paths.state,selectedHost:'codex'}), owner='original-coordinator';
+ const goal=original.preparePortableGoal({submissionId:'retained-lock',mode:'codex_only',environment:'fixture',
+  objective:'Keep a saved goal during interrupted upgrade',acceptance:['Preserve the exact stopped approval']},'prepare');
+ original.control({goalId:goal.id,action:'stop'},'stop');
+ const savedGoal=original.store.get('goal',goal.id);
+ assert.equal(savedGoal.status,'stopped');
+ original.acquireWorker(owner);
+ let running=true;
+ const closeOriginal=()=>{
+  if(!running)return;
+  original.releaseWorker(owner);
+  original.close();
+  running=false;
+ };
+ const events=[],service=restartLifecycle(paths,events,oldVersion);
+ const database=path.join(paths.state,'harness.sqlite3');
+ const transaction=path.join(paths.configDir,'install-transaction.json');
+ let blocker,failedInstall;
+ try{
+  await assert.rejects(installer.install(paths,newPackage,{noPath:true,lifecycle:{...service.lifecycle,
+   async stopForMaintenance(){
+    closeOriginal();
+    blocker=new DatabaseSync(database);
+    blocker.exec('PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE');
+    return true;
+   },
+  }}),error=>{
+   assert.match(error.message,/database is locked.*installation recovery needs inspection/i);
+   failedInstall=error;
+   return true;
+  });
+  const pending=JSON.parse(await readFile(transaction));
+  assert.equal(pending.phase,'prepared');
+  assert.equal(pending.registered,true);
+  assert.equal(pending.oldReceipt.version,oldVersion);
+  assert.equal(pending.newReceipt.version,newVersion);
+  const cli=path.resolve(import.meta.dirname,'../src/beta/cli.mjs');
+  const result=spawnSync(process.execPath,[cli,'--home',paths.home,'recover'],{encoding:'utf8',timeout:5000});
+  assert.equal(result.status,1,result.stderr);
+  assert.match(result.stderr,/database is locked.*then retry.*mosaic recover/i);
+  assert.equal(failedInstall.cause?.cause?.code,'ERR_SQLITE_ERROR');
+  await assert.rejects(installer.recoverInstallation(paths,{lifecycle:service.lifecycle}),error=>{
+   assert.match(error.message,/database is locked.*then retry.*mosaic recover/i);
+   assert.equal(error.cause?.code,'ERR_SQLITE_ERROR');
+   assert.equal(error.cause.errcode&0xff,5);
+   return true;
+  });
+  assert.deepEqual(JSON.parse(await readFile(transaction)),pending);
+  assert.deepEqual(events,[]);
+  blocker.close();
+  blocker=null;
+
+  assert.equal(await installer.recoverInstallation(paths,{lifecycle:service.lifecycle}),true);
+  assert.deepEqual(events,['startup-mutex','ready']);
+  assert.deepEqual(await readFile(paths.launcher),launcher);
+  assert.deepEqual(await readFile(paths.installation),receipt);
+  assert.deepEqual(await readFile(paths.config),settings);
+  await assert.rejects(lstat(transaction),{code:'ENOENT'});
+  await assert.rejects(lstat(path.join(paths.versions,newVersion)),{code:'ENOENT'});
+  const current=new DatabaseSync(database,{readOnly:true});
+  try{
+   assert.deepEqual(JSON.parse(current.prepare("SELECT data FROM records WHERE kind='goal' AND id=?").get(goal.id).data),savedGoal);
+  }finally{current.close();}
+ }finally{
+  blocker?.close();
+  closeOriginal();
+  service.close();
+ }
+});
+
 test('failed owned restart retains committed handoff until recovery obtains startup mutex',async t=>{
  const f=await fixture(t),a=await payload(f.root,'0.1.0-beta.161'),b=await payload(f.root,'0.1.0-beta.162');await installer.install(f.paths,a,{noPath:true});const failedEvents=[],failed=restartLifecycle(f.paths,failedEvents,'0.1.0-beta.162',{startFailure:true});
  await assert.rejects(installer.install(f.paths,b,{noPath:true,lifecycle:failed.lifecycle}),/did not become ready/);assert.deepEqual(failedEvents,['startup-mutex']);assert.equal(JSON.parse(await readFile(path.join(f.paths.configDir,'install-transaction.json'))).phase,'committed');

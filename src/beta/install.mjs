@@ -2,14 +2,13 @@ import {cp,rename,rm} from 'node:fs/promises';
 import {createInterface} from 'node:readline/promises';
 import {fileURLToPath} from 'node:url';
 import {randomUUID} from 'node:crypto';
-import {DatabaseSync} from 'node:sqlite';
 import path from 'node:path';
 import {isEntry} from '../harness/entry.mjs';
 import {verifyPackage} from '../harness/package.mjs';
 import {canonical} from '../harness/contracts.mjs';
 import {readBundledNativeCheckRuntime} from './package-contract.mjs';
 import {validateNativeCheckRuntime} from '../project/check-backends/darwin-seatbelt-v2.mjs';
-import {atomic,currentHome,entry,fileBytes,hash,jsonFile,localDirectory,locations,saveJson,shellQuote,withLock} from './files.mjs';
+import {atomic,currentHome,entry,fileBytes,hash,jsonFile,localDirectory,locations,readMaintenanceDatabase,saveJson,shellQuote,withLock} from './files.mjs';
 import {readSetupIntent,removeCodexBindings} from './setup.mjs';
 import {assertMaintenanceIdle,rollbackLaunchAgent,startLaunchAgent,stopForMaintenance,verifyLaunchAgent} from './service.mjs';
 
@@ -89,8 +88,7 @@ export async function assertStateCompatibility(paths,manifest){
  let savedExecution=null,heldNative=false;
  if(info){
   if(!info.isFile()||info.isSymbolicLink()||info.uid!==process.getuid()||(info.mode&0o077))throw Error('Unsafe Mosaic Beta state database');
-  const db=new DatabaseSync(database,{readOnly:true});
-  try{
+  readMaintenanceDatabase(database,db=>{
    const version=db.prepare('PRAGMA user_version').get().user_version;
    if(!compatible.database.includes(version))throw Error('Incompatible database schema '+version+'. Keep the newer version; live state is never replaced by an older backup.');
    if(db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='records'").get()){
@@ -100,7 +98,7 @@ export async function assertStateCompatibility(paths,manifest){
      (kind='goal' AND json_extract(data,'$.manifest.executionPolicy.backend')='darwin-seatbelt' AND json_extract(data,'$.manifest.executionPolicy.backendRevision')=2 AND json_extract(data,'$.status') NOT IN ('completed','partial')) OR
      (kind='execution_owner' AND json_extract(data,'$.status')!='quiescent') LIMIT 1`).get();
    }
-  }finally{db.close();}
+  });
  }
  const savedNative=savedExecution?.identity?.nativeRuntime;
  if(savedNative&&!settings?.nativeCheckRuntime)throw Error('Retain the saved native runtime configuration before switching the installed version.');
@@ -233,9 +231,11 @@ export async function install(paths,payload,{noPath=false,afterStep=()=>{},lifec
   if(!switched)return {receipt};
   const existed=await lifecycle.verifyLaunchAgent(paths),registered=await lifecycle.stopForMaintenance(paths),staged='.install-'+randomUUID();
   let tx={schema:1,version,phase:'prepared',oldLauncher:old.bytes?.toString('base64')??null,oldReceipt:old.receipt,newReceipt:receipt,existed,registered,staged,settingsHash:await settingsSnapshot(paths)};
-  await assertStateCompatibility(paths,manifest);await saveJson(transactionFile(paths),tx);
+  // Persist the owned restart handoff before the post-shutdown state read can fail.
+  await saveJson(transactionFile(paths),tx);
   const advance=async(phase,event)=>{tx={...tx,phase};await saveJson(transactionFile(paths),tx);await afterStep(event);};let newVersion=false;
   try{
+   await assertStateCompatibility(paths,manifest);
    await afterStep('transaction-prepared');
    if(!present){await cp(payload,path.join(paths.versions,staged),{recursive:true,force:false,errorOnExist:true});await verifyVersion(path.join(paths.versions,staged),version);await rename(path.join(paths.versions,staged),installed);newVersion=true;}
    await advance('staged','version-staged');await localDirectory(paths,path.dirname(paths.launcher));await assertStateCompatibility(paths,manifest);await assertSettingsSnapshot(paths,tx);
@@ -246,7 +246,7 @@ export async function install(paths,payload,{noPath=false,afterStep=()=>{},lifec
   }catch(error){
    if(tx.phase==='committed')throw error;
    try{const recovered=await recoverLocked(paths,lifecycle);if(newVersion)await rm(installed,{recursive:true,force:true});return {...recovered,error};}
-   catch(recovery){throw Error(error.message+' Installation recovery needs inspection: '+recovery.message);}
+   catch(recovery){throw Error(error.message+' Installation recovery needs inspection: '+recovery.message,{cause:error});}
   }
  });
  if(outcome.handoff)await finishRestart(paths,outcome.handoff,lifecycle);
