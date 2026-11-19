@@ -8,11 +8,16 @@ From the directory containing the matching archive and SHA256 file, substitute t
 
 ```sh
 shasum -a 256 -c mosaic-beta-VERSION-darwin-arm64.tar.gz.sha256
-tar -xzf mosaic-beta-VERSION-darwin-arm64.tar.gz
+(
+  umask 022
+  tar -xzf mosaic-beta-VERSION-darwin-arm64.tar.gz
+)
 cd mosaic-beta-VERSION-darwin-arm64
 ./install
 ~/.local/bin/mosaic setup
 ```
+
+The subshell keeps the archive's packaged file permissions during extraction. If the installer reports a mode mismatch, extract the verified archive into an empty directory with the command above and retry.
 
 The installer checks package integrity and offers to append a managed PATH block to `~/.zshrc` when needed. Use `./install --no-path` to skip that prompt. Open a fresh terminal after accepting a PATH change. Setup previews the selected host, profiles, review source, routing, concurrency and exact native artifact identity. Private configuration lives under `~/Library/Application Support/Mosaic Beta/config`; bearer values use a separate owned `0600` credentials file. Existing schema-1 settings remain readable until explicit preview/cancel/apply migration. Migration does not rewrite saved goal identities or approvals.
 

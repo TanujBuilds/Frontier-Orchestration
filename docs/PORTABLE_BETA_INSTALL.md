@@ -69,7 +69,9 @@ regenerated for the final frozen source candidate.
 ## Install outside the checkout
 
 Verify the published checksum by a separately trusted channel when one exists,
-extract under an owned path (spaces are supported), then run:
+then follow the [manual extraction steps](TERMINAL_BETA.md#install) to preserve
+the packaged file permissions. Extract under a directory you own. Spaces in the
+path are supported. After extraction, run:
 
 ```sh
 ./mosaic-beta-0.1.0-beta.160-darwin-arm64/install --no-path
