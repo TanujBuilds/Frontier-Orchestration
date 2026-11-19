@@ -1,5 +1,6 @@
 import {normalizeSettings,validateSettingsCredentials} from './settings.mjs';
 import {workerEndpoint} from '../harness/worker-profile.mjs';
+import {hostedWorkerChoices,hostedWorkerPresets,readBearerKey} from './hosted-worker-presets.mjs';
 
 const categories=['general','backend','frontend','tests','docs','design'];
 const yes=value=>/^y(es)?$/i.test(value);
@@ -29,11 +30,21 @@ export async function collectMultiWorkerSetup(ask,output,{hostId,execution,nativ
  const count=integer(await ask('How many workers? 2 or 3 [3]: ')||'3',2,3,'worker count'),providers=[],entries={},routes=new Map();
  for(let i=1;i<=count;i++){
   // Location helps explain the supplied address; it is not a new topology schema.
-  const location=integer(await ask(`Worker ${i} location: 1. This Mac  2. Another computer  3. Hosted API [1]: `)||'1',1,3,'worker location');
+  const location=integer(await ask(`Worker ${i} location or hosted provider
+  1. This Mac
+  2. Another computer
+  3. Custom hosted API
+${hostedWorkerChoices(4)}
+Choose for worker ${i} [1]: `)||'1',1,3+hostedWorkerPresets.length,'worker location');
   if(location===2)output.write('Use an address reachable from this Mac. localhost refers to this Mac, not the other computer.\n');
-  const baseUrl=await ask(`Worker ${i} API base URL: `),model=await ask(`Worker ${i} Model ID: `),needsKey=yes(await ask(`Worker ${i} does this endpoint require an API bearer key? [y/N] `)),id='worker-'+i,credentialRef=needsKey?id+'-key':null;
-  if(needsKey)entries[credentialRef]=await ask(`Worker ${i} Bearer key (hidden): `,{secret:true});
-  providers.push(createProfile({id,displayName:'Worker '+i,baseUrl,model,credentialRef}));
+  const preset=hostedWorkerPresets[location-4];
+  const baseUrl=preset?.baseUrl??await ask(`Worker ${i} API base URL: `);
+  const model=await ask(`Worker ${i} Model ID: `);
+  const needsKey=preset!==undefined||yes(await ask(`Worker ${i} does this endpoint require an API bearer key? [y/N] `));
+  const id='worker-'+i,credentialRef=needsKey?id+'-key':null;
+  if(needsKey)entries[credentialRef]=await readBearerKey(ask,`Worker ${i} Bearer key (hidden): `);
+  const displayName=preset?`Worker ${i} (${preset.displayName})`:`Worker ${i}`;
+  providers.push(createProfile({id,displayName,baseUrl,model,credentialRef}));
   const selected=await ask(`Worker ${i} specialties: 1. General  2. Backend  3. Frontend  4. Tests  5. Docs  6. Design (comma-separated numbers; Enter for none): `);
   const choices=selected===''?[]:selected.split(',').map(value=>integer(value.trim(),1,6,'specialty'));
   if(new Set(choices).size!==choices.length)throw Error('Duplicate specialty in worker selection');

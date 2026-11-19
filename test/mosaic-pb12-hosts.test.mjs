@@ -90,6 +90,55 @@ test('host preview CLI emits bounded JSON and invokes no host executable or sett
  const run=spawnSync(process.execPath,[cli,'--home','/never-created mosaic fixture','host-preview','--host','cursor'],{encoding:'utf8',timeout:10000});
  assert.equal(run.status,0,run.stderr);const preview=JSON.parse(run.stdout);assert.equal(preview.hostId,'cursor');assert.equal(preview.entry.command,'/never-created mosaic fixture/.local/bin/mosaic');assert.match(preview.instructions,/manual/i);
 });
+test('Codex registration preview targets the resolved Codex profile',()=>{
+ const codexHome='/selected Codex profile';
+ const preview=getHost('codex').previewRegistration({paths:{...paths,codexHome},launcher});
+ assert.equal(preview.target,path.join(codexHome,'config.toml'));
+ assert.deepEqual(preview.argv,['mcp','add','mosaic-beta','--',launcher,'mcp']);
+});
+test('connect presents the official registration route for each host without reading or writing host configuration',async t=>{
+ const home=await mkdtemp(path.join(os.tmpdir(),"mosaic owner's host-"));t.after(()=>rm(home,{recursive:true,force:true}));
+ const p=locations(home,true),cli=fileURLToPath(new URL('../src/beta/cli.mjs',import.meta.url));
+ const secret='preserve-this-private-fixture';
+ const cases=[
+  ['codex',path.join(p.codexHome,'config.toml'),/'codex' 'mcp' 'add' 'mosaic-beta' '--'/,/codex mcp get mosaic-beta/],
+  ['claude-code',path.join(home,'.claude.json'),/'claude' 'mcp' 'add' '--transport' 'stdio' '--scope' 'user' 'mosaic-beta' '--'/,/\/mcp/],
+  ['cursor',path.join(home,'.cursor','mcp.json'),/"type": "stdio"/,/Restart Cursor/],
+  ['antigravity',path.join(home,'.gemini','config','mcp_config.json'),/"mosaic-beta": \{/i,/Copy Config File Path|View raw config/],
+ ];
+ for(const [id,target,route,reload] of cases){
+  await mkdir(path.dirname(target),{recursive:true});
+  await writeFile(target,secret);
+  const run=spawnSync(process.execPath,[cli,'--home',home,'connect','--host',id],{encoding:'utf8',timeout:10000,env:{...process.env,PATH:home}});
+  assert.equal(run.status,0,run.stderr);
+  assert.ok(run.stdout.includes(target));
+  assert.match(run.stdout,route);
+  assert.match(run.stdout,reload);
+  if(id==='codex'||id==='claude-code')assert.ok(run.stdout.includes("mosaic owner'\"'\"'s host-"));
+  assert.match(run.stdout,/preserve (?:the )?existing entry/i);
+  assert.match(run.stdout,/UNVERIFIED\s+Host registration/);
+  assert.match(run.stdout,/UNVERIFIED\s+Host tools discovered/);
+  assert.match(run.stdout,/UNVERIFIED\s+Host tool call/);
+  assert.match(run.stdout,/registry_list.*\{\}/);
+  assert.ok(!run.stdout.includes(secret));
+  assert.equal(await readFile(target,'utf8'),secret);
+ }
+ await assert.rejects(readFile(p.config),{code:'ENOENT'});
+});
+test('connect without a host uses the saved coding app and reports missing setup',async t=>{
+ const home=await mkdtemp(path.join(os.tmpdir(),'mosaic-connect-selected-'));t.after(()=>rm(home,{recursive:true,force:true}));
+ const p=locations(home,true),cli=fileURLToPath(new URL('../src/beta/cli.mjs',import.meta.url));
+ const runConnect=()=>spawnSync(process.execPath,[cli,'--home',home,'connect'],{encoding:'utf8',timeout:10000});
+ const before=runConnect();
+ assert.equal(before.status,1);
+ assert.match(before.stderr,/mosaic setup/);
+ await privateDirectories(p);
+ await saveJson(p.config,{schema:1,host:{id:'cursor'},worker:null});
+ const after=runConnect();
+ assert.equal(after.status,0,after.stderr);
+ assert.match(after.stdout,/Coding app · Cursor/);
+ assert.match(after.stdout,/\.cursor\/mcp\.json/);
+});
 test('other hosts report aliases without inheriting or claiming verified Codex model usage',async t=>{
  const root=await mkdtemp(path.join(os.tmpdir(),'mosaic-host-identity-'));t.after(()=>rm(root,{recursive:true,force:true}));
  const c=new Coordinator({root});t.after(()=>c.close());

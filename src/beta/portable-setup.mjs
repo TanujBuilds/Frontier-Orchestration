@@ -5,11 +5,11 @@ import {assertExecutionAvailable} from '../harness/execution.mjs';
 import {ProviderRegistry} from '../harness/providers/registry.mjs';
 import {digest} from '../harness/contracts.mjs';
 import {normalizeSettings,readCredentials,readSettings,configuredPolicies,validateSettingsCredentials} from './settings.mjs';
-import {getHost,HOST_IDS,formatHostReadiness} from './hosts/index.mjs';
+import {getHost,HOST_IDS,formatHostReadiness,formatHostRegistrationGuide} from './hosts/index.mjs';
 import {validateMultiWorkerCredentials} from './multi-worker-setup.mjs';
 import {collectPortableSetup,formatPortableSetupSummary} from './setup-wizard.mjs';
 import {SETUP_PROBE_MESSAGE,createProviderDiagnostic,discoverProvider,probeProvider,formatProviderDiagnostic} from './provider-diagnostics.mjs';
-import {atomic,entry,hash,jsonFile,localDirectory,saveJson,shellQuote,withLock} from './files.mjs';
+import {atomic,entry,hash,jsonFile,localDirectory,saveJson,withLock} from './files.mjs';
 const fingerprint=value=>hash(canonical(value));
 const yes=value=>/^y(es)?$/i.test(value);
 const credentialFile=paths=>path.join(paths.configDir,'credentials.json');
@@ -113,7 +113,9 @@ export async function setupPortable(paths,{ask,output,settings:provided,executio
  const showDetails=!['simple','guided'].includes(configured.presentation)||yes(await guardedAsk('Show technical settings details? [y/N] '));
  await withCurrentSetup(()=>{
  if(showDetails)output.write('Exact private setup preview (provider references only)\n'+JSON.stringify(settings,null,2)+'\n');
- output.write('Host target: '+hostPreview.target+'\nReviewed entry: '+JSON.stringify(hostPreview.entry)+'\nHost: '+adapter.displayName+' · '+(manualHost?'manual configuration required; no host file will be changed':'fixture-tested registration; actual host compatibility unprobed')+'.\n'+(manualHost?(settings.host.id==='codex'?'Review this supported Codex CLI command and run it yourself after preserving any existing mosaic-beta entry:\n'+[hostPreview.command,...hostPreview.argv].map(shellQuote).join(' '):'Review and merge this snippet without changing unrelated settings:\n'+JSON.stringify({mcpServers:{'mosaic-beta':hostPreview.entry}},null,2))+'\nLoad the MCP connection in '+adapter.displayName+' and inspect its Mosaic tools; host discovery remains unverified.\n':'')+'No fallback. Existing server only; no model installation.\n');
+ if(manualHost)output.write('Host: '+adapter.displayName+' · manual configuration required. Until you connect the app, host discovery remains unverified.\n'+formatHostRegistrationGuide(hostPreview));
+ else output.write('Host target: '+hostPreview.target+'\nReviewed entry: '+JSON.stringify(hostPreview.entry)+'\nHost: '+adapter.displayName+' · fixture-tested registration; actual host compatibility unprobed.\n');
+ output.write('No fallback. Existing server only; no model installation.\n');
  });
  const workers=settings.providers.filter(profile=>profile.roles.includes('worker')),secrets=Object.values(nextCredentials.entries),reports=new Map(workers.map(profile=>[profile.id,createProviderDiagnostic(profile,{secrets})]));
  const registry=workers.length?ProviderRegistry({profiles:settings.providers,credentialResolver:async ref=>{await assertCurrentSetup();return nextCredentials.entries[ref];}}):null;

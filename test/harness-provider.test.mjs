@@ -54,3 +54,32 @@ test('SSE wire above8MiB fails unknown without retry even when visible content i
  const f=await fixture(t,(_req,res)=>{res.writeHead(200,{'content-type':'text/event-stream'});res.end(wire);});
  await assert.rejects(f.provider.complete([]),error=>{assert.equal(error.requestOutcome,'unknown');assert.match(error.message,/wire.*8 MiB/);return true;});assert.equal(f.posts(),1);
 });
+
+for(const [baseUrl,openAICompatible,tokenField] of [
+ ['https://api.openai.com/v1/',true,'max_completion_tokens'],
+ ['https://api.openai.com:443/v1',true,'max_completion_tokens'],
+ ['https://api.openai.com/other/v1',true,'max_tokens'],
+ ['https://api.openai.com.example.test/v1',true,'max_tokens'],
+ ['https://api.openai.com/v1',false,'max_tokens'],
+ ['https://api.moonshot.ai/v1',true,'max_tokens'],
+ ['https://api.z.ai/api/paas/v4',true,'max_tokens'],
+ ['http://localhost:8000/v1',true,'max_tokens'],
+])test(`chat completion uses ${tokenField} for ${baseUrl} with compatible mode ${openAICompatible}`,async()=>{
+ const requests=[];
+ const provider=new LocalProvider({
+  baseUrl,model:'fixture',openAICompatible,
+  capabilities:{protocol:'mosaic-structured-v1',transports:['json'],modelDiscovery:'manual'},
+  fetchImpl:async(url,options)=>{
+   requests.push({url:url.href,method:options.method,body:JSON.parse(options.body)});
+   return Response.json({model:'fixture',choices:[{message:{content:'ok'},finish_reason:'stop'}]});
+  },
+ });
+ const messages=[{role:'user',content:'fixture message'}];
+ assert.equal((await provider.complete(messages,{maxTokens:16})).content,'ok');
+ assert.deepEqual(requests,[{
+  url:new URL(baseUrl).href.replace(/\/+$/,'')+'/chat/completions',
+  method:'POST',
+  body:{model:'fixture',stream:false,[tokenField]:16,messages,
+   ...(openAICompatible?{}:{chat_template_kwargs:{enable_thinking:false}})},
+ }]);
+});

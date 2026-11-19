@@ -29,7 +29,7 @@ group('Actual Darwin sandbox backend, including indirect fixture constructors', 
 ]);
 group('Actual Darwin arm64 native runtime, browser, packaging or retained execution proof', [
   'mosaic-pb15-native-v2-composition', 'mosaic-pb16-coding-overlap',
-  'mosaic-pb16-package', 'mosaic-pb16-update', 'native-artifact', 'release-readiness'
+  'mosaic-macos-installer', 'mosaic-pb16-package', 'mosaic-pb16-update', 'native-artifact', 'release-readiness'
 ]);
 group('Extracted Darwin release lifecycle; requires independently inventoried archives', [
   'mosaic-m021-installed-setup', 'mosaic-m025-installed-diagnostics',

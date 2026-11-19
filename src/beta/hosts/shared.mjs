@@ -27,21 +27,24 @@ function ioContract(io){
  if(!io||['read','compareAndSwap','readReceipt','writeReceipt','removeReceipt'].some(k=>typeof io[k]!=='function'))throw Error('Manual registration requires an explicitly injected atomic compareAndSwap configuration/receipt adapter');
  return io;
 }
-export function createHostAdapter({id,displayName,relativeConfig,cliCommand,cliArgs,entryType=false,documentation}){
+export function createHostAdapter({id,displayName,relativeConfig,cliCommand,cliArgs,entryType=false,documentation,connectionHelp}){
  const cli=id==='codex';
  const descriptor={schema:1,id,displayName,transport:'stdio',reviewDelivery:'pull',capabilities:Object.freeze({tools:true,evidenceLevel:'fixture-tested',automaticWakeup:false,nativeModelVerification:false}),documentation};
- const adapter={...descriptor,
+ const adapter={...descriptor,connectionHelp:Object.freeze(connectionHelp),
   previewRegistration({paths,launcher,existing}={}){
    if(!object(paths))throw Error('Host paths are required');
    const home=absolute(paths.home,'host home'),configDir=absolute(paths.configDir,'receipt directory');
    absolute(launcher,'Mosaic launcher');
-   const target=path.join(home,...relativeConfig),before=config(existing,cli);
+   const target=cli&&paths.codexHome!==undefined
+    ?path.join(absolute(paths.codexHome,'Codex profile'),'config.toml')
+    :path.join(home,...relativeConfig);
+   const before=config(existing,cli);
    const entry={...(entryType?{type:'stdio'}:{}),command:launcher,args:['mcp']};
    const ownedEntry=cli?{name,enabled:true,transport:{type:'stdio',...entry}}:entry;
    if(select(before,cli)!==null)throw Error('Existing mosaic-beta entry is foreign; use its original ownership receipt to remove or preserve it');
    const after=set(before,ownedEntry,cli,!!before.mcpServers);
    const command=cliCommand??null,argv=cliArgs?cliArgs(launcher):null;
-   const instructions=`Manual configuration for ${displayName}: review this owned ${name} entry and preserve other settings. ${command?`Run the reviewed argv as ${[command,...argv].map(shellQuote).join(' ')}. `:`Merge the entry into mcpServers in ${target}. `}Load or refresh the MCP connection in the host. Pull review_inbox from the main conversation, inspect bounded evidence, then use review_reserve and review_submit with exact binding hashes. An inactive or closed host is not guaranteed to wake; disconnected review remains durably waiting. API review is separately authenticated and explicitly selected. Protected checks require an explicitly configured available backend; native revision2 uses the separately fingerprinted bundled check artifact. This registration preview alone does not prove host sign-in, model identity or sandbox enforcement.`;
+   const instructions=`Manual configuration for ${displayName}: review this ${name} entry and preserve other settings. ${connectionHelp.locate} If the name already exists, keep an exact match and preserve a differing entry. ${command?`If the name is available, run the reviewed argv as ${[command,...argv].map(shellQuote).join(' ')}. `:`Add only the new entry inside mcpServers. `}${connectionHelp.refresh} Pull review_inbox from the main conversation, inspect bounded evidence, then use review_reserve and review_submit with exact binding hashes. An inactive or closed host is not guaranteed to wake; disconnected review remains durably waiting. API review is separately authenticated and explicitly selected. Protected checks require an explicitly configured available backend; native revision2 uses the separately fingerprinted bundled check artifact. This registration preview alone does not prove host sign-in, model identity or sandbox enforcement.`;
    const value={schema:1,hostId:id,transport:'stdio',reviewDelivery:'pull',evidenceLevel:'fixture-tested',target,receiptFile:path.join(configDir,`host-${id}-binding.json`),launcher,entry,ownedEntry,command,argv,
     expectedConfigHash:fingerprint(before),appliedConfigHash:fingerprint(after),hadMcpServers:!!before.mcpServers,instructions};
    return {...value,previewHash:fingerprint(value)};

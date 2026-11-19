@@ -33,6 +33,32 @@ account setup and live-provider review remain NOT RUN. A closed host retains
 its review inbox; no API fallback occurs because it disconnects. See
 [release evidence](PORTABLE_BETA_RELEASE.md) for the current candidate boundary.
 
+## Connect a coding app
+
+After setup, run `mosaic connect` to reopen the guide for your selected app.
+Use `mosaic connect --host codex|claude-code|cursor|antigravity` to view another
+app’s instructions. Use `mosaic host-preview --host ID` for the JSON preview.
+Both commands print instructions and leave registration to you and your app.
+
+Review the launcher path and its single `mcp` argument. If a
+`mosaic-beta` entry already exists, keep an exact match and preserve a differing
+entry while resolving the conflict in the app. Keep unrelated settings when
+adding an entry.
+
+| Host | User registration and refresh |
+| --- | --- |
+| Codex | Check MCP Servers in Codex settings or run `codex mcp get mosaic-beta` from the same profile. If the name is available, use the quoted `codex mcp add` command printed by Mosaic. A same-name add can replace the existing entry. Refresh MCP Servers or start a new session when ready. [OpenAI MCP guide](https://learn.chatgpt.com/docs/extend/mcp?surface=cli) · [Codex CLI source](https://github.com/openai/codex/blob/main/codex-rs/cli/src/mcp_cmd.rs) |
+| Claude Code | Check `/mcp` in the intended project. Use the printed `claude mcp add --transport stdio --scope user` command to register for your account. Open a new Claude Code session and check `/mcp` again. [Claude Code MCP guide](https://code.claude.com/docs/en/mcp) |
+| Cursor | Add the displayed entry to `~/.cursor/mcp.json`. Restart Cursor when ready and check Customize → MCPs. A project entry with the same name takes precedence. [Cursor MCP help](https://prod.cursor.com/help/customization/mcp) |
+| Antigravity | In the app, find MCP Servers under Customizations → Installed and check the user configuration path. In the IDE, use MCP Servers → Manage MCP Servers → View raw config. The documented global path is `~/.gemini/config/mcp_config.json`. Add the displayed entry and refresh it in the MCP manager. [Google MCP guide](https://antigravity.google/docs/mcp?app=antigravity) |
+
+Record three observations from the intended app and profile separately.
+Confirm the entry was saved, check that the app lists the Mosaic tools, and
+inspect a successful call to `mosaic-beta` tool `registry_list` with `{}`.
+The tool dispatches no Mosaic work. An app conversation can use the app’s own
+model to request the call. The terminal guide and disposable fixture runs
+leave actual app discovery and calls unverified.
+
 The dated stage 12 account below is retained as historical evidence. Its
 statement that native checks await stage 15 describes that earlier stage.
 

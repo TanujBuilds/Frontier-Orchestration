@@ -109,7 +109,7 @@ function guidedSteps(urls){
  add('guided choice','Choose worker setup [1]: ','6');
  add('worker count','How many workers? 2 or 3 [3]: ','3');
  for(let i=1;i<=3;i++){
-  add('worker '+i+' location',`Worker ${i} location: 1. This Mac  2. Another computer  3. Hosted API [1]: `,String(i));
+  add('worker '+i+' location',`Choose for worker ${i} [1]: `,String(i));
   add('worker '+i+' URL',`Worker ${i} API base URL: `,urls[i-1]);
   add('worker '+i+' model',`Worker ${i} Model ID: `,'fixture-model');
   // Paste the affirmative answer and key together, before the hidden-key

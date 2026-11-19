@@ -2,6 +2,7 @@ import {codex} from './codex.mjs';
 import {claudeCode} from './claude-code.mjs';
 import {cursor} from './cursor.mjs';
 import {antigravity} from './antigravity.mjs';
+import {shellQuote} from '../files.mjs';
 const adapters=new Map([codex,claudeCode,cursor,antigravity].map(adapter=>[adapter.id,adapter]));
 export const HOST_IDS=Object.freeze([...adapters.keys()]);
 export function getHost(id){const adapter=adapters.get(id);if(!adapter)throw Error('Unsupported Mosaic host');return adapter;}
@@ -13,11 +14,28 @@ export function normalizeHostSettings(raw){
 }
 export const hostRegistry=Object.freeze({get(id){const {schema,id:hostId,displayName,transport,reviewDelivery,capabilities,documentation}=getHost(id);return structuredClone({schema,id:hostId,displayName,transport,reviewDelivery,capabilities,documentation});},list(){return HOST_IDS.map(id=>this.get(id));}});
 
+export function formatHostRegistrationGuide(preview){
+ const {displayName,connectionHelp}=getHost(preview.hostId);
+ const entry=preview.command
+  ?'If the name is available, run this command in your terminal:\n'+[preview.command,...preview.argv].map(shellQuote).join(' ')
+  :'If the file is empty or missing, use the JSON below. In an existing file, add only the mosaic-beta member inside mcpServers. If that object is missing, add it while keeping the other settings.\n'+JSON.stringify({mcpServers:{'mosaic-beta':preview.entry}},null,2);
+ return [
+  `Connect ${displayName} · user MCP configuration`,
+  `Host target: ${preview.target}`,
+  connectionHelp.locate,
+  `If mosaic-beta already exists, compare it with the command ${JSON.stringify(preview.launcher)} and the single argument "mcp". Keep an exact match. If it differs, preserve the existing entry and resolve the conflict in the app before continuing.`,
+  entry,
+  connectionHelp.refresh,
+  'After the app lists the Mosaic tools, ask it to call mosaic-beta registry_list with {} in the same session. The tool dispatches no Mosaic work. If you use an app conversation to request the call, that conversation may use the app’s model.',
+  ''
+ ].join('\n');
+}
+
 // Local presentation only. Neither a receipt nor a viewer request observes the
 // coding app's tool discovery/calls; no host-proof schema or probe is implied.
 export function formatHostReadiness(hostId,{configuration='selected',instructions='not recorded for this configuration',registration='unverified',nextAction}={}){
  const host=getHost(hostId),fixture=registration==='fixture',saved=registration==='saved';
  const registrationDetail=fixture?'saved in a disposable fixture; actual host registration is unverified.':saved?'saved registration verified; actual tool discovery and calls remain unverified.':'unverified; saving local settings or instructions does not register the coding app.';
- const next=nextAction??(fixture||saved?`In an actual ${host.displayName} profile, discover the mosaic-beta tools, then call registry_list with {} to check the connection without model work.`:`In ${host.displayName}, review the mosaic-beta registration using mosaic host-preview --host ${hostId}, preserve other entries, then load or refresh its MCP connection.`);
+ const next=nextAction??(fixture||saved?`In an actual ${host.displayName} profile, discover the mosaic-beta tools, then call registry_list with {} to check the connection without dispatching Mosaic work.`:`Run mosaic connect for ${host.displayName} or use mosaic host-preview --host ${hostId} for the JSON preview.`);
  return `INFO  Coding app · ${host.displayName} ${configuration}; selection does not prove a connection.\nINFO  Host registration instructions · ${instructions}.\n${fixture||saved?'INFO':'UNVERIFIED'}  Host registration · ${registrationDetail}\nUNVERIFIED  Host tools discovered · no discovery observed from the selected coding app.\nUNVERIFIED  Host tool call · no successful call observed from the selected coding app.\nINFO  Host evidence · fixture adapters, provider checks and coordinator viewer tools_list do not prove coding-app discovery or a successful call; these stages make no sign-in, host-version, coding-quality or live-provider qualification claim.\nNext action: ${next}\n`;
 }

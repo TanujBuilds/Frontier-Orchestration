@@ -66,6 +66,42 @@ it does not prove that compiling upstream Node on a different toolchain produces
 identical binary bytes. Final verification references and source commit must be
 regenerated for the final frozen source candidate.
 
+## macOS Installer package
+
+The local Apple Silicon `.pkg` uses macOS Installer to stage an existing
+archive in your home folder. To build the package, supply the exact archive,
+its version and the SHA-256 from its trusted candidate record:
+
+```sh
+node scripts/package-macos-installer.mjs --version "$VERSION" \
+  --archive "$ARCHIVE" --sha256 "$TRUSTED_SHA256" --output "$PACKAGE_OUTPUT"
+```
+
+To try an approved local candidate, open the `.pkg` in Finder and complete the
+Installer screens. In Finder, choose **Go → Home** and open **Mosaic Setup**.
+Open the folder for the version you installed, then double-click **Finish
+Installing Mosaic**. Terminal verifies the archive and runs the same per-user
+installation as the standalone archive.
+
+On a first installation, answer **y** at **Open Mosaic setup now?** to start
+setup. You can also run `"$HOME/.local/bin/mosaic" setup` later. After setup,
+run `"$HOME/.local/bin/mosaic" connect` to reopen the instructions for your
+selected coding app. See [coding app compatibility](HOST_COMPATIBILITY.md).
+
+To update, open the new `.pkg` and run **Finish Installing Mosaic** from its
+version folder.
+Mosaic keeps the same configuration and retained versions; the existing rollback
+and recovery commands apply. After activation finishes, the **Mosaic Setup**
+version folder is only needed if you want to run that staged installer again.
+
+The builder creates an unsigned local candidate. Gatekeeper qualification of a
+public download requires a separately signed, notarized and stapled package,
+followed by a browser download and Finder install on a clean Apple Silicon Mac
+or VM. Record the downloaded package hash, macOS build, user permissions,
+activation, setup across login, and update and rollback results. See
+[release gates](PORTABLE_BETA_RELEASE.md) and [Apple's packaging
+guidance](https://developer.apple.com/documentation/xcode/packaging-mac-software-for-distribution).
+
 ## Install outside the checkout
 
 Verify the published checksum by a separately trusted channel when one exists,

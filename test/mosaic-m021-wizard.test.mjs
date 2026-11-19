@@ -32,6 +32,37 @@ for(const [choice,location,url] of [['1','local','http://localhost:11434/v1'],['
 test('simple bearer key uses hidden ask and private entries only',async()=>{
  const key='dummy-wizard-private-4935',io=simple({location:'3',url:'https://api.example/v1',key}),result=await collectPortableSetup(io.ask,io.output,runtime);assert.deepEqual(result.entries,{'worker-1-key':key});assert.equal(result.settings.providers[0].credentialRef,'worker-1-key');assert.deepEqual(io.prompts.filter(p=>p.options?.secret).map(p=>p.prompt),['Bearer key (hidden): ']);await validateSettingsCredentials(null,result.settings,{schema:1,entries:result.entries});assert.ok(!JSON.stringify(result.settings).includes(key));assert.ok(!io.text().includes(key));assert.ok(!formatPortableSetupSummary(result.settings).includes(key));
 });
+for(const [choice,name,baseUrl] of [
+ ['1','OpenAI Platform','https://api.openai.com/v1'],
+ ['2','Kimi Platform','https://api.moonshot.ai/v1'],
+ ['3','Z.ai GLM','https://api.z.ai/api/paas/v4'],
+])test(`hosted ${name} preset uses the documented endpoint, exact model and hidden key`,async()=>{
+ const model='account-model-v2',key='dummy-hosted-key-separate';
+ const io=simple({location:'3',url:choice,model,key});
+ const result=await collectPortableSetup(io.ask,io.output,runtime);
+ const [profile]=result.settings.providers;
+ assert.equal(profile.baseUrl,baseUrl);
+ assert.equal(profile.model,model);
+ assert.equal(profile.displayName,name);
+ assert.equal(profile.transport,'openai-chat');
+ assert.equal(profile.capabilities.modelDiscovery,'manual');
+ assert.deepEqual(result.entries,{'worker-1-key':key});
+ assert.equal(io.prompts.filter(({options})=>options?.secret).length,1);
+ assert.ok(!io.prompts.some(({prompt})=>/require an API bearer key/.test(prompt)));
+ assert.match(io.text(),/paste your own.*API base URL/i);
+ await validateSettingsCredentials(null,result.settings,{schema:1,entries:result.entries});
+ assert.ok(!io.text().includes(key));
+ assert.ok(!formatPortableSetupSummary(result.settings).includes(key));
+});
+test('named hosted preset requires an API key at setup',async()=>{
+ const io=simple({location:'3',url:'2',key:''});
+ await assert.rejects(collectPortableSetup(io.ask,io.output,runtime),/API key cannot be empty/);
+});
+test('hosted provider menu rejects an invalid provider number',async()=>{
+ const io=simple({location:'3',url:'8',key:null});
+ await assert.rejects(collectPortableSetup(io.ask,io.output,runtime),/Invalid hosted API provider/);
+ assert.ok(!io.prompts.some(({prompt})=>/Model ID/.test(prompt)));
+});
 for(const [label,options,error] of [
  ['host menu',{host:'0'},/Invalid host choice/],['worker menu',{location:'7'},/Invalid worker setup choice/],
  ['blank URL',{url:''},/API base URL/],['userinfo URL',{url:'https://user:pass@example/v1'},/API base URL/],['query URL',{url:'https://api.example/v1?key=dummy'},/API base URL/],['fragment URL',{url:'https://api.example/v1#dummy'},/API base URL/],['unsupported scheme',{url:'file:///tmp/model'},/API base URL/],['blank model',{model:''},/Invalid API worker profile/],['model whitespace',{model:' model '},/Invalid API worker profile/]
@@ -41,12 +72,12 @@ for(const [label,options,error] of [
 test('collection propagates EOF instead of inferring remaining answers',async()=>{
  const io=simple(),original=io.ask;let count=0;io.ask=async(...args)=>{if(++count===3)throw Error('Setup input ended');return original(...args);};await assert.rejects(collectPortableSetup(io.ask,io.output,runtime),/Setup input ended/);assert.equal(io.prompts.length,2);
 });
-function advanced({protocol='1',existingSettings=null,key=null,firstId='first'}={}){
+function advanced({protocol='1',existingSettings=null,key=null,firstId='first',firstUrl='http://127.0.0.1:8011/v1',secondUrl='http://127.0.0.1:8011/v1',reviewerUrl='https://review.example/v1',keyChoice,retainedKeys={}}={}){
  const prompts=[];let output='',current='',routes=0;
- const values={first:{id:firstId,name:'First worker',url:'http://127.0.0.1:8011/v1',model:'worker-a'},second:{id:'second',name:'Second worker',url:'http://127.0.0.1:8011/v1',model:'worker-b'},reviewer:{id:'review',name:'API reviewer',url:'https://review.example/v1',model:'review-model'}};
+ const values={first:{id:firstId,name:'First worker',url:firstUrl,model:'worker-a'},second:{id:'second',name:'Second worker',url:secondUrl,model:'worker-b'},reviewer:{id:'review',name:'API reviewer',url:reviewerUrl,model:'review-model'}};
  const ask=async(prompt,options)=>{
   prompts.push({prompt,options});if(/Choose host/.test(prompt))return '2';if(/Choose worker setup/.test(prompt))return '5';if(/Number of/.test(prompt))return '2';if(/Profile 1 identifier/.test(prompt)){current='first';return values[current].id;}if(/Profile 2 identifier/.test(prompt)){current='second';return values[current].id;}if(/Profile reviewer identifier/.test(prompt)){current='reviewer';return values[current].id;}
-  if(/Display name/.test(prompt))return values[current].name;if(/API base URL/.test(prompt))return values[current].url;if(/Model ID/.test(prompt))return values[current].model;if(/Reviewer API protocol/.test(prompt))return protocol;if(/require an API bearer key/.test(prompt))return current==='first'&&key!==null?'y':'n';if(/Bearer key/.test(prompt))return key;if(/Default worker identifier/.test(prompt))return 'second';if(/Planner worker identifier/.test(prompt))return '';if(/Add an explicit specialty route/.test(prompt))return ++routes===1?'y':'n';if(/Category/.test(prompt))return 'backend';if(/^Worker identifier/.test(prompt))return firstId;if(/separately configured API reviewer/.test(prompt))return 'y';if(/Service maximum/.test(prompt))return '2';assert.fail('Unexpected advanced question: '+prompt);
+  if(/Display name/.test(prompt))return values[current].name;if(/API base URL/.test(prompt))return values[current].url;if(/Model ID/.test(prompt))return values[current].model;if(/Reviewer API protocol/.test(prompt))return protocol;if(/require an API bearer key|Choose how to provide the API key/.test(prompt))return current==='first'?(keyChoice??(key!==null?'y':'n')):(retainedKeys[current]?'k':'n');if(/Bearer key/.test(prompt))return key;if(/Default worker identifier/.test(prompt))return 'second';if(/Planner worker identifier/.test(prompt))return '';if(/Add an explicit specialty route/.test(prompt))return ++routes===1?'y':'n';if(/Category/.test(prompt))return 'backend';if(/^Worker identifier/.test(prompt))return firstId;if(/separately configured API reviewer/.test(prompt))return 'y';if(/Service maximum/.test(prompt))return '2';assert.fail('Unexpected advanced question: '+prompt);
  };
  return {ask,prompts,output:{write(value){output+=value;}},text:()=>output,options:{...runtime,existingSettings}};
 }
@@ -58,4 +89,61 @@ test('existing schema2 uses advanced replacement path and leaves prior configura
 });
 test('advanced default and planner prompts never interpolate a provider identifier equal to its key',async()=>{
  const key='dummy-private-identifier-321',io=advanced({key,firstId:key}),result=await collectPortableSetup(io.ask,io.output,io.options);assert.ok(!io.text().includes(key));assert.ok(io.prompts.every(({prompt})=>!prompt.includes(key)));await assert.rejects(validateSettingsCredentials(null,result.settings,{schema:1,entries:result.entries}),/Credential values must occur only in the private credential store/);
+});
+
+test('returning users can select a hosted preset and explicitly keep its saved key',async()=>{
+ const initial=advanced({firstUrl:'https://api.moonshot.ai/v1',key:'dummy-initial-kimi-key'});
+ const {settings}=await collectPortableSetup(initial.ask,initial.output,initial.options);
+ const before=structuredClone(settings);
+ const io=advanced({existingSettings:settings,firstUrl:'2',keyChoice:'k'});
+ const result=await collectPortableSetup(io.ask,io.output,io.options);
+ assert.deepEqual(result.settings.providers[0],before.providers[0]);
+ assert.deepEqual(result.settings.providers[1],before.providers[1]);
+ assert.deepEqual(settings,before);
+ assert.deepEqual(result.entries,{});
+ assert.ok(io.prompts.every(({options})=>!options?.secret));
+ assert.match(io.text(),/Kimi Platform/);
+});
+test('returning users cannot keep a saved key after switching to another hosted preset',async()=>{
+ const initial=advanced({firstUrl:'https://api.moonshot.ai/v1',key:'dummy-initial-kimi-key'});
+ const {settings}=await collectPortableSetup(initial.ask,initial.output,initial.options);
+ const io=advanced({existingSettings:settings,firstUrl:'1',key:'dummy-new-openai-key',keyChoice:'k'});
+ const result=await collectPortableSetup(io.ask,io.output,io.options);
+ assert.equal(result.settings.providers[0].baseUrl,'https://api.openai.com/v1');
+ assert.deepEqual(result.entries,{'first-key':'dummy-new-openai-key'});
+ assert.equal(io.prompts.filter(({options})=>options?.secret).length,1);
+ assert.equal(settings.providers[0].baseUrl,'https://api.moonshot.ai/v1');
+});
+test('switching a profile to a hosted preset preserves the key shared by another saved profile',async()=>{
+ const initial=advanced({key:'dummy-shared-original-key'});
+ const {settings}=await collectPortableSetup(initial.ask,initial.output,initial.options);
+ settings.providers[1].credentialRef='first-key';
+ const io=advanced({existingSettings:settings,firstUrl:'1',key:'dummy-new-hosted-key',retainedKeys:{second:true}});
+ const result=await collectPortableSetup(io.ask,io.output,io.options);
+ assert.equal(result.settings.providers[0].credentialRef,'first-key-2');
+ assert.deepEqual(result.entries,{'first-key-2':'dummy-new-hosted-key'});
+ assert.equal(result.settings.providers[1].credentialRef,'first-key');
+});
+
+for(const [label,retainedIndex,options,credentialRef] of [
+ ['leaves a different canonical endpoint on its existing key',1,{},'first-key-2'],
+ ['rotates the shared key for a canonical alias with the same transport',1,{secondUrl:'https://API.OPENAI.COM:443/v1/'},'first-key'],
+ ['leaves a different transport at the same URL on its existing key',2,{reviewerUrl:'https://api.openai.com/v1',protocol:'2'},'first-key-2'],
+])test(`named preset rotation ${label}`,async()=>{
+ const previousUrl='https://api.openai.com/v1';
+ const oldKey='dummy-old-openai-platform-key',newKey='dummy-new-openai-platform-key';
+ const initial=advanced({...options,firstUrl:previousUrl,key:oldKey});
+ const {settings}=await collectPortableSetup(initial.ask,initial.output,initial.options);
+ settings.providers[retainedIndex].credentialRef='first-key';
+
+ const io=advanced({...options,existingSettings:settings,firstUrl:'1',key:newKey,keyChoice:'',
+  retainedKeys:{[retainedIndex===1?'second':'reviewer']:true}});
+ const result=await collectPortableSetup(io.ask,io.output,io.options);
+ assert.equal(result.settings.providers[0].baseUrl,previousUrl);
+ assert.equal(result.settings.providers[0].credentialRef,credentialRef);
+ assert.deepEqual(result.settings.providers[retainedIndex],settings.providers[retainedIndex]);
+ assert.deepEqual(result.entries,{[credentialRef]:newKey});
+
+ const mergedEntries={'first-key':oldKey,...result.entries};
+ assert.equal(mergedEntries[result.settings.providers[retainedIndex].credentialRef],credentialRef==='first-key'?newKey:oldKey);
 });

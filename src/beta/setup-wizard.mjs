@@ -1,6 +1,7 @@
 import {collectMultiWorkerSetup} from './multi-worker-setup.mjs';
 import {normalizeSettings} from './settings.mjs';
 import {getHost,HOST_IDS} from './hosts/index.mjs';
+import {readBearerKey,selectHostedWorkerEndpoint} from './hosted-worker-presets.mjs';
 
 const yes=value=>/^y(es)?$/i.test(value);
 const integer=(raw,min,max,label)=>{const n=Number(raw);if(!/^\d+$/.test(String(raw))||!Number.isSafeInteger(n)||n<min||n>max)throw Error('Invalid '+label);return n;};
@@ -10,31 +11,45 @@ function profile({id,displayName,baseUrl,model,roles=['worker'],transport='opena
   capabilities:{workerProtocol:roles.includes('worker')?'mosaic-structured-v1':null,transports:['json'],modelDiscovery:'manual',taskKinds:roles.includes('worker')?['coding','consult']:[]},
   maxContextTokens:null,maxOutputTokens:12000,concurrency:1,capacityGroup:id,credentialRef,streaming:false};
 }
-async function configureProfile(ask,index,roles,existingSettings,reservedRefs){
- const id=await ask(`Profile ${index} identifier: `),displayName=await ask('Display name: '),baseUrl=await ask('Already-running server API base URL (local or explicit remote): '),model=await ask('Model ID (manual, no discovery required): '),
-  transport=roles.includes('worker')?'openai-chat':['openai-chat','openai-responses','anthropic-messages'][integer(await ask('Reviewer API protocol: 1. OpenAI Chat  2. OpenAI Responses  3. Anthropic Messages [1]: ')||'1',1,3,'reviewer API protocol')-1],
-  keyChoice=await ask('Does this endpoint require an API bearer key? [y/N, k to keep a saved key for the same profile and URL] '),
-  previous=existingSettings?.providers.find(p=>p.id===id),keep=keyChoice.toLowerCase()==='k';
- let sameEndpoint=false;try{sameEndpoint=new URL(baseUrl).href.replace(/\/+$/,'')===previous?.baseUrl;}catch{}
- if(keep&&(!previous?.credentialRef||!sameEndpoint||previous.transport!==transport))throw Error('A saved key can only be kept for the same profile and API base URL. Enter a new key for a changed endpoint.');
- const needsKey=yes(keyChoice);let credentialRef=keep?previous.credentialRef:null;
+async function configureProfile(ask,output,index,roles,existingSettings,reservedRefs){
+ const id=await ask(`Profile ${index} identifier: `),name=await ask('Display name: ');
+ const worker=roles.includes('worker'),urlPrompt='Already-running server API base URL (local or explicit remote): ';
+ const {baseUrl,preset}=worker?await selectHostedWorkerEndpoint(ask,output,urlPrompt):{baseUrl:await ask(urlPrompt),preset:null};
+ const model=await ask('Model ID (manual, no discovery required): ');
+ const transport=worker?'openai-chat':['openai-chat','openai-responses','anthropic-messages'][integer(await ask('Reviewer API protocol: 1. OpenAI Chat  2. OpenAI Responses  3. Anthropic Messages [1]: ')||'1',1,3,'reviewer API protocol')-1];
+ const previous=existingSettings?.providers.find(p=>p.id===id);
+ let sameEndpoint=false;
+ try{sameEndpoint=new URL(baseUrl).href.replace(/\/+$/,'')===previous?.baseUrl;}catch{}
+ const canKeep=previous?.credentialRef&&sameEndpoint&&previous.transport===transport;
+ const keyChoice=preset
+  ? (canKeep?await ask('Choose how to provide the API key [Enter for hidden entry, k to keep the saved key]: '):'')
+  : await ask('Does this endpoint require an API bearer key? [y/N, k to keep a saved key for the same profile and URL] ');
+ const keep=keyChoice.toLowerCase()==='k';
+ if(keep&&!canKeep)throw Error('A saved key can only be kept for the same profile and API base URL. Enter a new key for a changed endpoint.');
+ const needsKey=!keep&&(preset!==null||yes(keyChoice));
+ let credentialRef=keep?previous.credentialRef:null;
  if(needsKey){
-  credentialRef=previous?.credentialRef??id+'-key';
-  if(!previous?.credentialRef)for(let suffix=2;reservedRefs.has(credentialRef);suffix++)credentialRef=id+'-key-'+suffix;
+  const oldRef=previous?.credentialRef;
+  const separateKey=preset&&oldRef&&existingSettings.providers.some(p=>
+   p.id!==id&&p.credentialRef===oldRef&&(!canKeep||p.baseUrl!==baseUrl||p.transport!==transport));
+  if(oldRef&&!separateKey)credentialRef=oldRef;
+  else {
+   credentialRef=id+'-key';
+   for(let suffix=2;reservedRefs.has(credentialRef);suffix++)credentialRef=id+'-key-'+suffix;
+  }
   reservedRefs.add(credentialRef);
  }
- const secret=needsKey?await ask('Bearer key (hidden): ',{secret:true}):null;
- if(needsKey&&!secret)throw Error('A replacement bearer key cannot be empty. Use k explicitly to keep a saved key for the same profile and URL.');
- return {profile:profile({id,displayName,baseUrl,model,roles,transport,credentialRef}),secret};
+ const secret=needsKey?await readBearerKey(ask,'Bearer key (hidden): '):null;
+ return {profile:profile({id,displayName:name||preset?.displayName,baseUrl,model,roles,transport,credentialRef}),secret};
 }
-async function advanced(ask,hostId,{execution,nativeCheckRuntime,existingSettings,existingCredentialRefs}){
+async function advanced(ask,output,hostId,{execution,nativeCheckRuntime,existingSettings,existingCredentialRefs}){
  const reservedRefs=new Set([...existingCredentialRefs,...(existingSettings?.providers.flatMap(p=>p.credentialRef?[p.credentialRef]:[])??[])]);
  const count=integer(await ask('Number of already-running API worker profiles [0]: ')||'0',0,15,'worker count'),providers=[],entries={};
- for(let i=0;i<count;i++){const configured=await configureProfile(ask,i+1,['worker'],existingSettings,reservedRefs);providers.push(configured.profile);if(configured.secret)entries[configured.profile.credentialRef]=configured.secret;}
+ for(let i=0;i<count;i++){const configured=await configureProfile(ask,output,i+1,['worker'],existingSettings,reservedRefs);providers.push(configured.profile);if(configured.secret)entries[configured.profile.credentialRef]=configured.secret;}
  let workerId=providers[0]?.id??null,plannerWorkerId=workerId,review={source:'host',hostId},routing;
  // User-entered identifiers may equal a private key. Never echo them in prompts.
  if(count>1){workerId=await ask('Default worker identifier (Enter for first worker): ')||workerId;plannerWorkerId=await ask('Planner worker identifier (Enter for default worker): ')||workerId;const rules=[];while(yes(await ask('Add an explicit specialty route? [y/N] '))){const category=await ask('Category (general/backend/frontend/tests/docs/design): '),providerId=await ask('Worker identifier: ');rules.push({id:'rule-'+(rules.length+1),category,providerId});}routing={version:1,rules,defaultWorkerId:workerId};}
- if(count&&yes(await ask('Use a separately configured API reviewer instead of the selected host? [y/N] '))){const configured=await configureProfile(ask,'reviewer',['reviewer'],existingSettings,reservedRefs);providers.push(configured.profile);if(configured.secret)entries[configured.profile.credentialRef]=configured.secret;review={source:'api',reviewer:{id:configured.profile.id,revision:configured.profile.revision}};}
+ if(count&&yes(await ask('Use a separately configured API reviewer instead of the selected host? [y/N] '))){const configured=await configureProfile(ask,output,'reviewer',['reviewer'],existingSettings,reservedRefs);providers.push(configured.profile);if(configured.secret)entries[configured.profile.credentialRef]=configured.secret;review={source:'api',reviewer:{id:configured.profile.id,revision:configured.profile.revision}};}
  const concurrency=integer(await ask('Service maximum concurrent tasks [1]: ')||'1',1,4,'service concurrency');for(const p of providers)p.concurrency=concurrency;
  // Existing endpoint aliases share physical capacity, including reviewer aliases.
  const endpointGroups=new Map();for(const p of providers){let endpoint;try{endpoint=new URL(p.baseUrl).href.replace(/\/+$/,'');}catch{throw Error('Invalid API base URL');}p.capacityGroup=endpointGroups.get(endpoint)??p.id;endpointGroups.set(endpoint,p.capacityGroup);}
@@ -48,14 +63,18 @@ export async function collectPortableSetup(ask,output,{execution,nativeCheckRunt
  const hostChoice=await ask('Mosaic portable setup\n  1. Codex\n  2. Claude Code\n  3. Cursor\n  4. Antigravity\nChoose host [1]: ')||'1',hostId=HOST_IDS[integer(hostChoice,1,4,'host choice')-1];
  const choice=existingSettings?5:integer(await ask('Worker setup\n  1. Model on this Mac\n  2. Model on another computer (for example a Spark)\n  3. Hosted API\n  4. No worker yet / use the coding app only\n  5. Advanced setup\n  6. Guided setup for two or three workers\nChoose worker setup [1]: ')||'1',1,6,'worker setup choice');
  if(choice===6)return collectMultiWorkerSetup(ask,output,{hostId,execution,nativeCheckRuntime,createProfile:profile});
- if(choice===5)return advanced(ask,hostId,{execution,nativeCheckRuntime,existingSettings,existingCredentialRefs});
+ if(choice===5)return advanced(ask,output,hostId,{execution,nativeCheckRuntime,existingSettings,existingCredentialRefs});
  const workerLocation=['local','remote','api','none'][choice-1],providers=[],entries={};
  if(choice!==4){
   output.write('Copy the API base URL and exact model ID from your existing server or API provider configuration. Mosaic uses its supported OpenAI-compatible worker transport; it will not contact the endpoint until you explicitly choose optional model discovery or the separate inference test.\n');
   if(choice===2)output.write('For another computer, supply an address reachable from this Mac. localhost means the computer running Mosaic, not the other computer; no particular tunnel is required.\n');
-  const baseUrl=await ask('API base URL: '),model=await ask('Model ID: '),needsKey=yes(await ask('Does this endpoint require an API bearer key? [y/N] ')),credentialRef=needsKey?'worker-1-key':null;
-  if(needsKey)entries[credentialRef]=await ask('Bearer key (hidden): ',{secret:true});
-  providers.push(profile({id:'worker-1',displayName:'Worker 1',baseUrl,model,credentialRef}));
+  const urlPrompt='API base URL: ';
+  const {baseUrl,preset}=choice===3?await selectHostedWorkerEndpoint(ask,output,urlPrompt):{baseUrl:await ask(urlPrompt),preset:null};
+  const model=await ask('Model ID: ');
+  const needsKey=preset!==null||yes(await ask('Does this endpoint require an API bearer key? [y/N] '));
+  const credentialRef=needsKey?'worker-1-key':null;
+  if(needsKey)entries[credentialRef]=await readBearerKey(ask,'Bearer key (hidden): ');
+  providers.push(profile({id:'worker-1',displayName:preset?.displayName??'Worker 1',baseUrl,model,credentialRef}));
  }
  const rawSettings={schema:2,host:{id:hostId,options:{}},providers,defaults:{workerId:providers.length?'worker-1':null,plannerWorkerId:providers.length?'worker-1':null,review:{source:'host',hostId}},execution,...(nativeCheckRuntime?{nativeCheckRuntime}:{}),serviceMaxConcurrentTasks:1,capacityGroups:providers.length?[{id:'worker-1',limit:1}]:[]};
  return {settings:normalizeSettings(rawSettings),rawSettings,entries,presentation:'simple',workerLocation};

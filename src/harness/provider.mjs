@@ -60,8 +60,10 @@ export class LocalProvider extends DeepSeekHttpAdapter {
         const ids = await this.listModels(signal, { strict: true });
         if (!ids.includes(model)) throw failure('Configured provider model is not advertised by /models','not_dispatched',undefined,{diagnosticCategory:'model_not_advertised',requestOperation:'model_discovery'});
       }
+      const tokenLimitField=this.openAICompatible&&this.chatUrl.href==='https://api.openai.com/v1/chat/completions'
+        ? 'max_completion_tokens' : 'max_tokens';
       payload = JSON.stringify({
-        model, stream: streaming, max_tokens: maxTokens,
+        model, stream: streaming, [tokenLimitField]: maxTokens,
         ...(this.openAICompatible ? {} : { chat_template_kwargs: { enable_thinking: false } }),
         messages: this.redactData(messages),
       });

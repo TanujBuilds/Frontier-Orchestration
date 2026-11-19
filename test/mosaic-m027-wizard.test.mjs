@@ -4,12 +4,12 @@ import {collectPortableSetup,formatPortableSetupSummary} from '../src/beta/setup
 import {configuredPolicies,validateSettingsCredentials} from '../src/beta/settings.mjs';
 
 const fingerprint='a'.repeat(64),runtime={execution:{backend:'darwin-seatbelt',backendRevision:2,runtimeFingerprint:fingerprint},nativeCheckRuntime:{schema:1,artifactManifestPath:'/fixture/runtime/check-artifact/artifact-manifest.json',artifactManifestSha256:fingerprint}};
-function guide({count=3,urls=['http://localhost:8011/v1','https://remote.example/v1','https://api.example/v1'],models=['local-model','remote-model','api-model'],keys=[null,null,null],routes=['2','3','4,5'],shared={},slots='',workerSlots={},groupSlots={},defaultWorker='',planner='',resolve=''}={}){
+function guide({count=3,locations=[1,2,3],urls=['http://localhost:8011/v1','https://remote.example/v1','https://api.example/v1'],models=['local-model','remote-model','api-model'],keys=[null,null,null],routes=['2','3','4,5'],shared={},slots='',workerSlots={},groupSlots={},defaultWorker='',planner='',resolve=''}={}){
  let text='',worker=0;const prompts=[];
  const ask=async(prompt,options)=>{prompts.push({prompt,options});text+=prompt;
   if(/Choose host/.test(prompt))return '3';if(/Choose worker setup/.test(prompt))return '6';if(/How many workers/.test(prompt))return String(count);
   const numbered=prompt.match(/^Worker (\d+) /);if(numbered)worker=Number(numbered[1])-1;
-  if(/location/.test(prompt))return String(worker+1);if(/API base URL/.test(prompt))return urls[worker];if(/Model ID/.test(prompt))return models[worker];if(/require an API bearer key/.test(prompt))return keys[worker]===null?'n':'y';if(/Bearer key/.test(prompt)){assert.equal(options?.secret,true);return keys[worker];}
+  if(/location/.test(prompt))return String(locations[worker]);if(/API base URL/.test(prompt))return urls[worker];if(/Model ID/.test(prompt))return models[worker];if(/require an API bearer key/.test(prompt))return keys[worker]===null?'n':'y';if(/Bearer key/.test(prompt)){assert.equal(options?.secret,true);return keys[worker];}
   if(/specialties/.test(prompt))return routes[worker]??'';if(/Resolve/.test(prompt))return resolve;if(/Default worker number/.test(prompt))return defaultWorker;if(/Planner worker number/.test(prompt))return planner;
   if(/shares physical capacity/.test(prompt))return shared[worker+1]??'';if(/Total concurrent/.test(prompt))return slots;if(/Worker \d+ maximum/.test(prompt))return workerSlots[worker+1]??'';
   const group=prompt.match(/^Shared service (\d+) maximum/);if(group)return groupSlots[group[1]]??'';
@@ -68,4 +68,21 @@ for(const [form,encode] of [['json-unicode',value=>jsonIdentity(unicodeIdentity(
 test('unrelated escaped identities remain unchanged in the guided settings and summary',async()=>{
  const model='safe\\\\u006dodel\\/variant%2fraw',url='https://first.test/v1/safe%5Cu006dodel%2fvariant',io=guide({count:2,models:[model,'safe-model'],urls:[url,'https://second.test/v1'],keys:[null,'review/key'],routes:['','']}),result=await collectPortableSetup(io.ask,io.output,runtime);
  assert.equal(result.settings.providers[0].model,model);assert.equal(result.settings.providers[0].baseUrl,url);assert.equal(result.entries['worker-2-key'],'review/key');const summary=formatPortableSetupSummary(result.settings);assert.ok(summary.includes(model));assert.ok(summary.includes(url));
+});
+
+test('guided hosted presets keep an exact model and a separate private key per worker',async()=>{
+ const keys=['dummy-openai-guided-key','dummy-kimi-guided-key','dummy-glm-guided-key'];
+ const io=guide({locations:[4,5,6],models:['openai-model','kimi-model','glm-model'],keys});
+ const result=await collectPortableSetup(io.ask,io.output,runtime);
+ assert.deepEqual(result.settings.providers.map(({baseUrl,model,credentialRef})=>[baseUrl,model,credentialRef]),[
+  ['https://api.openai.com/v1','openai-model','worker-1-key'],
+  ['https://api.moonshot.ai/v1','kimi-model','worker-2-key'],
+  ['https://api.z.ai/api/paas/v4','glm-model','worker-3-key'],
+ ]);
+ assert.deepEqual(Object.values(result.entries),keys);
+ assert.ok(!io.prompts.some(({prompt})=>/API base URL|require an API bearer key/.test(prompt)));
+ assert.equal(io.prompts.filter(({options})=>options?.secret).length,3);
+ const summary=formatPortableSetupSummary(result.settings);
+ for(const name of ['OpenAI Platform','Kimi Platform','Z.ai GLM'])assert.ok(summary.includes(name));
+ for(const key of keys)assert.ok(!summary.includes(key));
 });

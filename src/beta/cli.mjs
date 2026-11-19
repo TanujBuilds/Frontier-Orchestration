@@ -11,6 +11,7 @@ import {serveBeta} from './service.mjs';
 import {runObserver} from './observer.mjs';
 import {observerClient} from './sources.mjs';
 import {installedLauncher,uninstall,verifyVersion} from './install.mjs';
+import {formatHostReadiness,formatHostRegistrationGuide} from './hosts/index.mjs';
 
 const help=`Mosaic Beta
 
@@ -26,6 +27,7 @@ mosaic status --once     Print saved status and recent handoffs once
 mosaic support-bundle --home ABS [--output ABS]  Preview or save redacted diagnostics
 mosaic --source core     Watch the existing frontier-harness installation
 mosaic --source beta     Watch only the separate beta installation
+mosaic connect [--host ID]  Show how to connect your coding app
 mosaic host-preview --host ID  Preview a manual host registration; writes nothing
 mosaic mcp               Start the authenticated host MCP stdio bridge
 mosaic serve             Run the coordinator in the foreground (fixture or troubleshooting)
@@ -60,6 +62,19 @@ export async function main(args=process.argv.slice(2)){
  if(command==='host-preview'){
   if(args.length!==2||args[0]!=='--host')throw Error('Use mosaic host-preview --host codex|claude-code|cursor|antigravity');
   process.stdout.write(JSON.stringify(previewHostRegistration(paths,args[1]),null,2)+'\n');return;
+ }
+ if(command==='connect'){
+  if(args.length&&(args.length!==2||args[0]!=='--host'))throw Error('Use mosaic connect [--host codex|claude-code|cursor|antigravity]');
+  const settings=args.length?null:await readSettings(paths);
+  if(!args.length&&!settings)throw Error('Run mosaic setup to select a coding app, or use mosaic connect --host ID to see its instructions.');
+  const hostId=args[1]??settings?.host?.id??'codex';
+  const preview=previewHostRegistration(paths,hostId);
+  process.stdout.write(formatHostRegistrationGuide(preview)+'\n'+formatHostReadiness(hostId,{
+   configuration:settings?'saved':'selected for this guide',
+   instructions:'shown above',
+   nextAction:'Follow the registration steps in the selected app and check discovery and the registry_list tool result there.'
+  }));
+  return;
  }
  if(command==='setup'||!command&&sourceIndex===-1){
   let explicitCodex,settings;
