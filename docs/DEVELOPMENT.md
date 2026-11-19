@@ -2,11 +2,23 @@
 
 Use a Git checkout and Node.js **24.22.0**. The package engine expression is `>=24.22.0 <25`; this declares the supported development line, while 24.22.0 is the verified baseline and the version pinned in source CI. It does not claim every later patch was tested. Node 20 is insufficient: the coordinator directly imports `DatabaseSync` from `node:sqlite`, and deployment checkpoint code imports SQLite `backup`. Do not substitute the bundled fork-only native check runtime for the development Node executable.
 
+## Run the source demo and focused test
+
+From the repository root, you can run the demo and focused test before installing npm dependencies:
+
+```sh
+node --version
+node src/demo.mjs "Describe a simple note-taking workflow"
+node --test test/coordinator.test.mjs
+```
+
+The demo prints **FAKE MODEL DEMO** and writes an ignored JSONL event log under `.data/jobs/`. Its `accepted` result reflects the scripted handoff. The focused test uses an in-memory event log. Both commands use Node.js built-ins.
+
+## Prepare locked dependencies
+
 Portable source development also needs Git, Python 3, a POSIX shell, normal file permissions and symlink support. Linux/macOS provide the process signals and utilities used by fixtures (`tar` and `mkfifo`). Windows native shells are outside this profile. Ubuntu source CI checks the Linux environment; a local Mac result establishes only that Mac environment.
 
-## Prepare dependencies
-
-Check the runtime before installing:
+Check the development tools and install from the committed lockfile:
 
 ```sh
 node --version
@@ -26,19 +38,24 @@ npm ci --offline --ignore-scripts --no-audit --no-fund --cache /absolute/contrib
 
 A missing cached dependency is a preparation failure. Do not silently upgrade a dependency or drop `--offline`. The project owner's private caches and acceptance artifacts are not contributor prerequisites.
 
-## Run a fake handoff
+## Inspect and test the source
+
+After dependency preparation, these commands print CLI help:
 
 ```sh
-npm run demo -- "Explain a small change"
+node src/harness/cli.mjs --help
+node src/beta/cli.mjs --help
 ```
 
-This uses fake local/frontier adapters and writes a disposable job under the checkout's ignored `.data` directory. It demonstrates the handoff and event log without a host login, API key or external inference. The terminal approval variant is:
+`npm test` runs the portable source profile. Use `npm run test:source -- --list` to see its entries and separate qualification gates. See [test selection](TESTING.md) for the required Darwin profile.
+
+To try the original terminal handoff with interactive plan approval and fake adapters:
 
 ```sh
 npm run live -- --brief examples/design-brief.md --fake
 ```
 
-That variant asks for plan approval interactively. Live operation needs separate explicit configuration and consent; see [the first milestone](MVP.md) and [terminal beta guide](TERMINAL_BETA.md).
+For live work, use your existing Codex connection through `frontier-harness` or follow the installation guide for a separately supplied, verified Apple Silicon Beta archive. Each path has its own configuration and approval flow. [Mosaic in Codex](MOSAIC_CODING_CORE.md) · [Assignment handoff](MOSAIC_ASSIGNMENT_HANDOFF.md) · [Beta installation and recovery](PORTABLE_BETA_INSTALL.md)
 
 ## Source map
 

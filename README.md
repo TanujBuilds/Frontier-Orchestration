@@ -4,6 +4,26 @@ Mosaic coordinates bounded coding work between your coding app and an existing m
 
 **Experimental MIT source preview — November 17, 2026.** The source is public at [TanujBuilds/Mosaic](https://github.com/TanujBuilds/Mosaic). There is no published, qualified binary download or one-command installer. Local package verification does not establish a clean-Mac installation, compatibility with your app account, or model quality. The [six-stage roadmap](docs/ROADMAP.md) separates accepted local evidence from the remaining launch gates.
 
+## Try the source
+
+Use Git and Node.js **24.22.0**. Confirm that `node --version` reports `v24.22.0`. The demo and the focused test use Node.js built-ins and can run before dependency installation.
+
+```sh
+git clone https://github.com/TanujBuilds/Mosaic.git
+cd Mosaic
+node --version
+node src/demo.mjs "Describe a simple note-taking workflow"
+node --test test/coordinator.test.mjs
+```
+
+The demo prints **FAKE MODEL DEMO**, automatically approves a scripted plan, and simulates an answer, review and revision with zero provider calls. The `accepted` result applies to that simulated handoff. The demo writes one Git-ignored JSONL event log under `.data/jobs/` and prints its path. The focused test exercises coordinator behavior in memory.
+
+## Choose a setup path
+
+- **Develop from source.** Install the locked dependencies with `npm ci --ignore-scripts --no-audit --no-fund`, then use `npm test` for the portable source profile. The development guide covers prerequisites, CLI help and the Mac test profile. [Development setup](docs/DEVELOPMENT.md)
+- **Use the coding core already installed in Codex.** Open a chat in your project and ask Codex to list Mosaic’s registered modes using `frontier-harness`. Confirm the tool call succeeds, then describe your coding task and review its scope, checks and limits before approving a start. [Mosaic in Codex](docs/MOSAIC_CODING_CORE.md) · [Assignment handoff](docs/MOSAIC_ASSIGNMENT_HANDOFF.md)
+- **Install a separately supplied Mosaic Beta archive.** Verify the archive against an independently trusted SHA-256 digest before extracting it. The Apple Silicon macOS candidate includes its Node.js runtime and dependencies. Follow the Beta guides for setup and verification of the separate `mosaic-beta` connection in your coding app. [Terminal Beta](docs/TERMINAL_BETA.md) · [Installation and recovery](docs/PORTABLE_BETA_INSTALL.md)
+
 ## The coding workflow
 
 Start with one worker: an already-running OpenAI-compatible API on your Mac, another computer, or a hosted service. Mosaic connects to that service; it does not install models or manage their servers.
@@ -18,38 +38,7 @@ Workflows retain different roles: collaborative work allows Codex and API-worker
 
 You can optionally configure two or three workers with specialties, a default worker and a planner. Routes are explicit choices, not measured coding ability. Profiles that reach the same physical service must share capacity; adding profiles does not create inference slots. Two machines serving one distributed model API count as **one endpoint**. Guided setup defaults total, worker and shared-service concurrency to one; higher limits require an explicit choice.
 
-## Try the source
-
-Use Node.js **24.22.0**, the runtime pinned by the current package builder, and npm. Git is needed for the checkout and coding worktrees. The portable package target is Apple Silicon macOS; a broader platform support matrix has not been qualified.
-
-```sh
-git clone https://github.com/TanujBuilds/Mosaic.git
-cd Mosaic
-node --version
-npm ci --ignore-scripts
-node src/demo.mjs "Describe a fake note-taking workflow; do not access files or external services."
-node --test test/coordinator.test.mjs
-```
-
-The demo needs no credentials or model endpoint. It prints **FAKE MODEL DEMO**, automatically approves a fake plan, exercises an answer/review/revision sequence, and writes an ignored JSONL event log under `.data/jobs/`. It makes no model calls, applies no task file edits and runs no protected coding checks. Its `accepted` result proves the fake coordinator flow only. The focused test uses in-process doubles; it is not a live-model test. Both can run without installing dependencies.
-
-After dependency preparation, inspect the current entry points without starting services or changing setup:
-
-```sh
-node src/beta/cli.mjs --help
-node src/harness/cli.mjs --help
-```
-
-The supported development line is `>=24.22.0 <25`, with **24.22.0** pinned in source CI. After exact-lock dependency preparation, `npm test` runs the explicitly selected portable source profile; `npm run test:source -- --list` shows its entries and separate qualification gates. See [development setup](docs/DEVELOPMENT.md) and [test selection](docs/TESTING.md) for the full required Darwin profile. A source checkout is not a personal installation. Running setup, registering an MCP bridge or starting a real task needs its own private configuration and explicit scope.
-
-## Which entry point is which?
-
-| Path | Purpose | Boundary |
-| --- | --- | --- |
-| [Original demo](src/demo.mjs) and [terminal handoff](docs/MVP.md) | Fake JSONL coordinator; original text-only Codex → DeepSeek → Codex milestone | Text handoff and historical live observations are separate from current coding qualification. |
-| [Legacy overnight workflow](docs/OVERNIGHT.md) | Sequential staged coding in a Mac worktree with protected checks and review | DeepSeek plans and implements; Codex reviews passing stages, with optional explicitly requested pre-stage guidance and no Codex code rescue. |
-| [Opt-in coding core](docs/MOSAIC_CODING_CORE.md) | Four modes, versioned goals/tasks, native candidates, routing, recovery and observer | The `frontier-harness` bridge and installed core have their own state and lifecycle. Research remains parked. |
-| [Portable beta](docs/TERMINAL_BETA.md) | `mosaic` setup, diagnostics, terminal observer and separate `mosaic-beta` bridge | Local Darwin arm64 package candidate, not a published release. It does not migrate core goals or approvals. |
+The installed coding core and Mosaic Beta each keep their own settings, goals and approvals. Research remains parked in the coding core. For the original text-only handoff and historical observations, see the [first milestone](docs/MVP.md). For staged worktree coding with DeepSeek implementation and Codex review after protected checks, see the [legacy overnight workflow](docs/OVERNIGHT.md).
 
 For package development, read [installation and recovery](docs/PORTABLE_BETA_INSTALL.md), [native check artifact requirements](docs/NATIVE_CHECK_ARTIFACT.md), and [release evidence](docs/PORTABLE_BETA_RELEASE.md). The [archive download prototype](distribution/README.md) requires an explicit URL and independently trusted digest. The [read-only candidate verifier](docs/PORTABLE_RELEASE_EVIDENCE.md) checks supplied bytes and bindings; it cannot authenticate a publisher or establish live readiness. These are local candidate instructions, with dated historical examples. No archive URL, Homebrew tap, signing identity or authenticated public installer is supplied here.
 
