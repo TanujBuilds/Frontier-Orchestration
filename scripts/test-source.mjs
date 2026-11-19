@@ -24,7 +24,8 @@ group('Actual Darwin sandbox backend, including indirect fixture constructors', 
   'mosaic-pb11-composition', 'mosaic-pb12-integration', 'mosaic-pb13-composition',
   'mosaic-second-coding-composition', 'mosaic-validation-coordinator',
   'mosaic-pb15-composition', 'mosaic-pb15-containment', 'mosaic-pb15-native-policy',
-  'mosaic-pb15-native-supervisor', 'mosaic-pb15-native-v2', 'mosaic-pb15-seatbelt'
+  'mosaic-pb15-native-supervisor', 'mosaic-pb15-native-v2', 'mosaic-pb15-seatbelt',
+  'mosaic-codex-policy-compaction'
 ]);
 group('Actual Darwin arm64 native runtime, browser, packaging or retained execution proof', [
   'mosaic-pb15-native-v2-composition', 'mosaic-pb16-coding-overlap',
