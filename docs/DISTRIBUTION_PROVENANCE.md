@@ -2,6 +2,19 @@
 
 This is a dated audit of the 16 November 2026 (America/Los_Angeles) accepted source baseline and two local candidate archives. It establishes inspected identities and notice locations, while retaining the specific unresolved questions below. It is not a published download channel, legal clearance, reproducible-build attestation, clean-Mac result or release approval.
 
+## Node 24.22.3 release inputs
+
+New Apple Silicon release candidates use the official Node 24.22.3 binary for the coordinator and the separately built fork-path Node 24.22.3 for protected checks. The [official signed release checksums](https://nodejs.org/dist/v24.22.3/SHASUMS256.txt.asc) were verified against the [Node.js release keys](https://github.com/nodejs/release-keys).
+
+| Input | SHA-256 |
+| --- | --- |
+| Official Darwin arm64 archive | `ff6e17d4874b76d272212b908cc020d6e815fba5a6c7eaaa06add725840307fd` |
+| Official source archive | `48ca3aa8a9b02133356922ef4fc80200e00598c80a4ef446f7c39a459222593d` |
+| Official coordinator binary | `ba7073582822078d8c90bca3facacc46690bc5366fab4b815aeef9148cd6e854` |
+| Local fork-path build input | `59cbb026a9e3f4eda74b7cbdb5d959356fb30d8b8d56dca9f391b92f6d678aa2` |
+
+An exact comparison against 33,504 regular files in the signed source archive found one changed source file, `deps/uv/src/unix/process.c`. That file carries the existing reviewed [fork-path patch](../test/fixtures/mosaic-pb15-v2-composition/fork-only.patch). The complete Node license has the same byte hash as the dated audit below. New candidates carry the supplemental runtime notices. Their index is `distribution/notices/INDEX.md` in the source checkout and `payload/runtime/notices/INDEX.md` in the archive. Review the final package, executable signatures and notarization evidence before publication.
+
 ## Audited boundary
 
 | Input | Exact identity |
@@ -25,7 +38,7 @@ The supported package target is Apple Silicon macOS (`darwin-arm64`, native arm6
 
 ### Ordinary coordinator Node
 
-[The package builder](../scripts/package-beta.mjs) pins the official [Node 24.22.0 Darwin arm64 archive](https://nodejs.org/dist/v24.22.0/node-v24.22.0-darwin-arm64.tar.gz). The retained archive was hashed and its binary/license compared with the accepted payloads.
+The audited archives used the pinned official [Node 24.22.0 Darwin arm64 archive](https://nodejs.org/dist/v24.22.0/node-v24.22.0-darwin-arm64.tar.gz). The retained archive was hashed and its binary/license compared with the accepted payloads.
 
 | Item | SHA-256 | Shipped location / mode |
 | --- | --- | --- |

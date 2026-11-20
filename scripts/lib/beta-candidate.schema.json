@@ -14,7 +14,18 @@
     "source": {"type": "object", "required": ["commit", "tree", "dirty", "closureHash"], "properties": {"commit": {"$ref": "#/$defs/git"}, "tree": {"$ref": "#/$defs/git"}, "dirty": {"type": "boolean"}, "closureHash": {"$ref": "#/$defs/hash"}}, "additionalProperties": false},
     "archive": {"type": "object", "required": ["file", "sha256"], "properties": {"file": {"type": "string"}, "sha256": {"$ref": "#/$defs/hash"}}, "additionalProperties": false},
     "inventory": {"type": "object", "required": ["file", "sha256", "contentHash"], "properties": {"file": {"const": "payload/package-manifest.json"}, "sha256": {"$ref": "#/$defs/hash"}, "contentHash": {"$ref": "#/$defs/hash"}}, "additionalProperties": false},
-    "versions": {"type": "object", "required": ["coordinatorNode", "checkNode", "sdk", "settingsSchemas", "databaseSchemas"]},
+    "versions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["coordinatorNode", "checkNode", "sdk", "settingsSchemas", "databaseSchemas"],
+      "properties": {
+        "coordinatorNode": {"enum": ["24.22.0", "24.22.3"]},
+        "checkNode": {"enum": [null, "24.22.0", "24.22.3"]},
+        "sdk": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+        "settingsSchemas": {"type": "array", "items": {"type": "integer", "minimum": 0}},
+        "databaseSchemas": {"type": "array", "items": {"type": "integer", "minimum": 0}}
+      }
+    },
     "build": {"type": "object", "required": ["archiveFormat", "timestamp", "owner", "group", "inputs", "runtimeInputs"]},
     "verification": {"type": "object", "required": ["references", "nativePreflight"]},
     "unpassedGates": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}}

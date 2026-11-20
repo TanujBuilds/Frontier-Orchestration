@@ -1,8 +1,6 @@
 # Native check runtime artifact
 
-Darwin arm64 backend revision 2 uses a separate Node 24.22.0 build and the trusted
-C supervisor. The coordinator keeps its ordinary Node runtime. Revision 1 remains
-unavailable; this artifact does not install, activate or migrate an approval.
+Darwin arm64 backend revision 2 uses a separate Node build and the trusted C supervisor. New release artifacts use Node 24.22.3. Previously approved Node 24.22.0 artifacts retain their original implementation and fingerprint. The coordinator keeps its ordinary Node runtime. Revision 1 remains unavailable. Building the artifact leaves installation and approval state untouched.
 
 The build script packages explicitly supplied local material. It does not download
 Node, build Node, install dependencies or accept worker-generated C/flags. It
@@ -14,11 +12,9 @@ only the fresh output created by that invocation; existing output is never repla
 ## Build the check-only Node
 
 Use an isolated developer build directory, the Apple command-line toolchain and
-the official [Node 24.22.0 source archive](https://nodejs.org/dist/v24.22.0/node-v24.22.0.tar.xz).
-Its SHA-256 is `41f97cff2c666f1f8293dc5f85c65e8dd605c16b43fd9febd49ede32ee1e0329`.
-This checksum binds the archive; it is not a claim that a release signature was
-verified. Preserve the complete source `LICENSE`, including bundled third-party
-notices.
+the official [Node 24.22.3 source archive](https://nodejs.org/dist/v24.22.3/node-v24.22.3.tar.xz).
+Its SHA-256 is `48ca3aa8a9b02133356922ef4fc80200e00598c80a4ef446f7c39a459222593d`.
+Verify the signed checksum using [the Node.js release keys](https://github.com/nodejs/release-keys). Preserve the complete source `LICENSE` and the supplemental texts indexed in `distribution/notices/INDEX.md`. The archive includes this index at `payload/runtime/notices/INDEX.md`.
 
 The reviewed patch is
 `test/fixtures/mosaic-pb15-v2-composition/fork-only.patch`, SHA-256
@@ -31,8 +27,7 @@ From the extracted source directory, apply that exact patch with `patch -p1`, th
 run `./configure` and `make -j4`, retaining both logs and the compiler version.
 The input runtime is `out/Release/node`. Independently verify that the source
 archive differs only at `deps/uv/src/unix/process.c`, then run the real native
-spawn, escape, cleanup and Chromium gates. Merely reporting version 24.22.0 is
-insufficient: the stock runtime fails the spawn isolation preflight.
+spawn, escape, cleanup and Chromium gates. Qualify the exact patched binary through the spawn isolation preflight. The same-version stock runtime fails that preflight.
 
 ## Package local verified inputs
 
@@ -57,7 +52,7 @@ The manifest has this fixed schema:
   "schema": 1,
   "platform": "darwin",
   "arch": "arm64",
-  "nodeVersion": "24.22.0",
+  "nodeVersion": "24.22.3",
   "supervisorProtocol": 1,
   "files": [
     {"path": "node", "sha256": "<64 hex>", "bytes": 0, "mode": "100755"},
@@ -65,7 +60,7 @@ The manifest has this fixed schema:
     {"path": "NODE-LICENSE", "sha256": "<64 hex>", "bytes": 0, "mode": "100644"}
   ],
   "provenance": {
-    "nodeSource": {"version": "24.22.0", "url": "<official archive URL>", "sha256": "<archive hash>"},
+    "nodeSource": {"version": "24.22.3", "url": "<official archive URL>", "sha256": "<archive hash>"},
     "nodePatch": {"sha256": "<patch hash>", "description": "<patch purpose>"},
     "supervisorSourceSha256": "<trusted C source hash>",
     "build": {"compiler": "<clang version and literal flags>", "platform": "darwin-arm64"}
@@ -92,7 +87,7 @@ This object is the `nativeCheckRuntime` setting. A fresh approval explicitly use
 `{version:1, backend:'darwin-seatbelt', backendRevision:2,
 runtimeFingerprint:'<same manifest SHA-256>'}`. Prepare each check with the
 artifact's absolute `node` path in its saved literal argv. The trusted
-`nativeCheckArgv` preparation helper can produce that vector. Execution never
+[native runtime dispatcher](../src/project/check-backends/native-runtime-dispatch.mjs) provides `nativeCheckArgv` to produce that vector for either supported artifact. Execution never
 rewrites a previously approved stock Node path. Public goal data cannot supply
 artifact paths, factories, policies or compiler arguments.
 

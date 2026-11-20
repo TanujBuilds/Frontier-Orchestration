@@ -7,7 +7,7 @@ import {isEntry} from '../harness/entry.mjs';
 import {verifyPackage} from '../harness/package.mjs';
 import {canonical} from '../harness/contracts.mjs';
 import {readBundledNativeCheckRuntime} from './package-contract.mjs';
-import {validateNativeCheckRuntime} from '../project/check-backends/darwin-seatbelt-v2.mjs';
+import {nativeImplementationSources,validateNativeCheckRuntime} from '../project/check-backends/native-runtime-dispatch.mjs';
 import {atomic,currentHome,entry,fileBytes,hash,jsonFile,localDirectory,locations,readMaintenanceDatabase,saveJson,shellQuote,withLock} from './files.mjs';
 import {readSetupIntent,removeCodexBindings} from './setup.mjs';
 import {assertMaintenanceIdle,rollbackLaunchAgent,startLaunchAgent,stopForMaintenance,verifyLaunchAgent} from './service.mjs';
@@ -67,11 +67,10 @@ export async function verifyVersion(directory,version){
  return manifest;
 }
 
-const nativeImplementationSources=['native-supervisor.c','native-supervisor.mjs','darwin-seatbelt-v2.mjs','darwin-seatbelt.mjs','contracts.mjs','../sandbox.mjs'];
-function nativeImplementationHash(manifest){
- // Match the existing native backend implementationHash byte-for-byte. The
- // persisted runtime identity remains the authority; this is no new format.
- const sources=nativeImplementationSources.map(file=>{
+function nativeImplementationHash(manifest,nodeVersion){
+ // The configured artifact selects the source closure. Older packages retain
+ // the historical hash even when an update bundles a different artifact.
+ const sources=nativeImplementationSources(nodeVersion).map(file=>{
   const source=manifest.files.find(entry=>entry.path===path.posix.normalize('runtime/src/project/check-backends/'+file));
   if(!source||!/^[a-f0-9]{64}$/.test(source.sha256))throw Error('Missing native implementation source inventory; retain the trusted installed version.');
   return {file,hash:source.sha256};
@@ -109,7 +108,7 @@ export async function assertStateCompatibility(paths,manifest){
   // the existing backend validator rather than trusting only its manifest.
   const retainedRuntime=validateNativeCheckRuntime(settings.nativeCheckRuntime,savedNative?.fingerprint??settings.nativeCheckRuntime.artifactManifestSha256);
   if(!source||retainedRuntime.manifest.provenance.supervisorSourceSha256!==source.sha256)throw Error('The retained native artifact is incompatible with this package supervisor source. Keep its version and approvals; explicitly migrate the backend only after all resumable work is resolved.');
-  const candidateImplementation=nativeImplementationHash(manifest);
+  const candidateImplementation=nativeImplementationHash(manifest,retainedRuntime.nodeVersion);
   let previousImplementation;
   if(savedNative){
    if(savedExecution.schema!==2||hash(canonical(savedExecution.identity))!==savedExecution.hash||!/^[a-f0-9]{64}$/.test(savedNative.implementationHash??'')||savedNative.fingerprint!==settings.nativeCheckRuntime.artifactManifestSha256||savedNative.manifestPath!==settings.nativeCheckRuntime.artifactManifestPath)throw Error('Saved native execution identity differs from retained settings; preserve the exact approved configuration.');
@@ -125,7 +124,7 @@ export async function assertStateCompatibility(paths,manifest){
    const previousDirectory=path.join(paths.versions,receipt.version);await verifyPackage(previousDirectory);
    const previous=await jsonFile(path.join(previousDirectory,'package-manifest.json'));
    if(previous.version!==receipt.version||previous.contentHash!==receipt.contentHash)throw Error('Prior native package inventory differs from its ownership receipt.');
-   previousImplementation=nativeImplementationHash(previous);
+   previousImplementation=nativeImplementationHash(previous,retainedRuntime.nodeVersion);
   }
   if(candidateImplementation!==previousImplementation)throw Error('The package native implementation differs from the saved execution identity. Retain the old version, runtime, approvals and literal check paths; resolve resumable work before explicit backend migration.');
  }

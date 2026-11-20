@@ -22,7 +22,8 @@ async function setup(t){
  f.git('add','.');f.git('-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-qm','staging fixture inputs');
  const commit=f.git('rev-parse','HEAD'),tree=f.git('rev-parse','HEAD^{tree}');f.c.source.commit=commit;f.c.source.tree=tree;
  f.c.fixture=false;f.manifest.fixture=false;f.manifest.layout='terminal-beta-v2';
- f.c.versions.checkNode='24.22.0';f.manifest.nativeCheckArtifact={fingerprint:sha(nativeBytes),backend:{id:'darwin-seatbelt',revision:2}};
+ f.c.versions.coordinatorNode=f.c.versions.checkNode=f.manifest.nodeVersion='24.22.3';
+ f.manifest.nativeCheckArtifact={fingerprint:sha(nativeBytes),backend:{id:'darwin-seatbelt',revision:2}};
  f.c.verification.nativePreflight={backend:{id:'darwin-seatbelt',revision:2},runtimeFingerprint:sha(nativeBytes),childProcessWorks:true,quiescent:true,kernelContainment:true};
  for(const [p,b,mode] of [['runtime/bin/node',await readFile(node),'100755'],['runtime/NODE-LICENSE',await readFile(license),'100644'],['runtime/check-artifact/artifact-manifest.json',nativeBytes,'100600'],['runtime/THIRD_PARTY_NOTICES.md',await readFile(path.join(f.source,'THIRD_PARTY_NOTICES.md')),'100644'],['runtime/docs/DISTRIBUTION_PROVENANCE.md',await readFile(path.join(f.source,'docs/DISTRIBUTION_PROVENANCE.md')),'100644']]){
   f.payload.set(p,b);const r={path:p,sha256:sha(b),bytes:b.length,mode};const i=f.manifest.files.findIndex(v=>v.path===p);if(i<0)f.manifest.files.push(r);else f.manifest.files[i]=r;
@@ -37,7 +38,17 @@ async function setup(t){
   if(request.phase==='build'){
    const out=request.args[request.args.indexOf('--output')+1];await copyFile(f.archive,path.join(out,path.basename(f.archive)));await copyFile(f.candidate,path.join(out,f.stem+'.candidate.json'));await writeFile(path.join(out,path.basename(f.archive)+'.sha256'),f.c.archive.sha256+'  '+path.basename(f.archive)+'\n');return;
   }
-  const {runStagingChild}=await load();return runStagingChild(request);
+  // The portable staging test owns inert executable inputs. The verifier's
+  // independent archive/provenance checks have their own offline test suite.
+  const arg=name=>request.args[request.args.indexOf('--'+name)+1];
+  const evidence=JSON.parse(await readFile(arg('evidence-index'),'utf8'));
+  for(const r of evidence.records)assert.equal(sha(await readFile(path.join(arg('evidence-root'),r.path))),r.sha256);
+  await writeFile(arg('output'),JSON.stringify({
+   integrity:{status:'verified'},releaseAuthority:false,readiness:'pending-external-qualification',
+   candidate:{sha256:evidence.binding.candidateSha256,archive:{sha256:evidence.binding.archiveSha256},originalUnpassedGates:f.c.unpassedGates},
+   externalGates:[{status:'pending'}],
+   suppliedEvidence:{localAcceptance:evidence.records.some(r=>r.role==='acceptance')?'supplied-unverified':'not-supplied',records:evidence.records}
+  }));
  };
  return f;
 }
@@ -92,9 +103,9 @@ test('builder and verifier failure retain owned artifacts and never publish a su
   const status=JSON.parse(await readFile(path.join(f.options.output,'STATUS.json')));assert.equal(status.status,'failed-retained');assert.equal(status.phase,phase);assert.ok(!JSON.stringify(status).includes('PRIVATE-TRANSCRIPT'));await absent(path.join(f.options.output,'STAGING.json'));
  }
 });
-test('changed archive bytes or candidate source pins reject before verifier and any installer',async t=>{
- for(const kind of ['archive','source','runtime']){
-  const f=await setup(t),{stageReviewedCandidate}=await load();const run=async req=>{await f.run(req);if(req.phase==='build'){if(kind==='archive')await writeFile(path.join(f.options.output,'build',path.basename(f.archive)),'wrong');else{const c=structuredClone(f.c);if(kind==='source')c.source.commit='f'.repeat(40);else c.build.runtimeInputs[0].sha256='f'.repeat(64);await writeFile(path.join(f.options.output,'build',f.stem+'.candidate.json'),JSON.stringify(c));}}};
+test('changed archive bytes or candidate runtime/source pins reject before verifier and any installer',async t=>{
+ for(const kind of ['archive','source','runtime','coordinator-version','check-version']){
+  const f=await setup(t),{stageReviewedCandidate}=await load();const run=async req=>{await f.run(req);if(req.phase==='build'){if(kind==='archive')await writeFile(path.join(f.options.output,'build',path.basename(f.archive)),'wrong');else{const c=structuredClone(f.c);if(kind==='source')c.source.commit='f'.repeat(40);else if(kind==='runtime')c.build.runtimeInputs[0].sha256='f'.repeat(64);else c.versions[kind==='coordinator-version'?'coordinatorNode':'checkNode']='24.22.0';await writeFile(path.join(f.options.output,'build',f.stem+'.candidate.json'),JSON.stringify(c));}}};
   await assert.rejects(stageReviewedCandidate(f.options,{run}));assert.equal(f.calls.length,1);await absent(path.join(f.options.output,'STAGING.json'));
  }
 });
@@ -109,6 +120,7 @@ test('builder copies factual notices including supplemental upstream texts as in
  const f=await setup(t);const api=await import('../scripts/package-beta.mjs');assert.equal(typeof api.copyRequiredAssets,'function');
  const out=path.join(f.root,'copied runtime');await mkdir(out);await api.copyRequiredAssets(repo,out);
  for(const p of ['THIRD_PARTY_NOTICES.md','docs/DISTRIBUTION_PROVENANCE.md'])assert.deepEqual(await readFile(path.join(out,p)),await readFile(path.join(repo,p)));
+ for(const p of ['INDEX.md','SHA256SUMS'])assert.deepEqual(await readFile(path.join(out,'notices',p)),await readFile(path.join(repo,'distribution','notices',p)));
  const notices=await readFile(path.join(out,'THIRD_PARTY_NOTICES.md'),'utf8');assert.ok(notices.includes('Copyright 2016 the V8 project authors.'));assert.ok(notices.includes('Copyright (C) 1993 by Sun Microsystems, Inc.'));
 });
 test('a self-consistent builder output cannot omit or substitute the required notices',async t=>{

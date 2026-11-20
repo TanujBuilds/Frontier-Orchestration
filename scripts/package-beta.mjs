@@ -9,19 +9,23 @@ import {digest} from '../src/harness/contracts.mjs';
 import {verifyPackage} from '../src/harness/package.mjs';
 import {sourceClosure,listFiles,copyCheckArtifact,probeCheckArtifact,deterministicArchive,assertPortableArtifactPrivacy} from './lib/beta-archive.mjs';
 import {candidateManifest} from './lib/beta-candidate.mjs';
+import {CURRENT_NODE_RELEASE,NATIVE_NODE_RELEASES} from '../src/project/check-backends/native-node-releases.mjs';
 
 const exec=promisify(execFile);
 const repo=fileURLToPath(new URL('../',import.meta.url));
-const pinned='24.22.0';
-const nodeName='node-v'+pinned+'-darwin-arm64';
-const nodeArchiveHash='6a9724d9b50a5f22b4816cded441b5a8d9ddae546191a5e5b7efa5a5e2ee26d5';
-const nodeBinaryHash='b468fb9c67427c9d3aec07ee1105e63020923a631a9a2a00beb71a7ba3768bfd';
-const nodeLicenseHash='5888dbb9a1d2b18f2c3e6c5f6af1b39de658372b402a0577b002777f14c62ace';
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 
 // Fixed, factual source assets. Inventory construction below hashes every copy.
-export async function copyRequiredAssets(sourceRoot,runtime){
- for(const [source,target] of [['src/project/check-backends/native-supervisor.c','src/project/check-backends/native-supervisor.c'],['test/fixtures/mosaic-pb15-v2-composition/fork-only.patch','provenance/fork-only.patch'],['scripts/build-native-check-artifact.mjs','provenance/build-native-check-artifact.mjs'],['docs/NATIVE_CHECK_ARTIFACT.md','docs/NATIVE_CHECK_ARTIFACT.md'],['docs/HOST_COMPATIBILITY.md','docs/HOST_COMPATIBILITY.md'],['docs/TERMINAL_BETA.md','docs/TERMINAL_BETA.md'],['docs/PORTABLE_BETA_INSTALL.md','docs/PORTABLE_BETA_INSTALL.md'],['docs/PORTABLE_BETA_RELEASE.md','docs/PORTABLE_BETA_RELEASE.md'],['scripts/lib/beta-candidate.schema.json','provenance/beta-candidate.schema.json'],['THIRD_PARTY_NOTICES.md','THIRD_PARTY_NOTICES.md'],['docs/DISTRIBUTION_PROVENANCE.md','docs/DISTRIBUTION_PROVENANCE.md']]){
+export async function copyRequiredAssets(sourceRoot,runtime,{nodeVersion=CURRENT_NODE_RELEASE.version}={}){
+ const assets=[['src/project/check-backends/native-supervisor.c','src/project/check-backends/native-supervisor.c'],['test/fixtures/mosaic-pb15-v2-composition/fork-only.patch','provenance/fork-only.patch'],['scripts/build-native-check-artifact.mjs','provenance/build-native-check-artifact.mjs'],['docs/NATIVE_CHECK_ARTIFACT.md','docs/NATIVE_CHECK_ARTIFACT.md'],['docs/HOST_COMPATIBILITY.md','docs/HOST_COMPATIBILITY.md'],['docs/TERMINAL_BETA.md','docs/TERMINAL_BETA.md'],['docs/PORTABLE_BETA_INSTALL.md','docs/PORTABLE_BETA_INSTALL.md'],['docs/PORTABLE_BETA_RELEASE.md','docs/PORTABLE_BETA_RELEASE.md'],['scripts/lib/beta-candidate.schema.json','provenance/beta-candidate.schema.json'],['THIRD_PARTY_NOTICES.md','THIRD_PARTY_NOTICES.md'],['docs/DISTRIBUTION_PROVENANCE.md','docs/DISTRIBUTION_PROVENANCE.md']];
+ if(nodeVersion===CURRENT_NODE_RELEASE.version){
+  const notices=path.join(sourceRoot,'distribution','notices');
+  if(!(await lstat(notices)).isDirectory())throw Error('Required package notices must be a regular directory');
+  const files=await listFiles(notices);
+  if(!files.includes('INDEX.md')||!files.includes('SHA256SUMS')||files.length<=2)throw Error('Required package notice inventory is missing');
+  assets.push(...files.map(file=>['distribution/notices/'+file,'notices/'+file]));
+ }
+ for(const [source,target] of assets){
   const sourceInfo=await lstat(path.join(sourceRoot,source));if(!sourceInfo.isFile()||sourceInfo.isSymbolicLink())throw Error('Required package source is not a regular file: '+source);
   const destination=path.join(runtime,target);await mkdir(path.dirname(destination),{recursive:true});await copyFile(path.join(sourceRoot,source),destination);await chmod(destination,0o644);
  }
@@ -43,23 +47,27 @@ function options(args){
 }
 
 async function runtimeNode(opts,staging){
+ const release=CURRENT_NODE_RELEASE;
  let node=opts.node?path.resolve(opts.node):null,license=opts['node-license']?path.resolve(opts['node-license']):null;
  if(!node){
-  const response=await fetch(`https://nodejs.org/dist/v${pinned}/${nodeName}.tar.gz`,{redirect:'error',signal:AbortSignal.timeout(60000)});
+  const nodeName='node-v'+release.version+'-darwin-arm64';
+  const response=await fetch(`https://nodejs.org/dist/v${release.version}/${nodeName}.tar.gz`,{redirect:'error',signal:AbortSignal.timeout(60000)});
   if(!response.ok)throw Error('Could not download pinned Node distribution');
   const bytes=Buffer.from(await response.arrayBuffer());
-  if(sha(bytes)!==nodeArchiveHash)throw Error('Node archive SHA256 mismatch');
+  if(sha(bytes)!==release.archiveSha256)throw Error('Node archive SHA256 mismatch');
   const archive=path.join(staging,'node.tar.gz');
   await writeFile(archive,bytes);
   await exec('/usr/bin/tar',['-xzf',archive,'-C',staging,nodeName+'/bin/node',nodeName+'/LICENSE']);
   node=path.join(staging,nodeName,'bin','node');
   license=path.join(staging,nodeName,'LICENSE');
  }
- if(!opts.fixture&&(sha(await readFile(node))!==nodeBinaryHash||sha(await readFile(license))!==nodeLicenseHash))
+ if(!opts.fixture&&(sha(await readFile(node))!==release.coordinatorSha256||sha(await readFile(license))!==release.licenseSha256))
   throw Error('The Node executable and license must match the pinned official Darwin arm64 distribution');
  const {stdout}=await exec(node,['-p','JSON.stringify([process.versions.node,process.platform,process.arch])'],{timeout:5000,maxBuffer:4096});
- if(stdout.trim()!==JSON.stringify([pinned,'darwin','arm64']))throw Error('Packaging requires Node '+pinned+' for Darwin arm64');
- return {node,license};
+ const identity=stdout.trim();
+ const detectedRelease=Object.values(NATIVE_NODE_RELEASES).find(input=>identity===JSON.stringify([input.version,'darwin','arm64']));
+ if(!detectedRelease||(!opts.fixture&&detectedRelease!==release))throw Error('Packaging requires Node '+release.version+' for Darwin arm64');
+ return {node,license,release:detectedRelease};
 }
 
 function bootstrap(inventoryHash){
@@ -91,10 +99,11 @@ async function build(opts){
  try{
   const bundle=path.join(staging,stem),payload=path.join(bundle,'payload');
   await mkdir(path.join(payload,'runtime','bin'),{recursive:true});
-  const {node,license}=await runtimeNode(opts,staging);
+  const {node,license,release}=await runtimeNode(opts,staging);
   await copyFile(node,path.join(payload,'runtime','bin','node'));
   await chmod(path.join(payload,'runtime','bin','node'),0o755);
   await copyFile(license,path.join(payload,'runtime','NODE-LICENSE'));
+  await chmod(path.join(payload,'runtime','NODE-LICENSE'),0o644);
   await copyFile(path.join(repo,'LICENSE'),path.join(payload,'LICENSE'));
   await writeFile(path.join(bundle,'README.md'),await readFile(path.join(repo,'docs','TERMINAL_BETA.md'),'utf8')+'\n\n[Portable installation and recovery](payload/runtime/docs/PORTABLE_BETA_INSTALL.md) · [Release gates](payload/runtime/docs/PORTABLE_BETA_RELEASE.md)\n',{mode:0o644});
   const sources=await sourceClosure(repo,['src/beta/cli.mjs']);
@@ -103,10 +112,12 @@ async function build(opts){
    await mkdir(path.dirname(target),{recursive:true});await copyFile(path.join(repo,relative),target);await chmod(target,0o644);
   }
   const runtime=path.join(payload,'runtime');
-  await copyRequiredAssets(repo,runtime);
+  await copyRequiredAssets(repo,runtime,{nodeVersion:release.version});
   let nativeProof=null;
   if(opts['check-artifact']){
-   const artifact=path.resolve(opts['check-artifact']);if(!opts.fixture)assertPortableArtifactPrivacy(await readFile(path.join(artifact,'node')));nativeProof=await probeCheckArtifact(artifact);
+   const artifact=path.resolve(opts['check-artifact']);
+   if(!opts.fixture)assertPortableArtifactPrivacy(await readFile(path.join(artifact,'node')));
+   nativeProof=await probeCheckArtifact(artifact,{nodeVersion:release.version,...(!opts.fixture?{coordinatorSha256:release.coordinatorSha256,licenseSha256:release.licenseSha256}:{})});
    await copyCheckArtifact(artifact,path.join(runtime,'check-artifact'));
    if(sha(await readFile(path.join(runtime,'check-artifact/artifact-manifest.json')))!==nativeProof.runtimeFingerprint)throw Error('Artifact changed after the native packaging preflight');
   }
@@ -120,7 +131,9 @@ async function build(opts){
    const bytes=await readFile(path.join(payload,relative));
    const info=await lstat(path.join(payload,relative));files.push({path:relative,sha256:sha(bytes),bytes:bytes.length,mode:'100'+(info.mode&0o777).toString(8).padStart(3,'0')});
   }
-  const manifest={schema:1,layout:opts['check-artifact']?'terminal-beta-v2':'terminal-beta-v1',version:opts.version,dependenciesInstalled:true,nodeVersion:pinned,fixture:!!opts.fixture,
+  if(!opts.fixture&&(files.find(f=>f.path==='runtime/bin/node').sha256!==release.coordinatorSha256||files.find(f=>f.path==='runtime/NODE-LICENSE').sha256!==release.licenseSha256))throw Error('The Node executable and license changed while packaging');
+  if(nativeProof&&!nativeProof.artifactFiles.every(expected=>files.some(f=>f.path==='runtime/check-artifact/'+expected.path&&f.sha256===expected.sha256&&f.bytes===expected.bytes&&f.mode===expected.mode)))throw Error('The check artifact inputs changed while packaging');
+  const manifest={schema:1,layout:opts['check-artifact']?'terminal-beta-v2':'terminal-beta-v1',version:opts.version,dependenciesInstalled:true,nodeVersion:release.version,fixture:!!opts.fixture,
    stateCompatibility:{settings:[1,2],database:[0,1]},...(nativeProof?{nativeCheckArtifact:{fingerprint:nativeProof.runtimeFingerprint,backend:{id:'darwin-seatbelt',revision:2}}}:{}),files,contentHash:digest(files)};
   const manifestBytes=JSON.stringify(manifest,null,2)+'\n';
   await writeFile(path.join(payload,'package-manifest.json'),manifestBytes);

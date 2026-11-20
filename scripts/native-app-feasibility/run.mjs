@@ -9,7 +9,8 @@ import {Workspace} from '../../src/project/workspace.mjs';
 import {git} from '../../src/project/process.mjs';
 import {Coordinator} from '../../src/harness/coordinator.mjs';
 import {approvedChecks} from '../../src/harness/execution.mjs';
-import {validateNativeCheckRuntime,nativeDependencyInventory} from '../../src/project/check-backends/darwin-seatbelt-v2.mjs';
+import {nativeDependencyInventory} from '../../src/project/check-backends/darwin-seatbelt-v2.mjs';
+import {validateNativeCheckRuntime} from '../../src/project/check-backends/native-runtime-dispatch.mjs';
 import {validateOutput,inventoryPostgres,sourceInventory,fileIdentity,sourceRoot,command,hash,safePath} from './prerequisites.mjs';
 import {jsonFile,sealReport,summary,classifyConnection} from './report.mjs';
 
@@ -115,7 +116,7 @@ export async function runQualification(options){
       const dependencyInventory=nativeDependencyInventory(path.join(workspace.root,'node_modules'));
       await jsonFile(path.join(root,'evidence/dependencies.json'),dependencyInventory);
       const runner=approvedChecks(workspace,{config:{nativeCheckRuntime:nativeConfig},context:{c,goalId:goal.id,operationKey:'feasibility',expectedDependencyHash:dependencyInventory.hash}});
-      // No backendFactory, policy replacement, legacy backend or owner mock.
+      // No caller-supplied factory, replacement policy or owner mock.
       const execute=async(name,args=[])=>{
         const check={id:name,argv:[runtime.runtime.executable,'checks/'+name+'.mjs',...args],timeoutMs:name==='browser'?30000:name==='postgres'?60000:10000};
         const [r]=await runner.run([check],name);

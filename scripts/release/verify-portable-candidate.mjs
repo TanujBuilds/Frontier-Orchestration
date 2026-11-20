@@ -9,12 +9,15 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
+import {CURRENT_NODE_RELEASE,NATIVE_NODE_RELEASES} from '../../src/project/check-backends/native-node-releases.mjs';
 
 const MiB=1024*1024;
 export const LIMITS=Object.freeze({candidate:MiB,json:2*MiB,archive:128*MiB,expanded:512*MiB,member:256*MiB,entries:10000,record:8*MiB,evidence:64*MiB,records:64,sourceFile:16*MiB,sourceTotal:128*MiB,sourceFiles:10000,gitOutput:4*MiB});
 const GATES=['final-source-suite','independent-review','clean-machine','real-host-accounts','live-providers','other-platforms','signing-notarization','authenticated-download','public-source-license-audit','publication'];
 const EXTERNAL=['actual-host-discovery','real-owner-project-quality','live-model-quality','three-independent-workers','native-network-and-postgres','clean-mac','other-platforms','signing-notarization','authenticated-public-download','final-beta-acceptance'];
 const BUILD_INPUTS=['package-lock.json','scripts/package-beta.mjs','scripts/lib/beta-archive.mjs','scripts/lib/beta-candidate.mjs','scripts/lib/beta-candidate.schema.json'];
+const CURRENT_BUILD_INPUTS=[...BUILD_INPUTS,'scripts/build-native-check-artifact.mjs','src/project/check-backends/native-node-releases.mjs'];
+const NATIVE_MANIFEST='runtime/check-artifact/artifact-manifest.json';
 const ROLES=['acceptance','test-command','test-result','test-log','review','publication'];
 const SCOPES=['source-fixture','installed-fixture','live-claim','unknown'];
 const MODES=['100600','100644','100755'];
@@ -61,8 +64,16 @@ function candidateContract(c){
  fields(c.source,['commit','tree','dirty','closureHash']);gitId(c.source.commit);gitId(c.source.tree);sha(c.source.closureHash);need(c.source.dirty===false,'dirty_candidate_source');
  fields(c.archive,['file','sha256']);need(c.archive.file===`mosaic-beta-${c.version}-darwin-arm64.tar.gz`,'archive_version_path_mismatch');sha(c.archive.sha256);
  fields(c.inventory,['file','sha256','contentHash']);need(c.inventory.file==='payload/package-manifest.json','inventory_path_mismatch');sha(c.inventory.sha256);sha(c.inventory.contentHash);
- fields(c.versions,['coordinatorNode','checkNode','sdk','settingsSchemas','databaseSchemas']);for(const v of [c.versions.coordinatorNode,c.versions.sdk])need(typeof v==='string'&&/^\d+\.\d+\.\d+$/.test(v),'invalid_version');need(c.versions.checkNode===null||c.versions.checkNode==='24.22.0','unsupported_check_node');for(const a of [c.versions.settingsSchemas,c.versions.databaseSchemas]){list(a,16);a.forEach(v=>integer(v,1000));}
- fields(c.build,['archiveFormat','timestamp','owner','group','inputs','runtimeInputs']);need(c.build.archiveFormat==='ustar-gzip-v1'&&c.build.timestamp===0&&c.build.owner===0&&c.build.group===0,'unsupported_archive_format');list(c.build.inputs,BUILD_INPUTS.length);need(c.build.inputs.length===BUILD_INPUTS.length&&new Set(c.build.inputs.map(f=>f.path)).size===BUILD_INPUTS.length,'invalid_build_inputs');for(const f of c.build.inputs){fields(f,['path','sha256']);need(BUILD_INPUTS.includes(f.path),'invalid_build_inputs');sha(f.sha256);}list(c.build.runtimeInputs,3);c.build.runtimeInputs.forEach(fileRecord);
+ fields(c.versions,['coordinatorNode','checkNode','sdk','settingsSchemas','databaseSchemas']);
+ const {coordinatorNode,checkNode,sdk}=c.versions;
+ for(const v of [coordinatorNode,sdk])need(typeof v==='string'&&/^\d+\.\d+\.\d+$/.test(v),'invalid_version');
+ need(Object.hasOwn(NATIVE_NODE_RELEASES,coordinatorNode),'unsupported_coordinator_node');
+ need(checkNode===null||typeof checkNode==='string'&&Object.hasOwn(NATIVE_NODE_RELEASES,checkNode),'unsupported_check_node');
+ need(checkNode===null||checkNode===coordinatorNode,'inventory_native_version_mismatch');
+ for(const a of [c.versions.settingsSchemas,c.versions.databaseSchemas]){list(a,16);a.forEach(v=>integer(v,1000));}
+ const inputs=coordinatorNode===CURRENT_NODE_RELEASE.version?CURRENT_BUILD_INPUTS:BUILD_INPUTS;
+ fields(c.build,['archiveFormat','timestamp','owner','group','inputs','runtimeInputs']);need(c.build.archiveFormat==='ustar-gzip-v1'&&c.build.timestamp===0&&c.build.owner===0&&c.build.group===0,'unsupported_archive_format');list(c.build.inputs,inputs.length);need(c.build.inputs.length===inputs.length,'invalid_build_inputs');
+ const seenInputs=new Set();for(const f of c.build.inputs){fields(f,['path','sha256']);need(inputs.includes(f.path)&&!seenInputs.has(f.path),'invalid_build_inputs');seenInputs.add(f.path);sha(f.sha256);}list(c.build.runtimeInputs,3);c.build.runtimeInputs.forEach(fileRecord);
  fields(c.verification,['references','nativePreflight']);list(c.verification.references,16);const refs=new Set();for(const r of c.verification.references){fields(r,['path','sha256']);relative(r.path);sha(r.sha256);need(!refs.has(r.path),'duplicate_reference');refs.add(r.path);}
  if(c.verification.nativePreflight!==null){const p=c.verification.nativePreflight;fields(p,['backend','runtimeFingerprint','childProcessWorks','quiescent','kernelContainment']);fields(p.backend,['id','revision']);need(p.backend.id==='darwin-seatbelt'&&p.backend.revision===2&&p.childProcessWorks===true&&p.quiescent===true&&p.kernelContainment===true,'unsupported_preflight_claim');sha(p.runtimeFingerprint);}
  list(c.unpassedGates,GATES.length);need(c.unpassedGates.length>0&&new Set(c.unpassedGates).size===c.unpassedGates.length&&c.unpassedGates.every(g=>GATES.includes(g)),'unsupported_candidate_gate_labels');
@@ -98,13 +109,14 @@ async function archiveInventory(file,c){
  // Forward source errors; the bounded reader owns teardown, including on rejection.
  input.on('error',e=>gunzip.destroy(e));meter.on('error',e=>gunzip.destroy(e));input.pipe(meter).pipe(gunzip);
  const reader=new Reader(gunzip),stem=c.archive.file.slice(0,-7),members=new Map(),metadata=new Map();let previous='',ended=false;
- const retain=new Set([stem+'/payload/package-manifest.json',stem+'/verify.sha256',stem+'/payload/runtime/package-lock.json',stem+'/payload/runtime/node_modules/@modelcontextprotocol/sdk/package.json']);
+ const nativeManifestPath=stem+'/payload/'+NATIVE_MANIFEST;
+ const retain=new Set([stem+'/payload/package-manifest.json',stem+'/verify.sha256',stem+'/payload/runtime/package-lock.json',stem+'/payload/runtime/node_modules/@modelcontextprotocol/sdk/package.json',nativeManifestPath]);
  try{
   while(true){const h=await reader.take(512,true);need(h,'archive_missing_terminator');if(h.every(v=>v===0)){const h2=await reader.take(512);need(h2.every(v=>v===0),'archive_invalid_terminator');need(await reader.take(1,true)===null,'archive_trailing_data');ended=true;break;}
    need(members.size<LIMITS.entries,'archive_too_many_entries');const checksum=octal(h,148,8),check=Buffer.from(h);check.fill(32,148,156);need(check.reduce((a,b)=>a+b,0)===checksum,'archive_header_checksum');need(h.subarray(257,265).equals(Buffer.from([117,115,116,97,114,0,48,48])),'archive_not_ustar');
    const leaf=tarText(h,0,100),prefix=tarText(h,345,155),name=prefix?prefix+'/'+leaf:leaf,type=String.fromCharCode(h[156]);need(type==='0'||type==='5','archive_nonregular_member');const directory=type==='5';need(directory===name.endsWith('/'),'archive_path_type_mismatch');relative(directory?name.slice(0,-1):name);need(name.startsWith(stem+'/'),'archive_version_path_mismatch');need(name>previous&&!members.has(name),'archive_noncanonical_inventory');previous=name;
    const size=octal(h,124,12),mode=octal(h,100,8);integer(size,LIMITS.member);need(octal(h,108,8)===0&&octal(h,116,8)===0&&octal(h,136,12)===0,'archive_owner_timestamp');need(h.subarray(157,257).every(v=>v===0)&&h.subarray(265,345).every(v=>v===0)&&h.subarray(500).every(v=>v===0),'archive_noncanonical_header');need(directory?size===0&&[0o700,0o755].includes(mode):[0o600,0o644,0o755].includes(mode),'archive_invalid_mode');
-   if(retain.has(name))need(size<=LIMITS.json,'archive_metadata_too_large');const chunks=[],sum=createHash('sha256');let left=size;while(left){const chunk=await reader.take(Math.min(left,65536));sum.update(chunk);if(retain.has(name))chunks.push(chunk);left-=chunk.length;}const padding=(512-size%512)%512;if(padding)need((await reader.take(padding)).every(v=>v===0),'archive_nonzero_padding');
+   if(retain.has(name))need(size<=(name===nativeManifestPath?128*1024:LIMITS.json),'archive_metadata_too_large');const chunks=[],sum=createHash('sha256');let left=size;while(left){const chunk=await reader.take(Math.min(left,65536));sum.update(chunk);if(retain.has(name))chunks.push(chunk);left-=chunk.length;}const padding=(512-size%512)%512;if(padding)need((await reader.take(padding)).every(v=>v===0),'archive_nonzero_padding');
    members.set(name,{sha256:sum.digest('hex'),bytes:size,mode:'100'+mode.toString(8).padStart(3,'0'),directory});if(retain.has(name))metadata.set(name,Buffer.concat(chunks));
   }
   need(ended&&compressed.digest('hex')===c.archive.sha256,'archive_digest_mismatch');await unchanged(f);
@@ -123,9 +135,39 @@ async function archiveInventory(file,c){
  for(const n of [...expected]){let d=path.posix.dirname(n);while(d!=='.'){expected.add(d+'/');d=path.posix.dirname(d);}}
  need(members.size===expected.size&&[...members.keys()].every(n=>expected.has(n))&&[...expected].every(n=>members.has(n)),'archive_inventory_paths_mismatch');for(const n of [stem+'/README.md',stem+'/verify.sha256',stem+'/payload/package-manifest.json'])need(members.get(n).mode==='100644'&&!members.get(n).directory,'archive_outer_mode_mismatch');need(members.get(stem+'/install').mode==='100755','archive_outer_mode_mismatch');
  const checksums=Buffer.from([...m.files,{path:'package-manifest.json',sha256:hash(mb)}].map(r=>r.sha256+'  payload/'+r.path).join('\n')+'\n');need(metadata.get(stem+'/verify.sha256')?.equals(checksums),'inventory_checksum_list_mismatch');
- const runtimeInputs=m.files.filter(r=>['runtime/bin/node','runtime/NODE-LICENSE','runtime/check-artifact/artifact-manifest.json'].includes(r.path));need(canonical(runtimeInputs)===canonical(c.build.runtimeInputs),'inventory_runtime_inputs_mismatch');need(runtimeInputs.some(f=>f.path==='runtime/bin/node'&&f.mode==='100755')&&runtimeInputs.some(f=>f.path==='runtime/NODE-LICENSE'&&f.mode==='100644'),'inventory_required_runtime_missing');
- const native=m.layout==='terminal-beta-v2';need(native===(c.verification.nativePreflight!==null)&&native===(c.versions.checkNode!==null),'inventory_native_claim_mismatch');if(native){fields(m.nativeCheckArtifact,['fingerprint','backend']);need(canonical(m.nativeCheckArtifact.backend)===canonical(c.verification.nativePreflight.backend)&&m.nativeCheckArtifact.fingerprint===c.verification.nativePreflight.runtimeFingerprint&&runtimeInputs.find(f=>f.path==='runtime/check-artifact/artifact-manifest.json')?.sha256===m.nativeCheckArtifact.fingerprint,'inventory_native_binding_mismatch');}else need(!Object.hasOwn(m,'nativeCheckArtifact'),'inventory_native_claim_mismatch');
+ const runtimeInputs=m.files.filter(r=>['runtime/bin/node','runtime/NODE-LICENSE',NATIVE_MANIFEST].includes(r.path));need(canonical(runtimeInputs)===canonical(c.build.runtimeInputs),'inventory_runtime_inputs_mismatch');
+ const coordinator=runtimeInputs.find(f=>f.path==='runtime/bin/node'),license=runtimeInputs.find(f=>f.path==='runtime/NODE-LICENSE'),release=NATIVE_NODE_RELEASES[c.versions.coordinatorNode];
+ need(coordinator?.mode==='100755'&&license?.mode==='100644','inventory_required_runtime_missing');
+ if(!c.fixture)need(coordinator.sha256===release.coordinatorSha256&&license.sha256===release.licenseSha256,'inventory_coordinator_provenance_mismatch');
+ const native=m.layout==='terminal-beta-v2',nativeFiles=m.files.filter(f=>f.path.startsWith('runtime/check-artifact/'));
+ need(native===(c.verification.nativePreflight!==null)&&native===(c.versions.checkNode!==null)&&(c.fixture||native),'inventory_native_claim_mismatch');
+ if(native){
+  fields(m.nativeCheckArtifact,['fingerprint','backend']);
+  const record=runtimeInputs.find(f=>f.path===NATIVE_MANIFEST);
+  need(canonical(m.nativeCheckArtifact.backend)===canonical(c.verification.nativePreflight.backend)&&m.nativeCheckArtifact.fingerprint===c.verification.nativePreflight.runtimeFingerprint&&record?.sha256===m.nativeCheckArtifact.fingerprint&&record.mode==='100600','inventory_native_binding_mismatch');
+  bindNativeArtifact(json(metadata.get(nativeManifestPath),128*1024),m.files,nativeFiles,release,c.fixture);
+ }else need(!Object.hasOwn(m,'nativeCheckArtifact')&&nativeFiles.length===0,'inventory_native_claim_mismatch');
  const lock=metadata.get(stem+'/payload/runtime/package-lock.json'),sdk=metadata.get(stem+'/payload/runtime/node_modules/@modelcontextprotocol/sdk/package.json');need(lock&&json(lock).packages?.['node_modules/@modelcontextprotocol/sdk']?.version===c.versions.sdk,'inventory_sdk_mismatch');need(sdk&&json(sdk).version===c.versions.sdk,'inventory_sdk_mismatch');return {manifest:m,runtime,entries:members.size,expanded:reader.total,archiveBytes:f.st.size};
+}
+function bindNativeArtifact(manifest,files,nativeFiles,release,fixture){
+ fields(manifest,['schema','platform','arch','nodeVersion','supervisorProtocol','files','provenance']);
+ need(manifest.schema===1&&manifest.platform==='darwin'&&manifest.arch==='arm64'&&manifest.supervisorProtocol===1,'unsupported_native_artifact');
+ need(manifest.nodeVersion===release.version,'inventory_native_version_mismatch');
+ const p=manifest.provenance;
+ fields(p,['nodeSource','nodePatch','supervisorSourceSha256','build']);
+ fields(p.nodeSource,['version','url','sha256']);fields(p.nodePatch,['sha256','description']);fields(p.build,['compiler','platform']);
+ need(p.nodeSource.version===release.version&&p.nodeSource.url===release.sourceUrl&&p.nodeSource.sha256===release.sourceSha256&&p.nodePatch.sha256===release.patchSha256&&typeof p.nodePatch.description==='string'&&p.nodePatch.description.trim().length>0&&p.nodePatch.description.length<=2000&&p.build.platform==='darwin-arm64'&&typeof p.build.compiler==='string'&&p.build.compiler.length>0,'inventory_native_provenance_mismatch');
+ need(files.some(f=>f.path==='runtime/provenance/fork-only.patch'&&f.sha256===p.nodePatch.sha256&&f.mode==='100644')&&files.some(f=>f.path==='runtime/src/project/check-backends/native-supervisor.c'&&f.sha256===p.supervisorSourceSha256),'inventory_native_provenance_mismatch');
+ list(manifest.files,3);need(manifest.files.length===3&&nativeFiles.length===4,'inventory_native_files_mismatch');
+ const modes=new Map([['node','100755'],['mosaic-check-supervisor','100755'],['NODE-LICENSE','100644']]);
+ for(const f of manifest.files){
+  fileRecord(f);
+  const outer=nativeFiles.find(r=>r.path==='runtime/check-artifact/'+f.path);
+  need(modes.get(f.path)===f.mode&&f.bytes>0&&outer&&['sha256','bytes','mode'].every(k=>f[k]===outer[k]),'inventory_native_files_mismatch');
+  modes.delete(f.path);
+  if(!fixture&&f.path==='node')need(f.sha256!==release.coordinatorSha256,'inventory_native_provenance_mismatch');
+  if(!fixture&&f.path==='NODE-LICENSE')need(f.sha256===release.licenseSha256,'inventory_native_provenance_mismatch');
+ }
 }
 async function runtimeClosure(root,s){
  const expected=new Set(),pending=['src/beta/cli.mjs'];
@@ -146,6 +188,18 @@ function bindSource(c,a,s){
  for(const f of [...c.build.inputs,...c.verification.references])compare(f.path,f);
  for(const f of a.runtime){need(f.mode==='100644','runtime_source_mode_mismatch');compare(f.path.slice('runtime/'.length),f);}
  for(const f of a.manifest.files){let source;if(f.path==='LICENSE')source='LICENSE';else if(['runtime/package.json','runtime/package-lock.json'].includes(f.path)||f.path.startsWith('runtime/docs/'))source=f.path.slice('runtime/'.length);else source=({'runtime/provenance/fork-only.patch':'test/fixtures/mosaic-pb15-v2-composition/fork-only.patch','runtime/provenance/build-native-check-artifact.mjs':'scripts/build-native-check-artifact.mjs','runtime/provenance/beta-candidate.schema.json':'scripts/lib/beta-candidate.schema.json'})[f.path];if(source)compare(source,f);}
+ if(c.versions.coordinatorNode===CURRENT_NODE_RELEASE.version){
+  for(const source of ['THIRD_PARTY_NOTICES.md','docs/DISTRIBUTION_PROVENANCE.md']){
+   const record=a.manifest.files.find(f=>f.path==='runtime/'+source);
+   need(record,'inventory_notice_paths_mismatch');
+   need(record.mode==='100644','inventory_notice_mode_mismatch');
+   compare(source,record);
+  }
+  const prefix='distribution/notices/',expected=[...s.files.keys()].filter(p=>p.startsWith(prefix)).map(p=>p.slice(prefix.length)).sort();
+  const inventory=a.manifest.files.filter(f=>f.path.startsWith('runtime/notices/'));
+  need(expected.length>2&&expected.includes('INDEX.md')&&expected.includes('SHA256SUMS')&&canonical(inventory.map(f=>f.path.slice('runtime/notices/'.length)))===canonical(expected),'inventory_notice_paths_mismatch');
+  for(const f of inventory){need(f.mode==='100644','inventory_notice_mode_mismatch');compare(prefix+f.path.slice('runtime/notices/'.length),f);}
+ }
 }
 async function evidence(root,indexPath,c,candidateHash){
  const bytes=await read(indexPath,LIMITS.json),i=json(bytes);fields(i,['schema','kind','binding','records']);need(i.schema===1&&i.kind==='mosaic-portable-evidence-index','unsupported_evidence_index');fields(i.binding,['candidateSha256','archiveSha256','sourceCommit','sourceTree']);need(i.binding.candidateSha256===candidateHash&&i.binding.archiveSha256===c.archive.sha256&&i.binding.sourceCommit===c.source.commit&&i.binding.sourceTree===c.source.tree,'evidence_binding_mismatch');

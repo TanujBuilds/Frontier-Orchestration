@@ -10,6 +10,7 @@ import path from 'node:path';
 import os from 'node:os';
 import {readBundledNativeCheckRuntime} from '../../src/beta/package-contract.mjs';
 import {CheckRunner} from '../../src/project/sandbox.mjs';
+import {nativeBackendFactory,validateNativeCheckRuntime} from '../../src/project/check-backends/native-runtime-dispatch.mjs';
 export const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 // Official coordinator bytes are separately pinned to the upstream release.
 // A locally built check Node must not disclose this owner or private build roots.
@@ -49,21 +50,25 @@ export async function copyCheckArtifact(source,destination){
  if(!stat.isDirectory()||stat.isSymbolicLink()||await realpath(source)!==source)throw Error('Check artifact must use its canonical directory');
  if(JSON.stringify((await readdir(source)).sort())!==JSON.stringify(artifactNames))throw Error('Check artifact must contain the exact four-file allowlist');
  // Validate original ownership/ancestor/modes before copying; do not launder aliases.
- const {validateNativeCheckRuntime}=await import('../../src/project/check-backends/darwin-seatbelt-v2.mjs');
  const manifestPath=path.join(source,'artifact-manifest.json'),manifestBytes=await readFile(manifestPath);
- validateNativeCheckRuntime({schema:1,artifactManifestPath:manifestPath,artifactManifestSha256:sha(manifestBytes)});
+ const identity=validateNativeCheckRuntime({schema:1,artifactManifestPath:manifestPath,artifactManifestSha256:sha(manifestBytes)});
  await cp(source,destination,{recursive:true,errorOnExist:true,force:false});
  await chmod(destination,0o700);
+ return identity;
 }
-export async function probeCheckArtifact(source){
+export async function probeCheckArtifact(source,{nodeVersion,coordinatorSha256,licenseSha256}={}){
  // Actual OS execution always occurs in an owned canonical temporary directory,
  // even when the output archive is being assembled under a checkout's .data/.
  const root=await realpath(await mkdtemp(path.join(os.tmpdir(),'mosaic-package-probe-')));
  let uncertain=false;
  try{
   const runtime=path.join(root,'runtime');await mkdir(runtime,{mode:0o700});
-  await copyCheckArtifact(source,path.join(runtime,'check-artifact'));
+  const identity=await copyCheckArtifact(source,path.join(runtime,'check-artifact'));
   const nativeCheckRuntime=await readBundledNativeCheckRuntime(runtime),workspaceRoot=path.join(root,'workspace'),journal=path.join(root,'journal');
+  if(nativeCheckRuntime.artifactManifestSha256!==identity.fingerprint)throw Error('Artifact changed during native packaging preflight');
+  if(nodeVersion!==undefined&&identity.nodeVersion!==nodeVersion)throw Error('The check artifact must match the coordinator Node version');
+  const license=identity.manifest.files.find(file=>file.path==='NODE-LICENSE');
+  if((coordinatorSha256!==undefined&&identity.runtime.sha256===coordinatorSha256)||(licenseSha256!==undefined&&license.sha256!==licenseSha256))throw Error('The check artifact must contain a separate fork-only Node executable and the pinned Node license');
   await mkdir(workspaceRoot,{mode:0o700});await mkdir(journal,{mode:0o700});
   const data=Buffer.from('protected probe input\n');await writeFile(path.join(workspaceRoot,'input.txt'),data,{mode:0o644});
   const workspace={root:workspaceRoot,journal:{dir:journal},manifest:{permissions:{readPaths:['input.txt']}},file:async name=>path.join(workspaceRoot,name),snapshot:async()=>({'input.txt':sha(data)}),inventory:async()=>[{path:'input.txt',hash:sha(data)}],fileMode:async()=> '100644'};
@@ -72,9 +77,12 @@ export async function probeCheckArtifact(source){
    const save=state=>atomic(stateFile,JSON.stringify({schema:1,requestId,binding,...state})+'\n');await save({status:'starting'});
    return {requestId,receiptPath,async prepared(event){await save({status:'prepared',event});},authorizeGo(){const state=JSON.parse(readFileSync(stateFile));if(state.status!=='prepared'||state.binding.bindingHash!==binding.bindingHash)throw Error('Developer preflight ownership changed');},async complete(receipt){await save({status:'quiescent',receipt});},async uncertain(reason){uncertain=true;await save({status:'uncertain',reason});}};
   }};
-  const runner=new CheckRunner(workspace,{backend:'darwin-seatbelt',backendRevision:2,backendOptions:{nativeCheckRuntime,ownership}});
+  const runner=new CheckRunner(workspace,{backend:'darwin-seatbelt',backendRevision:2,backendFactory:nativeBackendFactory,backendOptions:{nativeCheckRuntime,ownership}});
+  const versionProbe=await runner.execute([runner.probeExecutable,'--version'],5000);
+  if(versionProbe.code!==0||versionProbe.stopped||versionProbe.stdout.trim()!=='v'+identity.nodeVersion)
+   throw Error('The check Node executable does not report the artifact Node version');
   const proof=await runner.verify();
-  return {backend:{id:'darwin-seatbelt',revision:2},runtimeFingerprint:nativeCheckRuntime.artifactManifestSha256,childProcessWorks:proof.childProcessWorks,kernelProbe:proof.nativeGroupProbe,quiescent:proof.quiescence?.outcome==='quiescent'||proof.quiescence?.status==='quiescent'||!!proof.quiescence};
+  return {backend:{id:'darwin-seatbelt',revision:2},runtimeFingerprint:nativeCheckRuntime.artifactManifestSha256,nodeVersion:identity.nodeVersion,artifactFiles:identity.manifest.files,childProcessWorks:proof.childProcessWorks,kernelProbe:proof.nativeGroupProbe,quiescent:proof.quiescence?.outcome==='quiescent'||proof.quiescence?.status==='quiescent'||!!proof.quiescence};
  }catch(error){if(error.executionOutcome==='unknown'||uncertain){uncertain=true;error.message+='; retained unresolved developer preflight ownership at '+root;}throw error;}finally{if(!uncertain)await rm(root,{recursive:true,force:true});}
 }
 // ustar + gzip with deterministic order, owners, times, modes and no macOS xattrs.

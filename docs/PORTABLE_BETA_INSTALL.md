@@ -4,13 +4,12 @@ This is a local Darwin arm64 candidate. An archive checksum detects changed
 bytes; it is not a signature or an authenticated download channel. See the
 candidate's `unpassedGates` and the separate release matrix before distribution.
 
-The ordinary coordinator uses the pinned official Node 24.22.0 distribution at
+The ordinary coordinator uses the pinned official Node 24.22.3 distribution at
 `payload/runtime/bin/node`. Native protected checks use a separate artifact at
 `payload/runtime/check-artifact/`, containing exactly `node` (0755),
 `mosaic-check-supervisor` (0755), `NODE-LICENSE` (0644), and
 `artifact-manifest.json` (0600). The artifact directory is 0700. The complete Node
-license includes upstream third-party notices. The two runtimes are not
-interchangeable: stock Node fails the actual native spawn/containment preflight.
+license includes upstream third-party notices. The archive also carries the supplemental runtime notices in `payload/runtime/notices/`. Use the patched Node artifact for protected checks. Stock Node fails the native spawn preflight.
 
 ## Build a local candidate
 
@@ -26,7 +25,7 @@ explicit input binary, complete license, reviewed patch and source provenance.
 With the official coordinator Node and license already obtained and verified:
 
 ```sh
-node scripts/package-beta.mjs --version 0.1.0-beta.160 \
+node scripts/package-beta.mjs --version 0.1.0-beta.204 \
   --output "$CANDIDATE_OUTPUT" \
   --node "$OFFICIAL_NODE/bin/node" --node-license "$OFFICIAL_NODE/LICENSE" \
   --check-artifact "$CHECK_ARTIFACT" --offline
@@ -244,7 +243,11 @@ or incompatible retained native-supervisor source block the switch.
 Private configuration and saved approvals retain the exact original native
 artifact path and fingerprint. A code pointer switch does not rewrite checks,
 goal hashes or runtime approvals. Older immutable version directories, settings,
-credentials and job/evidence state remain available. Moving an installation or
+credentials and job/evidence state remain available.
+
+For a release carrying Node 24.22.3, fresh setup selects the bundled check runtime. Updating an existing 24.22.0 installation keeps its original check artifact and approval hashes. When resuming a saved goal, refresh native preflight against the exact saved approval in your coding app before dispatching checks. Retain the older version directory while its artifact is configured. Rollback checks compatibility with the configured artifact before changing the launcher. The tested retention path covers a stopped goal without queued worker assignments. An already queued worker task can be blocked if it reaches dispatch before its proof is refreshed.
+
+Moving an installation or
 selecting a different runtime/backend requires explicit fresh approval; stopped
 or uncertain work may still pin an old artifact. Resolve that work before a
 conflicting migration. Do not delete old versions manually while approvals or

@@ -9,12 +9,14 @@ import {promisify} from 'node:util';
 import {digest} from '../src/harness/contracts.mjs';
 import {verifyPackage} from '../src/harness/package.mjs';
 import {buildNativeCheckArtifact} from '../scripts/build-native-check-artifact.mjs';
+import {CURRENT_NODE_RELEASE,NATIVE_NODE_RELEASES} from '../src/project/check-backends/native-node-releases.mjs';
 const exec=promisify(execFile),sha=b=>createHash('sha256').update(b).digest('hex');
 const repo=path.resolve(import.meta.dirname,'..');
 const supported=process.platform==='darwin'&&process.arch==='arm64';
 const required=process.env.MOSAIC_REQUIRE_NATIVE==='1',node=process.env.MOSAIC_NATIVE_TEST_NODE;
-const source={version:'24.22.0',url:'https://nodejs.org/dist/v24.22.0/node-v24.22.0.tar.xz',sha256:'41f97cff2c666f1f8293dc5f85c65e8dd605c16b43fd9febd49ede32ee1e0329'};
-const patch={sha256:'840109e32a582faf92ed07f75987c6eb03c9b5659cf74b2f5231ac1e72594741',description:'Disable the Apple posix_spawn branch before file actions; use the existing libuv fork path.'};
+const release=NATIVE_NODE_RELEASES[process.versions.node]??CURRENT_NODE_RELEASE;
+const source={version:release.version,url:release.sourceUrl,sha256:release.sourceSha256};
+const patch={sha256:release.patchSha256,description:'Disable the Apple posix_spawn branch before file actions; use the existing libuv fork path.'};
 async function temp(t){const root=await realpath(await mkdtemp(path.join(os.tmpdir(),'Mosaic package 16 ')));t.after(()=>rm(root,{recursive:true,force:true}));return root;}
 test('package verifier binds inventoried executable modes',async t=>{
  const root=await temp(t),data=Buffer.from('executable');await writeFile(path.join(root,'tool'),data,{mode:0o755});
@@ -31,9 +33,11 @@ test('actual archive packaging repeats bytes, binds dynamic/source assets and wo
  assert.equal(sha(await readFile(path.join(a,archive))),sha(await readFile(path.join(b,archive))));
  assert.deepEqual(await readFile(path.join(a,stem+'.candidate.json')),await readFile(path.join(b,stem+'.candidate.json')));
  const candidate=JSON.parse(await readFile(path.join(a,stem+'.candidate.json')));assert.equal(candidate.archive.sha256,sha(await readFile(path.join(a,archive))));assert.match(candidate.source.commit,/^[a-f0-9]{40}$/);assert.ok(candidate.unpassedGates.includes('clean-machine'));
+ assert.equal(candidate.versions.coordinatorNode,release.version);assert.equal(candidate.versions.checkNode,release.version);
  const extracted=path.join(root,'Relocated package with spaces');await mkdir(extracted);await exec('/usr/bin/tar',['-xzf',path.join(a,archive),'-C',extracted]);
  const payload=path.join(extracted,stem,'payload'),runtime=path.join(payload,'runtime'),manifest=JSON.parse(await readFile(path.join(payload,'package-manifest.json')));
  for(const name of ['runtime/src/project/check-backends/native-supervisor.c','runtime/src/harness/integration.mjs','runtime/src/harness/workflow-recipes/definitions/feature.v1.json','runtime/docs/NATIVE_CHECK_ARTIFACT.md','runtime/docs/PORTABLE_BETA_INSTALL.md','runtime/docs/PORTABLE_BETA_RELEASE.md','runtime/provenance/beta-candidate.schema.json','runtime/provenance/fork-only.patch','runtime/src/beta/hosts/cursor.mjs'])assert.ok(manifest.files.some(f=>f.path===name),name);
+ if(release===CURRENT_NODE_RELEASE)for(const name of ['INDEX.md','SHA256SUMS'])assert.deepEqual(await readFile(path.join(runtime,'notices',name)),await readFile(path.join(repo,'distribution','notices',name)));
  assert.equal(await verifyPackage(payload),true);
  const {readBundledNativeCheckRuntime}=await import('../src/beta/package-contract.mjs');const config=await readBundledNativeCheckRuntime(runtime);assert.equal(config.artifactManifestSha256,artifact.fingerprint);assert.equal(config.artifactManifestPath,path.join(runtime,'check-artifact/artifact-manifest.json'));
  const help=await exec(path.join(runtime,'bin/node'),[path.join(runtime,'src/beta/cli.mjs'),'--help'],{cwd:root,env:{PATH:'/usr/bin:/bin',HOME:root}});assert.match(help.stdout,/Mosaic Beta/);

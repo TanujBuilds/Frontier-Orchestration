@@ -5,11 +5,59 @@ import {execFileSync,spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 import {fixture,sha,digest,gates} from './fixtures/portable-release-evidence/fixture.mjs';
+import {NATIVE_NODE_RELEASES} from '../src/project/check-backends/native-node-releases.mjs';
 const script=fileURLToPath(new URL('../scripts/release/verify-portable-candidate.mjs',import.meta.url));
 const args=f=>Object.entries(f.opts).flatMap(([k,v])=>['--'+k.replace(/[A-Z]/g,c=>'-'+c.toLowerCase()),v]);
 const run=f=>spawnSync(process.execPath,[script,...args(f)],{encoding:'utf8',timeout:15000,maxBuffer:1024*1024});
 async function setup(t){const f=await fixture();t.after(()=>rm(f.root,{recursive:true,force:true}));return f;}
 async function reject(f,code){const r=run(f);assert.equal(r.status,2,r.stderr);assert.match(r.stderr,new RegExp(code));await assert.rejects(readFile(f.output),{code:'ENOENT'});}
+function payloadEntry(f,file,bytes,mode='100644'){
+ f.payload.set(file,bytes);
+ const item={path:file,sha256:sha(bytes),bytes:bytes.length,mode};
+ const index=f.manifest.files.findIndex(v=>v.path===file);
+ if(index<0)f.manifest.files.push(item);else f.manifest.files[index]=item;
+ return item;
+}
+async function nativeFixture(t,version){
+ const f=await setup(t),release=NATIVE_NODE_RELEASES[version];
+ const patchFile='test/fixtures/mosaic-pb15-v2-composition/fork-only.patch';
+ const patch=await readFile(new URL('../'+patchFile,import.meta.url));
+ const assets=[[patchFile,'runtime/provenance/fork-only.patch',patch]];
+ if(version==='24.22.3'){
+  for(const file of ['THIRD_PARTY_NOTICES.md','docs/DISTRIBUTION_PROVENANCE.md'])assets.push([file,'runtime/'+file,Buffer.from(file+'\n')]);
+  for(const name of ['INDEX.md','SHA256SUMS','terms/source.txt'])assets.push(['distribution/notices/'+name,'runtime/notices/'+name,Buffer.from(name+'\n')]);
+  for(const file of ['scripts/build-native-check-artifact.mjs','src/project/check-backends/native-node-releases.mjs']){
+   const b=Buffer.from('// fixture build input '+file+'\n');
+   assets.push([file,null,b]);
+   f.c.build.inputs.push({path:file,sha256:sha(b)});
+  }
+ }
+ for(const [source,destination,bytes] of assets){await mkdir(path.dirname(path.join(f.source,source)),{recursive:true});await writeFile(path.join(f.source,source),bytes);if(destination)payloadEntry(f,destination,bytes);}
+ f.git('add','.');f.git('-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-qm','native fixture');
+ f.c.source.commit=f.git('rev-parse','HEAD');f.c.source.tree=f.git('rev-parse','HEAD^{tree}');
+ f.c.versions.coordinatorNode=f.c.versions.checkNode=f.manifest.nodeVersion=version;
+ f.manifest.layout='terminal-beta-v2';
+ const nativePrefix='runtime/check-artifact/';
+ const files=[['node','100755'],['mosaic-check-supervisor','100755'],['NODE-LICENSE','100644']].map(([file,mode])=>({...payloadEntry(f,nativePrefix+file,Buffer.from(file+' fixture\n'),mode),path:file}));
+ const artifact={schema:1,platform:'darwin',arch:'arm64',nodeVersion:version,supervisorProtocol:1,files,provenance:{
+  nodeSource:{version,url:release.sourceUrl,sha256:release.sourceSha256},
+  nodePatch:{sha256:release.patchSha256,description:'Fork-only fixture'},
+  supervisorSourceSha256:sha(f.payload.get('runtime/src/project/check-backends/native-supervisor.c')),
+  build:{compiler:'fixture clang',platform:'darwin-arm64'}
+ }};
+ const save=async artifactBytes=>{
+  const manifest=payloadEntry(f,nativePrefix+'artifact-manifest.json',artifactBytes??Buffer.from(JSON.stringify(artifact)+'\n'),'100600');
+  const backend={id:'darwin-seatbelt',revision:2};
+  f.manifest.nativeCheckArtifact={fingerprint:manifest.sha256,backend};
+  f.c.verification.nativePreflight={backend,runtimeFingerprint:manifest.sha256,childProcessWorks:true,quiescent:true,kernelContainment:true};
+  f.manifest.files.sort((a,b)=>a.path<b.path?-1:1);f.manifest.contentHash=digest(f.manifest.files);
+  f.c.build.runtimeInputs=f.manifest.files.filter(r=>['runtime/bin/node','runtime/NODE-LICENSE',manifest.path].includes(r.path));
+  await f.saveArchive();
+  f.index.binding.sourceCommit=f.c.source.commit;f.index.binding.sourceTree=f.c.source.tree;
+  await writeFile(f.evidenceIndex,JSON.stringify(f.index));
+ };
+ return {f,artifact,save};
+}
 test('schema1 fixture binds archive/source/evidence without copying private-looking record text or changing inputs',async t=>{
  const f=await setup(t),before=await Promise.all([f.candidate,f.archive,f.evidenceIndex,...f.records.map(r=>path.join(f.evidenceRoot,r.path))].map(p=>readFile(p)));
  const r=run(f);assert.equal(r.status,0,r.stderr);const raw=await readFile(f.output,'utf8'),s=JSON.parse(raw);
@@ -18,6 +66,54 @@ test('schema1 fixture binds archive/source/evidence without copying private-look
  assert.deepEqual(await Promise.all([f.candidate,f.archive,f.evidenceIndex,...f.records.map(r=>path.join(f.evidenceRoot,r.path))].map(p=>readFile(p))),before);assert.equal(f.git('status','--porcelain'),'');assert.equal((await stat(f.output)).mode&0o777,0o600);
 });
 test('archive corruption and truncation cannot pass with stale candidate digest',async t=>{for(const kind of ['corrupt','short']){const f=await setup(t),b=await readFile(f.archive);await writeFile(f.archive,kind==='short'?b.subarray(0,20):Buffer.concat([b.subarray(0,-4),Buffer.from('oops')]));await reject(f,'archive');}});
+test('an unsupported coordinator runtime cannot be blessed by matching inventory and archive digests',async t=>{
+ const f=await setup(t);f.c.versions.coordinatorNode=f.manifest.nodeVersion='24.22.1';await f.saveArchive();
+ await reject(f,'unsupported_coordinator_node');
+});
+test('legacy and current native fixture metadata verify against their own exact provenance',async t=>{
+ for(const version of ['24.22.0','24.22.3']){
+  const {f,save}=await nativeFixture(t,version);await save();
+  const r=run(f);assert.equal(r.status,0,r.stderr);
+ }
+});
+test('changed native version, upstream source, fork patch and member pins fail with a fully rebound archive',async t=>{
+ for(const [kind,code] of [['candidate','inventory_native_version_mismatch'],['manifest','inventory_native_version_mismatch'],['source-version','inventory_native_provenance_mismatch'],['source-digest','inventory_native_provenance_mismatch'],['patch','inventory_native_provenance_mismatch'],['member','inventory_native_files_mismatch']]){
+  const {f,artifact,save}=await nativeFixture(t,'24.22.3');
+  if(kind==='candidate')f.c.versions.checkNode='24.22.0';
+  if(kind==='manifest')artifact.nodeVersion='24.22.0';
+  if(kind==='source-version')artifact.provenance.nodeSource.version='24.22.0';
+  if(kind==='source-digest')artifact.provenance.nodeSource.sha256=NATIVE_NODE_RELEASES['24.22.0'].sourceSha256;
+  if(kind==='patch')artifact.provenance.nodePatch.sha256='0'.repeat(64);
+  if(kind==='member')artifact.files[0].sha256='0'.repeat(64);
+  await save();await reject(f,code);
+ }
+});
+test('current release requires exact stock bytes even when candidate and archive agree',async t=>{
+ const {f,save}=await nativeFixture(t,'24.22.3');
+ f.c.fixture=f.manifest.fixture=false;await save();
+ await reject(f,'inventory_coordinator_provenance_mismatch');
+});
+test('current notice paths and content are bound to the source checkout',async t=>{
+ for(const kind of ['missing','changed']){
+  const {f,save}=await nativeFixture(t,'24.22.3'),file='runtime/notices/terms/source.txt';
+  if(kind==='missing')f.manifest.files.splice(f.manifest.files.findIndex(r=>r.path===file),1);
+  else payloadEntry(f,file,Buffer.from('changed terms'));
+  await save();await reject(f,kind==='missing'?'inventory_notice_paths_mismatch':'runtime_source_bytes_mismatch');
+ }
+});
+test('current candidate verification rejects omitted and replaced source notice documents',async t=>{
+ for(const file of ['runtime/THIRD_PARTY_NOTICES.md','runtime/docs/DISTRIBUTION_PROVENANCE.md'])for(const kind of ['missing','changed'])await t.test(file+' '+kind,async t=>{
+  const {f,save}=await nativeFixture(t,'24.22.3');
+  if(kind==='missing')f.manifest.files.splice(f.manifest.files.findIndex(r=>r.path===file),1);
+  else payloadEntry(f,file,Buffer.from('changed notice'));
+  await save();
+  await reject(f,kind==='missing'?'inventory_notice_paths_mismatch':'runtime_source_bytes_mismatch');
+ });
+});
+test('native artifact metadata rejects an inflated member above its bounded read',async t=>{
+ const {f,save}=await nativeFixture(t,'24.22.3');await save(Buffer.alloc(128*1024+1,32));
+ await reject(f,'archive_metadata_too_large');
+});
 test('dirty tracked, staged and untracked source and stale commit/tree are rejected',async t=>{for(const kind of ['dirty','staged','untracked','stale']){const f=await setup(t);if(kind==='stale'){f.opts.expectedCommit='1'.repeat(40);}else{await writeFile(path.join(f.source,kind==='untracked'?'extra.txt':'src/beta/cli.mjs'),'changed');if(kind==='staged')f.git('add','.');}await reject(f,'source');}});
 test('inventory bytes, mode, runtime source and canonical content hash mismatches fail',async t=>{for(const kind of ['bytes','mode','source','hash']){const f=await setup(t);if(kind==='bytes')f.payload.set('runtime/NODE-LICENSE',Buffer.from('corrupt bytes'));if(kind==='mode')await f.saveArchive(e=>e.map(v=>v[0].endsWith('/NODE-LICENSE')?[v[0],v[1],0o755]:v));else if(kind==='source'){const file=f.manifest.files.find(x=>x.path.startsWith('runtime/src/'));const b=Buffer.from('mismatched source\n');f.payload.set(file.path,b);file.bytes=b.length;file.sha256=sha(b);f.manifest.contentHash=digest(f.manifest.files);f.c.source.closureHash=sha(JSON.stringify(f.manifest.files.filter(r=>r.path.startsWith('runtime/src/'))));await f.saveArchive();}else{if(kind==='hash')f.manifest.contentHash='0'.repeat(64);await f.saveArchive();}await reject(f,'inventory|source|content');}});
 test('changed, missing, out of scope and symlink evidence paths fail closed',async t=>{for(const kind of ['changed','missing','escape','absolute','link']){const f=await setup(t),p=path.join(f.evidenceRoot,'review.json');if(kind==='changed')await writeFile(p,'changed');if(kind==='missing')await rm(p);if(kind==='link'){await rm(p);await symlink(f.candidate,p);}if(kind==='escape'||kind==='absolute'){f.index.records[2].path=kind==='escape'?'../candidate.json':f.candidate;await writeFile(f.evidenceIndex,JSON.stringify(f.index));}await reject(f,'evidence|path|symlink|unavailable');}});

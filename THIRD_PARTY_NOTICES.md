@@ -4,6 +4,10 @@ Audited baseline: 16 November 2026 (America/Los_Angeles), source commit `a23bae4
 
 Mosaic's own source remains under its existing [MIT license](LICENSE), copyright (c) 2026 Tanuj Patel. Third-party software and fonts retain their own copyrights, terms and disclaimers. A package's declared license is metadata, not a grant covering every embedded component. This index does not replace the complete license texts or establish blanket redistribution clearance.
 
+## Node 24.22.3 release inputs
+
+Archives built with Node 24.22.3 carry the supplemental runtime notices and their index under `payload/runtime/notices/`. Both Node runtimes retain the complete upstream top-level `LICENSE`. The remainder of this document records the dated beta184/185 audit and its evidence.
+
 ## Where the complete notices are
 
 Paths beginning with `payload/` below describe the extracted candidate archive; they are not files in a source-only checkout.

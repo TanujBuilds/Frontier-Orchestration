@@ -2,7 +2,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {readFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
-import {validateNativeCheckRuntime} from '../project/check-backends/darwin-seatbelt-v2.mjs';
+import {validateNativeCheckRuntime} from '../project/check-backends/native-runtime-dispatch.mjs';
 
 // runtimeRoot is the installed version's runtime/ directory. No saved approval
 // or command is relocated by this reader; callers prepare fresh literal argv.

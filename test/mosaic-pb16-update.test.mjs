@@ -15,9 +15,11 @@ import {ProviderRegistry} from '../src/harness/providers/registry.mjs';
 import {buildNativeCheckArtifact} from '../scripts/build-native-check-artifact.mjs';
 import {readBundledNativeCheckRuntime} from '../src/beta/package-contract.mjs';
 import {git} from '../src/project/process.mjs';
+import {artifact as validationArtifact} from './fixtures/mosaic-pb15-v2-backend/artifact.mjs';
 const nativeSources=['native-supervisor.c','native-supervisor.mjs','darwin-seatbelt-v2.mjs','darwin-seatbelt.mjs','contracts.mjs','../sandbox.mjs'];
 const nativeAvailable=process.platform==='darwin'&&process.arch==='arm64'&&!!process.env.MOSAIC_NATIVE_TEST_NODE;
 const nativeRequired=process.env.MOSAIC_REQUIRE_NATIVE==='1';
+const nativeTestLicense=process.env.MOSAIC_NATIVE_TEST_LICENSE??(nativeAvailable?path.resolve(process.env.MOSAIC_NATIVE_TEST_NODE,'../../../LICENSE'):undefined);
 async function fixture(t){
  const root=await realpath(await mkdtemp(path.join(os.tmpdir(),'Mosaic update 16 '))),home=path.join(root,'User');await mkdir(home);const paths=locations(home,true);
  t.after(async()=>{
@@ -30,12 +32,12 @@ async function fixture(t){
  });
  return {root,paths};
 }
-async function payload(root,version,{settings=[1,2],database=[0,1],supervisor="reviewed C source",implementation={},artifactRoot}={}){
+async function payload(root,version,{settings=[1,2],database=[0,1],supervisor="reviewed C source",implementation={},artifactRoot,artifactFingerprint}={}){
  const directory=path.join(root,version);await mkdir(directory);const sources={'runtime/src/project/check-backends/native-supervisor.c':supervisor,'runtime/bin/node':'#!/bin/sh\nexit 0\n','runtime/src/beta/cli.mjs':'// entry\n','runtime/package-lock.json':JSON.stringify({packages:{'node_modules/@modelcontextprotocol/sdk':{version:'1.32.2'}}}),'runtime/node_modules/@modelcontextprotocol/sdk/package.json':JSON.stringify({version:'1.32.2'})};const files=[];
- for(const source of nativeSources)sources[path.posix.normalize('runtime/src/project/check-backends/'+source)]=implementation[source]??(source==='native-supervisor.c'?supervisor:'reviewed '+source);
+ for(const source of new Set([...nativeSources,...Object.keys(implementation)]))sources[path.posix.normalize('runtime/src/project/check-backends/'+source)]=implementation[source]??(source==='native-supervisor.c'?supervisor:'reviewed '+source);
  if(artifactRoot)for(const name of ['node','mosaic-check-supervisor','NODE-LICENSE','artifact-manifest.json'])sources['runtime/check-artifact/'+name]=await readFile(path.join(artifactRoot,name));
  for(const [name,bytes] of Object.entries(sources)){const target=path.join(directory,name);await mkdir(path.dirname(target),{recursive:true});const mode=['runtime/bin/node','runtime/check-artifact/node','runtime/check-artifact/mosaic-check-supervisor'].includes(name)?'100755':name==='runtime/check-artifact/artifact-manifest.json'?'100600':'100644';await writeFile(target,bytes,{mode:parseInt(mode.slice(3),8)});files.push({path:name,sha256:hash(bytes),bytes:Buffer.byteLength(bytes),mode});}
- const manifest={schema:1,layout:'terminal-beta-v1',version,dependenciesInstalled:true,stateCompatibility:{settings,database},files,contentHash:digest(files)};await writeFile(path.join(directory,'package-manifest.json'),JSON.stringify(manifest));return directory;
+ const manifest={schema:1,layout:artifactFingerprint?'terminal-beta-v2':'terminal-beta-v1',version,dependenciesInstalled:true,...(artifactFingerprint?{nativeCheckArtifact:{fingerprint:artifactFingerprint,backend:{id:'darwin-seatbelt',revision:2}}}:{}),stateCompatibility:{settings,database},files,contentHash:digest(files)};await writeFile(path.join(directory,'package-manifest.json'),JSON.stringify(manifest));return directory;
 }
 test('update and compatible rollback preserve private state and every older version',async t=>{
  const f=await fixture(t),a=await payload(f.root,'0.1.0-beta.161'),b=await payload(f.root,'0.1.0-beta.162');await installer.install(f.paths,a,{noPath:true});await writeFile(f.paths.config,JSON.stringify({schema:2,host:{id:'cursor'}}),{mode:0o600});const evidence=path.join(f.paths.state,'kept-evidence.json');await writeFile(evidence,'kept');const before=await readFile(f.paths.config);
@@ -90,6 +92,51 @@ async function nativeUpdateFixture(t){
  const config=JSON.stringify({schema:2,host:{id:'cursor',options:{}},nativeCheckRuntime,execution:executionPolicy,providers:[profile]});await writeFile(f.paths.config,config,{mode:0o600});
  return {...f,implementation,artifact,config,context,nativeCheckRuntime,executionPolicy,providers};
 }
+test('an archive switch retains the configured legacy runtime and rollback checks the configured current implementation', {skip:process.platform!=='darwin'||process.arch!=='arm64'||!nativeTestLicense,timeout:30000},async t=>{
+ const f=await fixture(t),oldVersion='0.1.0-beta.203',currentVersion='0.1.0-beta.204';
+ const legacy=await validationArtifact(),current=await validationArtifact();
+ t.after(()=>Promise.all([legacy.root,current.root].map(root=>rm(root,{recursive:true,force:true}))));
+ const license=await readFile(nativeTestLicense);
+ await writeFile(path.join(current.root,'NODE-LICENSE'),license);
+ const files=current.manifest.files.map(file=>file.path==='NODE-LICENSE'?{...file,sha256:hash(license),bytes:license.length}:file);
+ const currentManifest={...current.manifest,files,nodeVersion:'24.22.3',provenance:{
+  ...current.manifest.provenance,
+  nodeSource:{version:'24.22.3',url:'https://nodejs.org/dist/v24.22.3/node-v24.22.3.tar.xz',sha256:'48ca3aa8a9b02133356922ef4fc80200e00598c80a4ef446f7c39a459222593d'},
+  nodePatch:{...current.manifest.provenance.nodePatch,sha256:'840109e32a582faf92ed07f75987c6eb03c9b5659cf74b2f5231ac1e72594741'},
+ }};
+ const currentBytes=JSON.stringify(currentManifest)+'\n';await writeFile(current.config.artifactManifestPath,currentBytes);
+ const historicalSources={},currentSources={};
+ for(const file of nativeSources)historicalSources[file]=await readFile(new URL('../src/project/check-backends/'+file,import.meta.url));
+ Object.assign(currentSources,historicalSources);
+ for(const file of ['../contracts.mjs','darwin-seatbelt-v2-node-24223.mjs','native-runtime-dispatch.mjs','native-node-releases.mjs']){
+  currentSources[file]=await readFile(new URL('../src/project/check-backends/'+file,import.meta.url));
+ }
+ const oldPackage=await payload(f.root,oldVersion,{implementation:historicalSources,artifactRoot:legacy.root,artifactFingerprint:legacy.config.artifactManifestSha256});
+ const currentPackage=await payload(f.root,currentVersion,{implementation:currentSources,artifactRoot:current.root,artifactFingerprint:hash(currentBytes)});
+ await installer.install(f.paths,oldPackage,{noPath:true});
+ async function configure(version){
+  const nativeCheckRuntime=await readBundledNativeCheckRuntime(path.join(f.paths.versions,version,'runtime'));
+  const executionPolicy={version:1,backend:'darwin-seatbelt',backendRevision:2,runtimeFingerprint:nativeCheckRuntime.artifactManifestSha256};
+  const config={schema:1,nativeCheckRuntime,executionPolicy};await writeFile(f.paths.config,JSON.stringify(config),{mode:0o600});
+  const coordinator=new Coordinator({root:f.paths.state,nativeCheckRuntime,executionPolicy});
+  try{return coordinator.store.get('execution_configuration','coordinator');}finally{coordinator.close();}
+ }
+ const legacyIdentity=await configure(oldVersion),savedSettings=await readFile(f.paths.config);
+ await installer.install(f.paths,currentPackage,{noPath:true});
+ assert.deepEqual(await readFile(f.paths.config),savedSettings);
+ await installer.rollbackVersion(f.paths,oldVersion);
+ assert.deepEqual(await readFile(f.paths.config),savedSettings);
+ assert.equal(legacyIdentity.identity.nativeRuntime.implementationHash,'53e0ee50362b30b690168457766aa49b59e689cebf97e309861ee238aa7a8eca');
+ await installer.install(f.paths,currentPackage,{noPath:true});
+ const currentIdentity=await configure(currentVersion);
+ assert.equal(currentIdentity.identity.nativeRuntime.nodeVersion,'24.22.3');
+ await installer.install(f.paths,currentPackage,{noPath:true});
+ const protectedFiles=[f.paths.launcher,f.paths.installation,f.paths.config,path.join(f.paths.state,'harness.sqlite3')];
+ const before=await Promise.all(protectedFiles.map(file=>readFile(file)));
+ await assert.rejects(installer.rollbackVersion(f.paths,oldVersion),/missing native implementation source inventory/i);
+ assert.deepEqual(await Promise.all(protectedFiles.map(file=>readFile(file))),before);
+ await assert.rejects(lstat(path.join(f.paths.configDir,'install-transaction.json')),{code:'ENOENT'});
+});
 test('required update proof has the explicit actual native runtime',()=>{if(nativeRequired)assert.ok(nativeAvailable,'MOSAIC_REQUIRE_NATIVE=1 needs Darwin arm64 and MOSAIC_NATIVE_TEST_NODE');});
 test('compatible pointer update restarts and resumes exact stopped native approval with retained artifact',{skip:!nativeAvailable&&!nativeRequired,timeout:45000},async t=>{
  const f=await nativeUpdateFixture(t),repo=path.join(f.root,'approved-repo');await mkdir(path.join(repo,'src'),{recursive:true});await mkdir(path.join(repo,'checks'));await writeFile(path.join(repo,'src/value.mjs'),'export const value=1;\n');await writeFile(path.join(repo,'checks/value.mjs'),'process.stdout.write("native");\n');await git(repo,'init','-q');await git(repo,'add','.');await git(repo,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-qm','Approved base');

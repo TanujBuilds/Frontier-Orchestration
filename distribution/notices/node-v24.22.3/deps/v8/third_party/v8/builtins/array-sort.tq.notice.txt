@@ -1,0 +1,14 @@
+// Copyright (c) 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010,
+// 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018 Python Software Foundation;
+// All Rights Reserved
+
+// This file implements a stable, adapative merge sort variant called TimSort.
+//
+// It was first implemented in python and this Torque implementation
+// is based on the current version:
+//
+// https://github.com/python/cpython/blob/master/Objects/listobject.c
+//
+// Detailed analysis and a description of the algorithm can be found at:
+//
+// https://github.com/python/cpython/blob/master/Objects/listsort.txt
