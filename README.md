@@ -2,7 +2,23 @@
 
 Mosaic coordinates bounded coding work between your coding app and an existing model API. You describe the outcome, review the scope, checks and limits, and keep one record of the plan, implementation, review and corrections.
 
-**Experimental MIT source preview — November 17, 2026.** The source is public at [TanujBuilds/Mosaic](https://github.com/TanujBuilds/Mosaic). There is no published, qualified binary download or one-command installer. Local package verification does not establish a clean-Mac installation, compatibility with your app account, or model quality. The [six-stage roadmap](docs/ROADMAP.md) separates accepted local evidence from the remaining launch gates.
+**Experimental MIT project.** [Mosaic Beta .204](https://github.com/TanujBuilds/Mosaic/releases/tag/v0.1.0-beta.204) is an Apple Silicon terminal prerelease. The [six-stage roadmap](docs/ROADMAP.md) tracks the remaining product and distribution checks.
+
+## Install Mosaic Beta on Apple Silicon
+
+Paste this one command into Terminal. It downloads Mosaic, verifies the release archive, and opens the setup wizard. Have your coding app installed and your worker server running before connecting them.
+
+```sh
+(mosaic_installer=$(/usr/bin/mktemp "${TMPDIR:-/private/tmp}/mosaic-install.XXXXXXXX") && trap '/bin/rm -f "$mosaic_installer"' EXIT && /usr/bin/curl -q -fsSL --max-redirs 3 --proto '=https' --proto-redir '=https' -o "$mosaic_installer" https://github.com/TanujBuilds/Mosaic/releases/download/v0.1.0-beta.204/install-mosaic.sh && [ "$(/usr/bin/shasum -a 256 < "$mosaic_installer")" = "f1c72cb4252d101c0f3c54314ead70109bae75f4eae65ee8bca649105cef4be1  -" ] && /bin/sh "$mosaic_installer")
+```
+
+1. Pick **Codex**, **Claude Code**, **Cursor**, or **Antigravity**.
+2. Pick **Model on this Mac** or **Model on another computer**. Enter the API base URL and exact model ID from your running OpenAI-compatible server. If the server requires a key, the wizard collects it at a hidden prompt. For a server on another computer, use an address your Mac can reach.
+3. Review and save your settings. Follow the connection instructions Mosaic prints for your coding app, then open a new session in that app. Run `~/.local/bin/mosaic connect` to see those instructions again.
+
+You can choose **No worker yet** to start with just the coding app. Mosaic uses a model server you already run. The optional model discovery and connection checks ask before contacting your server.
+
+After registering Mosaic, check that your coding app can see the `mosaic-beta` tools and call `registry_list` with `{}`.
 
 ## Try the source
 
@@ -22,7 +38,7 @@ The demo prints **FAKE MODEL DEMO**, automatically approves a scripted plan, and
 
 - **Develop from source.** Install the locked dependencies with `npm ci --ignore-scripts --no-audit --no-fund`, then use `npm test` for the portable source profile. The development guide covers prerequisites, CLI help and the Mac test profile. [Development setup](docs/DEVELOPMENT.md)
 - **Use the coding core already installed in Codex.** Open a chat in your project and ask Codex to list Mosaic’s registered modes using `frontier-harness`. Confirm the tool call succeeds, then describe your coding task and review its scope, checks and limits before approving a start. [Mosaic in Codex](docs/MOSAIC_CODING_CORE.md) · [Assignment handoff](docs/MOSAIC_ASSIGNMENT_HANDOFF.md)
-- **Install a separately supplied Mosaic Beta archive.** Verify the archive against an independently trusted SHA-256 digest before extracting it. The Apple Silicon macOS candidate includes its Node.js runtime and dependencies. Follow the Beta guides for setup and verification of the separate `mosaic-beta` connection in your coding app. [Terminal Beta](docs/TERMINAL_BETA.md) · [Installation and recovery](docs/PORTABLE_BETA_INSTALL.md)
+- **Install Mosaic Beta.** The [one-command install](#install-mosaic-beta-on-apple-silicon) includes the Apple Silicon runtime and dependencies and opens setup. [Terminal Beta](docs/TERMINAL_BETA.md) · [Installation and recovery](docs/PORTABLE_BETA_INSTALL.md)
 
 ## The coding workflow
 
@@ -40,7 +56,7 @@ You can optionally configure two or three workers with specialties, a default wo
 
 The installed coding core and Mosaic Beta each keep their own settings, goals and approvals. Research remains parked in the coding core. For the original text-only handoff and historical observations, see the [first milestone](docs/MVP.md). For staged worktree coding with DeepSeek implementation and Codex review after protected checks, see the [legacy overnight workflow](docs/OVERNIGHT.md).
 
-For package development, read [installation and recovery](docs/PORTABLE_BETA_INSTALL.md), [native check artifact requirements](docs/NATIVE_CHECK_ARTIFACT.md), and [release evidence](docs/PORTABLE_BETA_RELEASE.md). The [archive download prototype](distribution/README.md) requires an explicit URL and independently trusted digest. The [read-only candidate verifier](docs/PORTABLE_RELEASE_EVIDENCE.md) checks supplied bytes and bindings; it cannot authenticate a publisher or establish live readiness. These are local candidate instructions, with dated historical examples. No archive URL, Homebrew tap, signing identity or authenticated public installer is supplied here.
+For package development, read [installation and recovery](docs/PORTABLE_BETA_INSTALL.md), [native check artifact requirements](docs/NATIVE_CHECK_ARTIFACT.md), and [release evidence](docs/PORTABLE_BETA_RELEASE.md). The [archive download prototype](distribution/README.md) requires an explicit URL and independently trusted digest. The [read-only candidate verifier](docs/PORTABLE_RELEASE_EVIDENCE.md) checks supplied bytes and bindings; it cannot authenticate a publisher or establish live readiness. Those guides also document the earlier local candidates and their verification limits.
 
 ## What is established?
 
