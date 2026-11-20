@@ -6,11 +6,34 @@ Mosaic coordinates bounded coding work between your coding app and an existing m
 
 ## Install Mosaic Beta on Apple Silicon
 
-Paste this one command into Terminal. It downloads Mosaic, verifies the release archive, and opens the setup wizard. Have your coding app installed and your worker server running before connecting them.
+[Download `install-mosaic.sh`](https://github.com/TanujBuilds/Mosaic/releases/download/v0.1.0-beta.204/install-mosaic.sh) and save it to your Home folder. You can open the file in a text editor to see what it does. Then run this in Terminal.
 
 ```sh
-(mosaic_installer=$(/usr/bin/mktemp "${TMPDIR:-/private/tmp}/mosaic-install.XXXXXXXX") && trap '/bin/rm -f "$mosaic_installer"' EXIT && /usr/bin/curl -q -fsSL --max-redirs 3 --proto '=https' --proto-redir '=https' -o "$mosaic_installer" https://github.com/TanujBuilds/Mosaic/releases/download/v0.1.0-beta.204/install-mosaic.sh && [ "$(/usr/bin/shasum -a 256 < "$mosaic_installer")" = "f1c72cb4252d101c0f3c54314ead70109bae75f4eae65ee8bca649105cef4be1  -" ] && /bin/sh "$mosaic_installer")
+sh ~/install-mosaic.sh
 ```
+
+If you saved it elsewhere, type `sh ` in Terminal, drag the downloaded file into the window, and press Return. The script downloads and checks the Mosaic archive and opens setup on a fresh install.
+
+<details>
+<summary>Verify both downloads and install in one paste</summary>
+
+This command downloads the installer, checks its SHA-256, and runs it. Copy the whole block into Terminal.
+
+```sh
+(
+  mosaic_installer=$(/usr/bin/mktemp "${TMPDIR:-/private/tmp}/mosaic-install.XXXXXXXX") &&
+  trap '/bin/rm -f "$mosaic_installer"' EXIT &&
+  /usr/bin/curl -q -fsSL --max-redirs 3 --proto '=https' --proto-redir '=https' \
+    -o "$mosaic_installer" \
+    https://github.com/TanujBuilds/Mosaic/releases/download/v0.1.0-beta.204/install-mosaic.sh &&
+  [ "$(/usr/bin/shasum -a 256 < "$mosaic_installer")" = "f1c72cb4252d101c0f3c54314ead70109bae75f4eae65ee8bca649105cef4be1  -" ] &&
+  /bin/sh "$mosaic_installer"
+)
+```
+
+</details>
+
+In the setup wizard:
 
 1. Pick **Codex**, **Claude Code**, **Cursor**, or **Antigravity**.
 2. Pick **Model on this Mac** or **Model on another computer**. Enter the API base URL and exact model ID from your running OpenAI-compatible server. If the server requires a key, the wizard collects it at a hidden prompt. For a server on another computer, use an address your Mac can reach.
